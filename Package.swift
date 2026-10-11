@@ -7,7 +7,7 @@ let package = Package(
     products: [
         .library(name: "MagicWineCore", targets: ["MagicWineCore"]),
         .executable(name: "MagicWine", targets: ["MagicWine"]),
-        .executable(name: "magicwine", targets: ["MagicWineCLI"])
+        .executable(name: "magicwine-cli", targets: ["MagicWineCLI"])
     ],
     targets: [
         .target(name: "MagicWineCore"),

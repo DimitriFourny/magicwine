@@ -88,6 +88,7 @@ public enum MagicWineError: LocalizedError, Sendable {
     case runtimeUnavailable(String)
     case processFailed(exitCode: Int32, logURL: URL)
     case setup(String)
+    case stopped(logURL: URL)
 
     public var errorDescription: String? {
         switch self {
@@ -96,6 +97,7 @@ public enum MagicWineError: LocalizedError, Sendable {
         case .invalidBottle: "The bottle is missing or its metadata is invalid."
         case .runtimeUnavailable(let detail): "Wine is unavailable. \(detail)"
         case .processFailed(let code, let url): "Wine exited with code \(code). See the log at \(url.path)."
+        case .stopped(let url): "Operation stopped. Log: \(url.path)"
         case .setup(let detail): detail
         }
     }
