@@ -10,9 +10,7 @@ public actor BottleStore {
         self.paths = paths
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
         decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
     }
 
     public nonisolated func prefixURL(for bottle: Bottle) -> URL {

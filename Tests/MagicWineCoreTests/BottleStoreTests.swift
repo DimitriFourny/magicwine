@@ -70,12 +70,10 @@ struct BottleStoreTests {
         let directory = store.prefixURL(for: bottle).deletingLastPathComponent()
         let replacement = Bottle(name: "Foreign", runtime: runtime)
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(replacement).write(to: directory.appendingPathComponent("bottle.json"))
         await #expect(throws: MagicWineError.self) { try await store.save(bottle) }
         let data = try Data(contentsOf: directory.appendingPathComponent("bottle.json"))
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
         #expect(try decoder.decode(Bottle.self, from: data).id == replacement.id)
     }
 }
