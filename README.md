@@ -72,6 +72,20 @@ Run deterministic storage regressions with:
 
 The test script uses the installed Swift Testing plugin and disables XCTest, which is not shipped with this Command Line Tools installation. Real Wine workflow verification is separate from these tests; Wine is not downloaded during the test suite.
 
+## Exercised verification
+
+Development checks on Apple Silicon with macOS 27, Rosetta, and public Wine 11.0:
+
+- Four storage regressions pass, including exact timestamp round-trips and preserving programs registered from stale bottle snapshots.
+- Two real prefixes keep Windows files separate. Real 7-Zip 26.04 EXE and MSI installations create and validate archives.
+- Saved EXEs and installed LNK shortcuts launch real Windows processes. Stop, repeated idle stop, timeout, and task cancellation leave the runtime usable.
+- The native app launches and its model runs a Windows GUI program through the running → stop → idle transition without displaying a failure for a requested stop.
+- The EXE/MSI installer and Wine configuration entry points open their actual Windows processes, and bottle Stop terminates them.
+- Moving a bottle to macOS Trash leaves its externally registered executable unchanged.
+- Managed Wine downloads pass checksum/extraction/provenance checks. The first execution of the quarantined runtime timed out on this machine; manual macOS approval may be required. MagicWine does not bypass it.
+
+Native views were captured in-process. Full compositor screenshots and automated mouse/keyboard interaction were unavailable without Screen Recording and Accessibility permissions; some layer-backed controls are incomplete in those snapshots. Interactive installer completion still requires the normal Windows installer UI. These checks do not establish general Windows-application or game compatibility.
+
 ## License and references
 
 MagicWine's original code is **GPL-3.0-or-later**; see [LICENSE](LICENSE). Wine and its separately downloaded distribution retain their own licenses and notices. No Wine binary is committed or bundled in the development app.
