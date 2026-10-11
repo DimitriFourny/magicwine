@@ -8,4 +8,7 @@
 - Bottle-specific stop controls, bounded setup/probe operations, cancellable subprocesses, file-backed logs, and retryable bottle setup.
 - Launcher removal without executable deletion; confirmed bottle removal through macOS Trash after stopping Windows processes.
 - Shared command-line companion, local ad-hoc-signed app packaging, and storage regressions for persistence, path isolation, stale registrations, and shortcut traversal.
+- Preserve exact metadata timestamps; distinguish requested stops from failures and verify the Wine server has exited before Trash.
+- Track shortcut launches through the bottle's Wine server instead of relying on `start /wait` shortcut process handles.
+- Report unsigned-runtime inspection timeouts with the executable path, macOS approval guidance, and the operation log.
 - GPL-3.0-or-later original code; reference applications and downloaded runtimes excluded from Git.

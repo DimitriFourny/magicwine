@@ -58,7 +58,7 @@ public actor WineRuntime {
             environment: environment(executable: executable, prefix: nil), directory: nil, logURL: log, timeout: 15)
         do { _ = try await operation.run() }
         catch ProcessOperation.Interrupted.timedOut(let log) {
-            throw MagicWineError.runtimeUnavailable("Wine version inspection timed out. Log: \(log.path)")
+            throw MagicWineError.runtimeUnavailable("Wine version inspection timed out for \(executable.path). macOS may be waiting for approval of this unsigned download; review System Settings > Privacy & Security, then retry or choose an approved Wine installation. MagicWine does not bypass Gatekeeper. Log: \(log.path)")
         }
         let text = try RuntimeInstallation.boundedLog(log)
         guard let version = text.components(separatedBy: .newlines).dropFirst(2)
@@ -107,10 +107,17 @@ public actor WineRuntime {
 
     public func launch(_ program: WindowsProgram, in bottle: Bottle) async throws -> OperationResult {
         let executable = try windowsFile(URL(fileURLWithPath: program.executablePath), extensions: ["exe", "lnk"])
-        let arguments = executable.pathExtension.lowercased() == "lnk"
-            ? ["start", "/unix", "/wait", executable.path] : [executable.path]
-        return try await execute(arguments: arguments, bottle: bottle,
-                                 directory: executable.deletingLastPathComponent(), timeout: nil)
+        let isShortcut = executable.pathExtension.lowercased() == "lnk"
+        let arguments = isShortcut ? ["start", "/unix", executable.path] : [executable.path]
+        let result = try await execute(arguments: arguments, bottle: bottle,
+                                       directory: executable.deletingLastPathComponent(), timeout: nil)
+        if isShortcut {
+            // ShellExecute launches shortcuts asynchronously. Observe the prefix's
+            // server lifetime instead of start /wait's unreliable shortcut handle.
+            _ = try await execute(arguments: ["-w"], bottle: bottle, directory: nil,
+                                  timeout: nil, server: true)
+        }
+        return result
     }
 
     public func configure(_ bottle: Bottle) async throws -> OperationResult {
