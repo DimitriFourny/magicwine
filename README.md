@@ -170,7 +170,7 @@ The test script uses the installed Swift Testing plugin and disables XCTest, whi
 
 ## Exercised verification
 
-Development checks on Apple Silicon with macOS 27, Rosetta, and public Wine 11.0:
+Development checks on Apple Silicon with macOS 27 and Rosetta, using public Wine 11.0 and an explicitly selected compatible native Wine build for Metal:
 
 - 107 regression tests pass across storage, quarantine/consent, download progress, component integrity/architecture, local Metal imports and native aliases, private loader reuse, reversible cross-backend changes/recovery, rejection of in-place component replacement, displaced user-DLL preservation, graphics concurrency boundaries, and safe Wine CPU repair/backup handling.
 - Two real prefixes keep Windows files separate. Real 7-Zip 26.04 EXE and MSI installations create and validate archives.
@@ -189,6 +189,7 @@ Development checks on Apple Silicon with macOS 27, Rosetta, and public Wine 11.0
 - A real fresh Wine bottle enables the corrected bundled component and HUD through the native application model, then restores Standard. In-process images show the fresh selection and legacy recreation guidance without an update button. A packaged CLI request to replace a legacy component is rejected before Wine execution without changing DLLs, metadata, or backups; Standard still restores the exact original files/links.
 - With an explicitly selected compatible native Wine loader, DXMT renders and presents 90 frames with GPU clear/readback through 32/64-bit Direct3D 10 and 11. Locally imported D3DMetal passes 64-bit Direct3D 11 and 12 clear/readback and presentation, with the Metal HUD both enabled and disabled.
 - The packaged CLI exercises Metal → DXMT → Metal transitions and repeated launches, preserves DLLs during HUD-only changes, blocks launch when the selected import is missing, and restores the complete original prefix graphics footprint without that import. Original custom Wine loader/driver/DLL hashes remain unchanged. Managed Wine rejects both incompatible Metal selections without mutation; its DXVK D3D11 render and Standard restoration still pass.
+- The native dashboard and all four backend menu entries render. App-local events open the DXMT and D3DMetal consent dialogs, invoke the real folder-only D3DMetal import panel, and cancel back to Standard without changing bottle metadata. System-backed alert/import-panel snapshots are incomplete without compositor capture permission; their live controls and dismissal were inspected in-process.
 
 Native views were captured in-process, and the fresh-bottle enable/HUD/rollback scenario uses the real application model and Wine processes. Full compositor screenshots and system-wide mouse/keyboard automation were unavailable without Screen Recording and Accessibility permissions; some layer-backed controls are incomplete in the in-process snapshots. Interactive installer completion still requires the normal Windows installer UI. These checks do not establish general Windows-application or game compatibility.
 
