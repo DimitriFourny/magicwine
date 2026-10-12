@@ -11,7 +11,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "MagicWineCore", resources: [
-            .copy("Resources/dxvk-macos-1.10.3-magicwine.1.tar.gz"),
+            .copy("Resources/dxvk-macos-1.10.3-magicwine.2.tar.gz"),
             .copy("Resources/LICENSE-DXVK-DEPENDENCIES.txt")
         ]),
         .executableTarget(name: "MagicWine", dependencies: ["MagicWineCore"]),

@@ -21,7 +21,8 @@ struct DXVKInstallationTests {
     }
 
     private let metadataNames = ["LICENSE-DXVK.txt", "LICENSE-DXVK-macOS.txt", "LICENSE-DXVK-DEPENDENCIES.txt", "PROVENANCE.txt"]
-    private let dllPaths = ["x32/d3d10core.dll", "x32/d3d11.dll", "x64/d3d10core.dll", "x64/d3d11.dll"]
+    private let dllPaths = ["x32/d3d10core.dll", "x32/d3d11.dll", "x64/d3d10core.dll", "x64/d3d11.dll",
+                            "x32/d3d9.dll", "x64/d3d9.dll"]
 
     // Small structurally valid PE images exercise validation without networking or
     // redistributing megabytes of third-party DLLs as test fixtures. They are not
@@ -45,7 +46,7 @@ struct DXVKInstallationTests {
     private func makePayload(at root: URL, metadata: Bool = false) throws {
         for name in ["x32", "x64"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
-            for dll in ["d3d10core.dll", "d3d11.dll"] {
+            for dll in ["d3d9.dll", "d3d10core.dll", "d3d11.dll"] {
                 try pe(machine: name == "x32" ? 0x014c : 0x8664).write(to: root.appendingPathComponent("\(name)/\(dll)"))
             }
         }
@@ -62,7 +63,7 @@ struct DXVKInstallationTests {
             + dllPaths.map { root + "/" + $0 }
     }
 
-    private func archiveTypes() -> [Character] { ["d", "-", "d", "d", "-", "-", "-", "-"] }
+    private func archiveTypes() -> [Character] { ["d", "-", "d", "d"] + dllPaths.map { _ in Character("-") } }
 
     @Test func acceptsOnlyCompleteNativeArchiveLayout() throws {
         try DXVKInstallation.validateArchiveMembers(archiveEntries(), types: archiveTypes())
@@ -72,7 +73,7 @@ struct DXVKInstallationTests {
     }
 
     @Test(arguments: ["/etc/passwd", "../outside", "x32/../../outside", "x32\\d3d11.dll",
-                       "x64/dxgi.dll", "x32/d3d9.dll", "x64/d3d11.dll/", "./x64/d3d11.dll"])
+                       "x64/dxgi.dll", "x32/d3d12.dll", "x64/d3d11.dll/", "./x64/d3d11.dll"])
     func rejectsUnsafeOrUnexpectedArchivePaths(path: String) throws {
         var entries = archiveEntries()
         entries[7] = DXVKInstallation.archiveRoot + "/" + path
@@ -107,25 +108,29 @@ struct DXVKInstallationTests {
         }
     }
 
-    @Test func nativePayloadRequiresBothArchitecturesAndCorrectMachines() throws {
+    @Test(arguments: ["x32/d3d9.dll", "x32/d3d10core.dll", "x32/d3d11.dll",
+                       "x64/d3d9.dll", "x64/d3d10core.dll", "x64/d3d11.dll"])
+    func nativePayloadRequiresBothArchitecturesAndCorrectMachines(path: String) throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         try makePayload(at: fixture.component)
         try DXVKInstallation.validatePayloadLayout(at: fixture.component)
-        let x64 = fixture.component.appendingPathComponent("x64/d3d11.dll")
-        try pe(machine: 0x014c).write(to: x64)
+        let target = fixture.component.appendingPathComponent(path)
+        let machine: UInt16 = path.hasPrefix("x32/") ? 0x014c : 0x8664
+        try pe(machine: machine == 0x014c ? 0x8664 : 0x014c).write(to: target)
         #expect(throws: MagicWineError.self) { try DXVKInstallation.validatePayloadLayout(at: fixture.component) }
-        try pe(machine: 0x8664).write(to: x64)
-        try FileManager.default.removeItem(at: fixture.component.appendingPathComponent("x32/d3d10core.dll"))
+        try pe(machine: machine).write(to: target)
+        try FileManager.default.removeItem(at: target)
         #expect(throws: MagicWineError.self) { try DXVKInstallation.validatePayloadLayout(at: fixture.component) }
     }
 
-    @Test(arguments: ["dos", "offset", "signature", "dll", "optional", "truncated", "arm64"])
-    func rejectsInvalidPEImages(fault: String) throws {
+    @Test(arguments: ["dos", "offset", "signature", "dll", "optional", "truncated", "arm64"],
+          ["x64/d3d9.dll", "x64/d3d11.dll"])
+    func rejectsInvalidPEImages(fault: String, path: String) throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         try makePayload(at: fixture.component)
-        let target = fixture.component.appendingPathComponent("x64/d3d11.dll")
+        let target = fixture.component.appendingPathComponent(path)
         var bytes = pe(machine: 0x8664)
         switch fault {
         case "dos": bytes[0] = 0
@@ -141,7 +146,7 @@ struct DXVKInstallationTests {
         #expect(throws: MagicWineError.self) { try DXVKInstallation.validatePayloadLayout(at: fixture.component) }
     }
 
-    @Test(arguments: ["x32", "x64/d3d11.dll", "installation.json"])
+    @Test(arguments: ["x32", "x32/d3d9.dll", "x64/d3d9.dll", "x64/d3d11.dll", "installation.json"])
     func rejectsEscapingSymlinksWithoutTouchingTheirTargets(path: String) throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
@@ -242,7 +247,24 @@ struct DXVKInstallationTests {
         }
     }
 
-    @Test(arguments: ["x32/d3d10core.dll", "x32/d3d11.dll", "x64/d3d10core.dll", "x64/d3d11.dll",
+    @Test func receiptPinsExactlySixNativeDLLs() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        try makePayload(at: fixture.component, metadata: true)
+        let receipt = fixture.component.appendingPathComponent("installation.json")
+        let object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: receipt)) as? [String: Any])
+        let files = try #require(object["files"] as? [String: String])
+        #expect(Set(files.keys.filter { $0.hasSuffix(".dll") }) == Set(dllPaths))
+        #expect(Set(files.keys) == Set(dllPaths + ["dxvk.conf"] + metadataNames))
+        for path in dllPaths {
+            let digest = try #require(files[path])
+            #expect(digest.count == 64)
+            #expect(digest.allSatisfy { $0.isHexDigit })
+        }
+    }
+
+    @Test(arguments: ["x32/d3d9.dll", "x64/d3d9.dll",
+                       "x32/d3d10core.dll", "x32/d3d11.dll", "x64/d3d10core.dll", "x64/d3d11.dll",
                        "dxvk.conf", "installation.json", "LICENSE-DXVK.txt", "LICENSE-DXVK-macOS.txt",
                        "LICENSE-DXVK-DEPENDENCIES.txt", "PROVENANCE.txt"])
     func incompleteManagedPackageIsNeverAdopted(path: String) throws {

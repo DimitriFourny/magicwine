@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import MagicWineCore
@@ -5,7 +6,10 @@ import Testing
 struct GraphicsPersistenceTests {
     private let runtime = RuntimeDescriptor(executableURL: URL(fileURLWithPath: "/opt/wine/bin/wine"), version: "wine-11")
     private let selection = GraphicsConfiguration(backend: .dxvk, componentID: "test-native-component")
-    private let sources = ["x64/d3d10core.dll", "x64/d3d11.dll", "x32/d3d10core.dll", "x32/d3d11.dll"]
+    private let sources = [
+        "x64/d3d10core.dll", "x64/d3d11.dll", "x32/d3d10core.dll", "x32/d3d11.dll",
+        "x64/d3d9.dll", "x32/d3d9.dll"
+    ]
 
     private struct Fixture {
         let paths: ApplicationPaths
@@ -42,7 +46,7 @@ struct GraphicsPersistenceTests {
     }
 
     private func writeOriginals(_ fixture: Fixture) throws -> [Data] {
-        let originals = (0..<4).map { Data("original DLL \($0)".utf8) }
+        let originals = sources.indices.map { Data("original DLL \($0)".utf8) }
         for index in originals.indices { try originals[index].write(to: fixture.dll(index)) }
         return originals
     }
@@ -53,6 +57,223 @@ struct GraphicsPersistenceTests {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(next)
+    }
+
+    private func installHistoricalFourDLLs(_ fixture: Fixture) throws -> [Data] {
+        let originals = try writeOriginals(fixture)
+        let active = fixture.directory.appendingPathComponent("graphics/active")
+        let saved = active.appendingPathComponent("originals")
+        try FileManager.default.createDirectory(at: saved, withIntermediateDirectories: true)
+        var entries: [[String: Any]] = []
+        for index in 0..<4 {
+            try originals[index].write(to: saved.appendingPathComponent(String(index)))
+            let native = try Data(contentsOf: fixture.component.appendingPathComponent(sources[index]))
+            try native.write(to: fixture.dll(index), options: .atomic)
+            entries.append([
+                "originalExists": true,
+                "installedHash": SHA256.hash(data: native).map { String(format: "%02x", $0) }.joined(),
+                "installedSize": native.count
+            ])
+        }
+        let manifest: [String: Any] = ["componentID": selection.componentID!, "entries": entries]
+        try JSONSerialization.data(withJSONObject: manifest).write(to: active.appendingPathComponent("manifest.json"))
+        try nextMetadata(fixture, configuration: selection).write(to: fixture.metadata, options: .atomic)
+        return originals
+    }
+
+    @Test func legacyFourDLLRestorationAndRecoveryNeverCaptureD3D9OrLoseOriginals() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.paths.root) }
+        let originals = try installHistoricalFourDLLs(fixture)
+        let manifest = fixture.directory.appendingPathComponent("graphics/active/manifest.json")
+        let savedManifest = try Data(contentsOf: manifest)
+        let selectedMetadata = try Data(contentsOf: fixture.metadata)
+        let standardMetadata = try nextMetadata(fixture, configuration: .init())
+        let managed = try (0..<4).map { try Data(contentsOf: fixture.dll($0)) }
+        let d3d9 = Data("D3D9 installed independently of the historical component".utf8)
+        try d3d9.write(to: fixture.dll(4), options: .atomic)
+        try FileManager.default.removeItem(at: fixture.dll(5))
+        try FileManager.default.createSymbolicLink(atPath: fixture.dll(5).path, withDestinationPath: "outside-d3d9.dll")
+
+        #expect(throws: MagicWineError.self) {
+            try GraphicsPrefix.validateInstalled(configuration: selection, prefix: fixture.prefix, bottleDirectory: fixture.directory)
+        }
+        #expect(throws: (any Error).self) {
+            try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+                try GraphicsPrefix.change(from: selection, to: .init(), componentRoot: nil,
+                                          bottleDirectory: fixture.directory, previousMetadata: selectedMetadata,
+                                          nextMetadata: standardMetadata) {
+                    try standardMetadata.write(to: fixture.paths.root, options: .atomic)
+                }
+            }
+        }
+        #expect(try Data(contentsOf: manifest) == savedManifest)
+        #expect(try Data(contentsOf: fixture.metadata) == selectedMetadata)
+        for index in managed.indices {
+            #expect(try Data(contentsOf: fixture.dll(index)) == managed[index])
+            #expect(try Data(contentsOf: fixture.directory.appendingPathComponent("graphics/active/originals/\(index)")) == originals[index])
+        }
+        #expect(try Data(contentsOf: fixture.dll(4)) == d3d9)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: fixture.dll(5).path) == "outside-d3d9.dll")
+
+        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+            let transaction = try GraphicsPrefix.prepare(from: selection, to: .init(), componentRoot: nil,
+                                                         bottleDirectory: fixture.directory, previousMetadata: selectedMetadata,
+                                                         nextMetadata: standardMetadata)
+            let journal = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: transaction.appendingPathComponent("journal.json"))) as? [String: Any])
+            for key in ["before", "after", "displaced"] {
+                #expect((journal[key] as? [Any])?.count == 4)
+            }
+            try GraphicsPrefix.apply(transaction: transaction, bottleDirectory: fixture.directory)
+            for index in 0..<4 { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
+        }
+        let afterCrash = Data("D3D9 changed after the interrupted historical rollback".utf8)
+        try afterCrash.write(to: fixture.dll(4), options: .atomic)
+        let recovered = try await BottleStore(paths: fixture.paths).current(fixture.bottle)
+        #expect(recovered.graphics == selection)
+        #expect(try Data(contentsOf: manifest) == savedManifest)
+        for index in managed.indices {
+            #expect(try Data(contentsOf: fixture.dll(index)) == managed[index])
+            #expect(try Data(contentsOf: fixture.directory.appendingPathComponent("graphics/active/originals/\(index)")) == originals[index])
+        }
+        #expect(try Data(contentsOf: fixture.dll(4)) == afterCrash)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: fixture.dll(5).path) == "outside-d3d9.dll")
+        let restored = try await fixture.store.setGraphics(.init(), in: recovered, componentRoot: nil)
+        #expect(restored.graphics.backend == .standard)
+        for index in 0..<4 { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
+        #expect(try Data(contentsOf: fixture.dll(4)) == afterCrash)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: fixture.dll(5).path) == "outside-d3d9.dll")
+        #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("graphics/active").path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("graphics/recovered").path))
+    }
+
+    @Test(arguments: [false, true])
+    func historicalFourDLLInstallJournalRecoversWithoutTouchingD3D9(committed: Bool) async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.paths.root) }
+        let originals = try writeOriginals(fixture)
+        let previous = try Data(contentsOf: fixture.metadata)
+        let next = try nextMetadata(fixture, configuration: selection)
+        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+            let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
+                                                         bottleDirectory: fixture.directory, previousMetadata: previous, nextMetadata: next)
+            // Reproduce the persisted four-entry format, including the historical active backup.
+            for (path, keys) in [("journal.json", ["before", "after", "displaced"]),
+                                 ("after-active/manifest.json", ["entries"])] {
+                let url = transaction.appendingPathComponent(path)
+                var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+                for key in keys { json[key] = Array(try #require(json[key] as? [Any]).prefix(4)) }
+                try JSONSerialization.data(withJSONObject: json).write(to: url, options: .atomic)
+            }
+            for index in 4..<6 {
+                for path in ["before", "after", "after-active/originals"] {
+                    try FileManager.default.removeItem(at: transaction.appendingPathComponent("\(path)/\(index)"))
+                }
+            }
+            try GraphicsPrefix.apply(transaction: transaction, bottleDirectory: fixture.directory)
+            if committed { try next.write(to: fixture.metadata, options: .atomic) }
+        }
+        let independentD3D9 = Data("D3D9 changed outside the historical transaction".utf8)
+        for index in 4..<6 { try independentD3D9.write(to: fixture.dll(index), options: .atomic) }
+        let recovered = try await BottleStore(paths: fixture.paths).current(fixture.bottle)
+        #expect(recovered.graphics == (committed ? selection : GraphicsConfiguration()))
+        for index in 0..<4 {
+            let expected = try (committed ? Data(contentsOf: fixture.component.appendingPathComponent(sources[index])) : originals[index])
+            #expect(try Data(contentsOf: fixture.dll(index)) == expected)
+        }
+        for index in 4..<6 { #expect(try Data(contentsOf: fixture.dll(index)) == independentD3D9) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("graphics/transaction").path))
+        if committed {
+            #expect(throws: MagicWineError.self) {
+                try GraphicsPrefix.validateInstalled(configuration: selection, prefix: fixture.prefix, bottleDirectory: fixture.directory)
+            }
+            _ = try await fixture.store.setGraphics(.init(), in: recovered, componentRoot: nil)
+            for index in 0..<4 { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
+            for index in 4..<6 { #expect(try Data(contentsOf: fixture.dll(index)) == independentD3D9) }
+        }
+    }
+
+    @Test(arguments: [0, 1, 3, 5, 7])
+    func invalidManifestCountsCannotRestoreOrLaunch(count: Int) async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.paths.root) }
+        let originals = try writeOriginals(fixture)
+        _ = try await fixture.store.setGraphics(selection, in: fixture.bottle, componentRoot: fixture.component)
+        let manifest = fixture.directory.appendingPathComponent("graphics/active/manifest.json")
+        let validManifest = try Data(contentsOf: manifest)
+        let metadata = try Data(contentsOf: fixture.metadata)
+        let installed = try sources.indices.map { try Data(contentsOf: fixture.dll($0)) }
+        var json = try #require(JSONSerialization.jsonObject(with: validManifest) as? [String: Any])
+        let entries = try #require(json["entries"] as? [Any])
+        json["entries"] = Array(repeating: entries[0], count: count)
+        let invalidManifest = try JSONSerialization.data(withJSONObject: json)
+        try invalidManifest.write(to: manifest, options: .atomic)
+        #expect(throws: MagicWineError.self) {
+            try GraphicsPrefix.validateInstalled(configuration: selection, prefix: fixture.prefix, bottleDirectory: fixture.directory)
+        }
+        await #expect(throws: MagicWineError.self) {
+            try await fixture.store.setGraphics(.init(), in: fixture.bottle, componentRoot: nil)
+        }
+        #expect(try Data(contentsOf: manifest) == invalidManifest)
+        #expect(try Data(contentsOf: fixture.metadata) == metadata)
+        for index in installed.indices { #expect(try Data(contentsOf: fixture.dll(index)) == installed[index]) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("graphics/transaction").path))
+        try validManifest.write(to: manifest, options: .atomic)
+        _ = try await fixture.store.setGraphics(.init(), in: fixture.bottle, componentRoot: nil)
+        for index in originals.indices { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
+    }
+
+    @Test(arguments: [[0, 0, 0], [3, 3, 3], [5, 5, 5], [7, 7, 7], [4, 6, 4], [6, 6, 4]])
+    func invalidJournalCountsRetainRecoveryFilesWithoutChangingDLLs(counts: [Int]) async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.paths.root) }
+        let originals = try writeOriginals(fixture)
+        let previous = try Data(contentsOf: fixture.metadata)
+        let next = try nextMetadata(fixture, configuration: selection)
+        let journalURL = fixture.directory.appendingPathComponent("graphics/transaction/journal.json")
+        let validJournal = try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+            let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
+                                                         bottleDirectory: fixture.directory, previousMetadata: previous, nextMetadata: next)
+            let data = try Data(contentsOf: journalURL)
+            var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            for (index, key) in ["before", "after", "displaced"].enumerated() {
+                let entries = try #require(json[key] as? [Any])
+                json[key] = Array(repeating: entries[0], count: counts[index])
+            }
+            try JSONSerialization.data(withJSONObject: json).write(to: journalURL, options: .atomic)
+            #expect(throws: MagicWineError.self) {
+                try GraphicsPrefix.apply(transaction: transaction, bottleDirectory: fixture.directory)
+            }
+            return data
+        }
+        let invalidJournal = try Data(contentsOf: journalURL)
+        await #expect(throws: MagicWineError.self) { try await fixture.store.current(fixture.bottle) }
+        #expect(try Data(contentsOf: journalURL) == invalidJournal)
+        #expect(try Data(contentsOf: fixture.metadata) == previous)
+        for index in originals.indices {
+            #expect(try Data(contentsOf: fixture.dll(index)) == originals[index])
+            #expect(try Data(contentsOf: fixture.directory.appendingPathComponent("graphics/transaction/before/\(index)")) == originals[index])
+        }
+        try validJournal.write(to: journalURL, options: .atomic)
+        let recovered = try await fixture.store.current(fixture.bottle)
+        #expect(recovered.graphics.backend == .standard)
+        for index in originals.indices { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
+        #expect(!FileManager.default.fileExists(atPath: journalURL.path))
+    }
+
+    @Test(arguments: [4, 5])
+    func missingCurrentD3D9CannotLaunchButStillRestoresItsOriginal(index: Int) async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.paths.root) }
+        let originals = try writeOriginals(fixture)
+        _ = try await fixture.store.setGraphics(selection, in: fixture.bottle, componentRoot: fixture.component)
+        try GraphicsPrefix.validateInstalled(configuration: selection, prefix: fixture.prefix, bottleDirectory: fixture.directory)
+        try FileManager.default.removeItem(at: fixture.dll(index))
+        #expect(throws: MagicWineError.self) {
+            try GraphicsPrefix.validateInstalled(configuration: selection, prefix: fixture.prefix, bottleDirectory: fixture.directory)
+        }
+        _ = try await fixture.store.setGraphics(.init(), in: fixture.bottle, componentRoot: nil)
+        for index in originals.indices { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
     }
 
     @Test func historicalMetadataReadsWithoutRewriteAndRetainsRequiredFields() async throws {
@@ -89,9 +310,9 @@ struct GraphicsPersistenceTests {
         let otherDirectory = fixture.store.prefixURL(for: other).deletingLastPathComponent()
         let otherMetadata = try Data(contentsOf: otherDirectory.appendingPathComponent("bottle.json"))
         let untouched = fixture.prefix.appendingPathComponent("drive_c/windows/system32/dxgi.dll")
-        let d3d9 = fixture.prefix.appendingPathComponent("drive_c/windows/syswow64/d3d9.dll")
+        let untouched32 = fixture.prefix.appendingPathComponent("drive_c/windows/syswow64/dxgi.dll")
         try Data("custom DXGI".utf8).write(to: untouched)
-        try Data("custom D3D9".utf8).write(to: d3d9)
+        try Data("custom 32-bit DXGI".utf8).write(to: untouched32)
         let exe = fixture.paths.root.appendingPathComponent("Game.exe")
         try Data([0x4d, 0x5a]).write(to: exe)
         var saved = try await fixture.store.registerProgram(in: fixture.bottle, executableURL: exe)
@@ -106,12 +327,14 @@ struct GraphicsPersistenceTests {
             #expect(try Data(contentsOf: fixture.dll(index)) == Data(contentsOf: fixture.component.appendingPathComponent(sources[index])))
         }
         #expect(try Data(contentsOf: untouched) == Data("custom DXGI".utf8))
-        #expect(try Data(contentsOf: d3d9) == Data("custom D3D9".utf8))
+        #expect(try Data(contentsOf: untouched32) == Data("custom 32-bit DXGI".utf8))
         #expect(try Data(contentsOf: otherDirectory.appendingPathComponent("bottle.json")) == otherMetadata)
         #expect(!FileManager.default.fileExists(atPath: otherDirectory.appendingPathComponent("graphics").path))
         let restored = try await fixture.store.setGraphics(.init(), in: fixture.bottle, componentRoot: nil)
         #expect(restored.programs == saved.programs)
         for index in originals.indices { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
+        #expect(try Data(contentsOf: untouched) == Data("custom DXGI".utf8))
+        #expect(try Data(contentsOf: untouched32) == Data("custom 32-bit DXGI".utf8))
     }
 
     @Test func repeatAndHUDOnlyChangesRetainOriginalLinksAbsenceAndCustomReplacements() async throws {
@@ -126,12 +349,16 @@ struct GraphicsPersistenceTests {
         try FileManager.default.createSymbolicLink(atPath: fixture.dll(1).path, withDestinationPath: external.path)
         // DLL 2 is originally absent.
         try fourth.write(to: fixture.dll(3))
+        try FileManager.default.createSymbolicLink(atPath: fixture.dll(4).path, withDestinationPath: external.path)
+        // The 32-bit D3D9 DLL is originally absent.
         _ = try await fixture.store.setGraphics(selection, in: fixture.bottle, componentRoot: fixture.component)
         let managed = try Data(contentsOf: fixture.dll(0))
         let custom = Data("user-installed replacement".utf8)
         try custom.write(to: fixture.dll(0), options: .atomic)
         try FileManager.default.removeItem(at: fixture.dll(3))
         try FileManager.default.createSymbolicLink(atPath: fixture.dll(3).path, withDestinationPath: "missing-user-target.dll")
+        let customD3D9 = Data("user-installed D3D9 replacement".utf8)
+        for index in 4..<6 { try customD3D9.write(to: fixture.dll(index), options: .atomic) }
         try FileManager.default.removeItem(at: fixture.component)
         var hud = selection
         hud.showHUD = true
@@ -146,10 +373,13 @@ struct GraphicsPersistenceTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.dll(2).path))
         #expect(try Data(contentsOf: fixture.dll(3)) == fourth)
         #expect(try Data(contentsOf: external) == externalData)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: fixture.dll(4).path) == external.path)
+        #expect(!FileManager.default.fileExists(atPath: fixture.dll(5).path))
         let recovery = fixture.directory.appendingPathComponent("graphics/recovered")
         let enumerator = try #require(FileManager.default.enumerator(at: recovery, includingPropertiesForKeys: nil))
         var savedCustom = false
         var savedLink = false
+        var recoveredD3D9: Set<String> = []
         for case let file as URL in enumerator.allObjects {
             let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
             if attributes[.type] as? FileAttributeType == .typeSymbolicLink {
@@ -158,10 +388,12 @@ struct GraphicsPersistenceTests {
             } else if attributes[.type] as? FileAttributeType == .typeRegular {
                 let data = try Data(contentsOf: file)
                 savedCustom = savedCustom || data == custom
+                if data == customD3D9 { recoveredD3D9.insert(file.lastPathComponent) }
             }
         }
         #expect(savedCustom)
         #expect(savedLink)
+        #expect(recoveredD3D9 == ["x64-d3d9.dll", "x32-d3d9.dll"])
         #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("graphics/active").path))
     }
 
@@ -235,7 +467,7 @@ struct GraphicsPersistenceTests {
         defer { try? FileManager.default.removeItem(at: fixture.paths.root) }
         let originals = try writeOriginals(fixture)
         let old = try Data(contentsOf: fixture.metadata)
-        try FileManager.default.removeItem(at: fixture.component.appendingPathComponent(sources[3]))
+        try FileManager.default.removeItem(at: fixture.component.appendingPathComponent(sources[5]))
         await #expect(throws: (any Error).self) {
             try await fixture.store.setGraphics(selection, in: fixture.bottle, componentRoot: fixture.component)
         }
@@ -263,7 +495,7 @@ struct GraphicsPersistenceTests {
         let installed = try await fixture.store.setGraphics(selection, in: fixture.bottle, componentRoot: fixture.component)
         let installedMetadata = try Data(contentsOf: fixture.metadata)
         let standardMetadata = try nextMetadata(fixture, configuration: .init())
-        let managed = try (0..<4).map { try Data(contentsOf: fixture.dll($0)) }
+        let managed = try sources.indices.map { try Data(contentsOf: fixture.dll($0)) }
         #expect(throws: (any Error).self) {
             try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
                 try GraphicsPrefix.change(from: selection, to: .init(), componentRoot: nil,
@@ -289,7 +521,7 @@ struct GraphicsPersistenceTests {
         try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
                                                          bottleDirectory: fixture.directory, previousMetadata: old, nextMetadata: next)
-            try FileManager.default.removeItem(at: transaction.appendingPathComponent("after/2"))
+            try FileManager.default.removeItem(at: transaction.appendingPathComponent("after/5"))
             #expect(throws: (any Error).self) { try GraphicsPrefix.apply(transaction: transaction, bottleDirectory: fixture.directory) }
             #expect(try Data(contentsOf: fixture.dll(0)) != originals[0])
         }
@@ -389,20 +621,20 @@ struct GraphicsPersistenceTests {
             try GraphicsPrefix.apply(transaction: transaction, bottleDirectory: fixture.directory)
         }
         let userEdit = Data("DLL replaced by the user after an interrupted install".utf8)
-        try userEdit.write(to: fixture.dll(0), options: .atomic)
+        for index in [0, 4, 5] { try userEdit.write(to: fixture.dll(index), options: .atomic) }
         let current = try await BottleStore(paths: fixture.paths).current(fixture.bottle)
         #expect(current.graphics.backend == .standard)
         for index in originals.indices { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
         let recovery = fixture.directory.appendingPathComponent("graphics/recovered")
         let files = try #require(FileManager.default.enumerator(at: recovery, includingPropertiesForKeys: [.isRegularFileKey]))
-        var retained = false
+        var retained: Set<String> = []
         for case let file as URL in files.allObjects {
             if try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
                 let data = try Data(contentsOf: file)
-                retained = retained || data == userEdit
+                if data == userEdit { retained.insert(file.lastPathComponent) }
             }
         }
-        #expect(retained)
+        #expect(retained == ["x64-d3d10core.dll", "x64-d3d9.dll", "x32-d3d9.dll"])
         #expect(try Data(contentsOf: fixture.metadata) == previous)
     }
 
