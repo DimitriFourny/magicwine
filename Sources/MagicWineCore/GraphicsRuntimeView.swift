@@ -52,7 +52,7 @@ enum GraphicsRuntimeView {
         let runtime = executable.deletingLastPathComponent().deletingLastPathComponent().resolvingSymlinksInPath()
         let originalLoader = executable.resolvingSymlinksInPath()
         try requireDirectory(runtime)
-        try requireFile(originalLoader)
+        try requireFile(originalLoader, allowHardLinks: true)
         guard originalLoader.path.hasPrefix(runtime.path + "/") else { throw failure("The selected loader escapes its runtime directory.") }
         let provider = backend == .d3dmetal ? component.appendingPathComponent("wine") : component
         try requireDirectory(component)
@@ -84,9 +84,9 @@ enum GraphicsRuntimeView {
         func addCopy(_ source: URL, _ name: String) throws {
             let resolved = source.resolvingSymlinksInPath()
             guard resolved.path.hasPrefix(runtime.path + "/") else { throw failure("A loader or ntdll escapes its runtime.") }
-            try requireFile(resolved)
+            try requireFile(resolved, allowHardLinks: true)
             copies[name] = resolved.path
-            if sourceHashes[resolved.path] == nil { sourceHashes[resolved.path] = try hash(resolved) }
+            if sourceHashes[resolved.path] == nil { sourceHashes[resolved.path] = try hash(resolved, allowHardLinks: true) }
             hashes[name] = sourceHashes[resolved.path]
         }
         func addLink(_ source: URL, _ name: String, within root: URL) throws {
@@ -202,10 +202,11 @@ enum GraphicsRuntimeView {
         var enumerationError: Error?
         guard let items = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [], options: [],
             errorHandler: { _, error in enumerationError = error; return false }) else { throw failure("Cannot inspect private loader.") }
-        let base = root.path + "/"
+        let base = root.standardizedFileURL.path + "/"
         for case let entry as URL in items {
-            guard entry.path.hasPrefix(base) else { throw failure("Escaping private loader entry.") }
-            let name = String(entry.path.dropFirst(base.count))
+            let path = entry.standardizedFileURL.path
+            guard path.hasPrefix(base) else { throw failure("Escaping private loader entry.") }
+            let name = String(path.dropFirst(base.count))
             guard expected.contains(name) else { throw failure("Unexpected private loader entry: \(name).") }
             actual.insert(name)
             if let link = receipt.links[name] {
@@ -231,17 +232,17 @@ enum GraphicsRuntimeView {
     private static func requireDirectory(_ url: URL) throws {
         guard try inspect(url).st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { throw failure("Expected an ordinary directory: \(url.path).") }
     }
-    private static func requireFile(_ url: URL) throws {
+    private static func requireFile(_ url: URL, allowHardLinks: Bool = false) throws {
         let status = try inspect(url)
-        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), status.st_nlink == 1, status.st_size > 0,
+        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), (allowHardLinks || status.st_nlink == 1), status.st_size > 0,
               status.st_size <= 128 * 1_048_576 else { throw failure("Expected an ordinary bounded runtime file: \(url.path).") }
     }
-    private static func openFile(_ url: URL) throws -> FileHandle {
-        try requireFile(url)
+    private static func openFile(_ url: URL, allowHardLinks: Bool = false) throws -> FileHandle {
+        try requireFile(url, allowHardLinks: allowHardLinks)
         let descriptor = url.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) }
         guard descriptor >= 0 else { throw failure("Cannot safely open runtime file.") }
         var status = stat()
-        guard fstat(descriptor, &status) == 0, status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), status.st_nlink == 1 else {
+        guard fstat(descriptor, &status) == 0, status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), (allowHardLinks || status.st_nlink == 1) else {
             close(descriptor)
             throw failure("Runtime file changed while opening.")
         }
@@ -254,8 +255,8 @@ enum GraphicsRuntimeView {
         guard data.count <= maximum else { throw failure("Runtime metadata exceeds its safety limit.") }
         return data
     }
-    private static func hash(_ url: URL) throws -> String {
-        let handle = try openFile(url)
+    private static func hash(_ url: URL, allowHardLinks: Bool = false) throws -> String {
+        let handle = try openFile(url, allowHardLinks: allowHardLinks)
         defer { try? handle.close() }
         var sha = SHA256(), count = 0
         while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
