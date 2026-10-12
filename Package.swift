@@ -10,7 +10,10 @@ let package = Package(
         .executable(name: "magicwine-cli", targets: ["MagicWineCLI"])
     ],
     targets: [
-        .target(name: "MagicWineCore"),
+        .target(name: "MagicWineCore", resources: [
+            .copy("Resources/dxvk-macos-1.10.3-magicwine.1.tar.gz"),
+            .copy("Resources/LICENSE-DXVK-DEPENDENCIES.txt")
+        ]),
         .executableTarget(name: "MagicWine", dependencies: ["MagicWineCore"]),
         .executableTarget(name: "MagicWineCLI", dependencies: ["MagicWineCore"]),
         .testTarget(name: "MagicWineCoreTests", dependencies: ["MagicWineCore"])

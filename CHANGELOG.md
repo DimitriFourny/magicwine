@@ -10,12 +10,17 @@
 - Stream downloads through a task-owning native delegate with throttled progress callbacks, ordered installation phases, cancellation cleanup, and no stale statistics after completion or failure.
 - Add progress arithmetic and final-emission regressions; verify slow known-length/chunked downloads and live native Wine-install progress.
 - Add per-bottle Standard / DXVK — Experimental selection; older bottles remain Standard without metadata rewrites.
-- Download the pinned Gcenx native macOS DXVK 1.10.3-based package with live progress, archive/payload SHA-256 and PE-architecture checks, immutable receipts, and zlib attribution. Preserve DXVK quarantine.
+- Bundle MagicWine's corrected native macOS DXVK 1.10.3-based component, with archive/payload SHA-256 and PE-architecture checks, immutable receipts, public-source build provenance, and zlib attribution. Preserve DXVK quarantine.
 - Install only D3D10/11 DLLs in the selected prefix, retain original files/links/absence, recover interrupted changes, and preserve custom replacement DLLs when restoring Standard.
 - Scope DLL overrides, optional version/API/GPU/FPS/frame-time HUD, shader cache, and diagnostics to the selected bottle; keep Wine's built-in DXGI and reject unavailable selected components instead of falling back silently.
 - Stop the bottle before changing graphics; protect metadata-to-spawn handoff and live-process completion across app/CLI processes. HUD-only updates avoid reinstalling DLLs.
-- Verify real 32/64-bit Direct3D 11 shader rendering and fullscreen/readback, C-drive launcher diagnostics, Standard Direct3D 9 switchback, live native download progress, interprocess stop/switch, and missing-component restoration. Add integrity, recovery, and concurrency regressions; 55 tests pass.
+- Verify real 32/64-bit Direct3D 11 shader rendering and fullscreen/readback, C-drive launcher diagnostics, Standard Direct3D 9 switchback, interprocess stop/switch, and missing-component restoration. Add integrity, recovery, concurrency, and rejected-component-replacement regressions; 56 tests pass.
 - Keep Direct3D 12 separate; do not bundle proprietary D3DMetal/GPTK or claim anti-cheat/game compatibility.
+- Correct native DXVK `CreateQuery1` capability validation for unsupported pipeline-statistics queries before object allocation or validation-only success; return `E_INVALIDARG` and null output without a proxy or fabricated counters.
+- Cross-compile a separately versioned 32/64-bit component from SHA-pinned public source with a checked-in patch and build recipe; install it offline from the app/CLI resource bundle.
+- Remove the dedicated DXVK update UI and in-place component-replacement path after a user-reported failed update; retain fresh-bottle installation, current-component HUD changes, and Standard rollback. Older selections direct users to a new bottle without automatic migration or deletion.
+- Preserve pinned redistribution notices for the static MinGW/GCC/Winpthreads runtimes and public headers in the resource bundle and installed DXVK receipt; include MagicWine's GPL license in packaged app/CLI output.
+- Exercise native 32/64-bit query rejection and GPU readback, fresh-bottle native graphics enablement/rollback, legacy CLI rejection without side effects, and Tropics' DirectX 11 windowed shortcut through the corrected component. The user confirms Tropics works in a new bottle with very low FPS; do not claim a performance improvement.
 
 ## 0.1.0 — 2026-10-11
 

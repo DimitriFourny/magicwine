@@ -165,6 +165,40 @@ struct GraphicsPersistenceTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("graphics/active").path))
     }
 
+    @Test func componentReplacementIsRejectedWithoutChangingBottleOrBackups() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.paths.root) }
+        let originals = try writeOriginals(fixture)
+        let selected = try await fixture.store.setGraphics(selection, in: fixture.bottle, componentRoot: fixture.component)
+        let custom = Data("user replacement must survive a rejected component change".utf8)
+        try custom.write(to: fixture.dll(0), options: .atomic)
+        let replacement = fixture.paths.componentsDirectory.appendingPathComponent("replacement-native-component")
+        try FileManager.default.copyItem(at: fixture.component, to: replacement)
+        let metadata = try Data(contentsOf: fixture.metadata)
+        let manifest = fixture.directory.appendingPathComponent("graphics/active/manifest.json")
+        let backupManifest = try Data(contentsOf: manifest)
+        let installed = try sources.indices.map { try Data(contentsOf: fixture.dll($0)) }
+        let configuration = GraphicsConfiguration(backend: .dxvk, componentID: replacement.lastPathComponent)
+
+        await #expect(throws: MagicWineError.self) {
+            try await fixture.store.setGraphics(configuration, in: selected, componentRoot: replacement)
+        }
+        #expect(try await fixture.store.current(fixture.bottle).graphics == selection)
+        #expect(try Data(contentsOf: fixture.metadata) == metadata)
+        #expect(try Data(contentsOf: manifest) == backupManifest)
+        for index in installed.indices { #expect(try Data(contentsOf: fixture.dll(index)) == installed[index]) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("graphics/transaction").path))
+
+        _ = try await fixture.store.setGraphics(.init(), in: selected, componentRoot: nil)
+        for index in originals.indices { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
+        let recovery = fixture.directory.appendingPathComponent("graphics/recovered")
+        let enumerator = try #require(FileManager.default.enumerator(at: recovery, includingPropertiesForKeys: nil))
+        #expect(try enumerator.allObjects.compactMap { $0 as? URL }.contains {
+            guard $0.lastPathComponent == "x64-d3d10core.dll" else { return false }
+            return try Data(contentsOf: $0) == custom
+        })
+    }
+
     @Test func onlyInitializedOwnedPrefixesWithOrdinaryDestinationDirectoriesCanChange() async throws {
         let uninitialized = try await fixture(initialized: false)
         defer { try? FileManager.default.removeItem(at: uninitialized.paths.root) }
