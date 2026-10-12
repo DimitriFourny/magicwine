@@ -4,6 +4,7 @@ public struct ApplicationPaths: Sendable {
     public let root: URL
     public var bottlesDirectory: URL { root.appendingPathComponent("Bottles", isDirectory: true) }
     public var runtimesDirectory: URL { root.appendingPathComponent("Runtimes", isDirectory: true) }
+    public var componentsDirectory: URL { root.appendingPathComponent("Components", isDirectory: true) }
     public var logsDirectory: URL { root.appendingPathComponent("Logs", isDirectory: true) }
     public var settingsURL: URL { root.appendingPathComponent("settings.json") }
 
@@ -13,7 +14,7 @@ public struct ApplicationPaths: Sendable {
     }
 
     public func prepare() throws {
-        for directory in [root, bottlesDirectory, runtimesDirectory, logsDirectory] {
+        for directory in [root, bottlesDirectory, runtimesDirectory, componentsDirectory, logsDirectory] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
     }
@@ -49,15 +50,36 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
     public let runtime: RuntimeDescriptor
     public var isInitialized: Bool
     public var programs: [WindowsProgram]
+    public var graphics: GraphicsConfiguration
 
     public init(id: UUID = UUID(), name: String, createdAt: Date = Date(), runtime: RuntimeDescriptor,
-                isInitialized: Bool = false, programs: [WindowsProgram] = []) {
+                isInitialized: Bool = false, programs: [WindowsProgram] = [], graphics: GraphicsConfiguration = .init()) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
         self.runtime = runtime
         self.isInitialized = isInitialized
         self.programs = programs
+        self.graphics = graphics
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, createdAt, runtime, isInitialized, programs, graphics
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        runtime = try container.decode(RuntimeDescriptor.self, forKey: .runtime)
+        isInitialized = try container.decode(Bool.self, forKey: .isInitialized)
+        programs = try container.decode([WindowsProgram].self, forKey: .programs)
+        if container.contains(.graphics) {
+            graphics = try container.decode(GraphicsConfiguration.self, forKey: .graphics)
+        } else {
+            graphics = .init()
+        }
     }
 }
 
