@@ -10,13 +10,51 @@ internal enum GraphicsPrefix {
         "drive_c/windows/syswow64/d3d10core.dll", "drive_c/windows/syswow64/d3d11.dll",
         "drive_c/windows/system32/d3d9.dll", "drive_c/windows/syswow64/d3d9.dll"
     ]
-    private static let sourcePaths = [
+    // The first six indices are the historical DXVK ABI. Never reorder them.
+    private static let dxvkSources = [
         "x64/d3d10core.dll", "x64/d3d11.dll", "x32/d3d10core.dll", "x32/d3d11.dll",
         "x64/d3d9.dll", "x32/d3d9.dll"
     ]
-    // Historical backups and journals own only the first four paths, never D3D9.
     private static let legacyDLLCount = 4
+    private static let schema = 2
     private static var manager: FileManager { FileManager.default }
+
+    private struct Mapping: Sendable {
+        let source: String
+        let destination: String
+    }
+
+    private static let dxvkMappings = zip(dxvkSources, dllPaths).map { Mapping(source: $0.0, destination: $0.1) }
+    private static let dxmtMappings = [
+        ("x86_64-windows", "system32"), ("i386-windows", "syswow64")
+    ].flatMap { source, destination in
+        // Only PE DLLs enter the prefix; native helpers remain in the runtime overlay.
+        ["d3d10core.dll", "d3d11.dll", "dxgi.dll", "winemetal.dll"].map {
+            Mapping(source: "\(source)/\($0)", destination: "drive_c/windows/\(destination)/\($0)")
+        }
+    }
+    private static let d3dmetalMappings = ["d3d11.dll", "d3d12.dll", "dxgi.dll"].map {
+        Mapping(source: "wine/x86_64-windows/\($0)", destination: "drive_c/windows/system32/\($0)")
+    }
+
+    private static func mappings(for backend: GraphicsBackend) -> [Mapping] {
+        switch backend {
+        case .standard:
+            return []
+        case .dxvk:
+            return dxvkMappings
+        case .dxmt:
+            return dxmtMappings
+        case .d3dmetal:
+            return d3dmetalMappings
+        }
+    }
+
+    private static let allowedPaths = Set(GraphicsBackend.allCases.flatMap { mappings(for: $0).map(\.destination) })
+
+    private static func union(_ previous: [String], _ next: [String]) -> [String] {
+        previous + next.filter { !previous.contains($0) }
+    }
 
     private struct Entry: Codable {
         let originalExists: Bool
@@ -25,8 +63,14 @@ internal enum GraphicsPrefix {
     }
 
     private struct Manifest: Codable {
+        let schema: Int?
+        let backend: GraphicsBackend?
+        let paths: [String]?
         let componentID: String
         let entries: [Entry]
+
+        var resolvedBackend: GraphicsBackend { backend ?? .dxvk }
+        var resolvedPaths: [String] { paths ?? Array(dllPaths.prefix(entries.count)) }
     }
 
     private struct Snapshot: Codable {
@@ -35,6 +79,10 @@ internal enum GraphicsPrefix {
     }
 
     private struct Journal: Codable {
+        let schema: Int?
+        let paths: [String]?
+        let previousPaths: [String]?
+        let nextPaths: [String]?
         let previousMetadata: Data
         let nextMetadata: Data
         let before: [Snapshot]
@@ -42,6 +90,8 @@ internal enum GraphicsPrefix {
         let hadActive: Bool
         let hasActive: Bool
         let displaced: [Bool]
+
+        var resolvedPaths: [String] { paths ?? Array(dllPaths.prefix(before.count)) }
     }
 
     static func withLock<T>(bottleDirectory: URL, _ body: () throws -> T) throws -> T {
@@ -84,7 +134,7 @@ internal enum GraphicsPrefix {
             throw MagicWineError.setup("Bottle metadata changed during an interrupted graphics transaction. Its recovery files have been retained.")
         }
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
-        try validateDestinations(prefix: prefix, count: journal.before.count)
+        try validateDestinations(prefix: prefix, paths: journal.resolvedPaths)
         try restoreSnapshot(journal: journal, transaction: transaction, graphics: graphics, prefix: prefix)
         try manager.removeItem(at: transaction)
     }
@@ -92,19 +142,21 @@ internal enum GraphicsPrefix {
     /// Runtime launch checks are deliberately inexpensive. Source hashes are validated at
     /// setup; restoration uses the saved installed hashes to recognize user replacements.
     static func validateInstalled(configuration: GraphicsConfiguration, prefix: URL, bottleDirectory: URL) throws {
-        guard configuration.backend == .dxvk else { return }
-        try validateDestinations(prefix: prefix)
+        guard configuration.backend != .standard else { return }
+        let paths = mappings(for: configuration.backend).map(\.destination)
+        try validateDestinations(prefix: prefix, paths: paths)
         let active = bottleDirectory.appendingPathComponent("graphics/active", isDirectory: true)
         let manifest = try readManifest(active)
-        guard manifest.componentID == configuration.componentID, manifest.entries.count == dllPaths.count else {
-            throw MagicWineError.setup("The bottle's DXVK installation does not match its selected component. Restore Standard, then enable DXVK again.")
+        guard manifest.componentID == configuration.componentID,
+              manifest.resolvedBackend == configuration.backend, manifest.resolvedPaths == paths else {
+            throw MagicWineError.setup("The bottle's graphics installation does not match its selected component. Restore Standard, then enable the renderer again.")
         }
-        for (index, path) in dllPaths.enumerated() {
+        for (index, path) in paths.enumerated() {
             let file = prefix.appendingPathComponent(path)
             try requireRegularFile(file)
             let attributes = try manager.attributesOfItem(atPath: file.path)
             guard (attributes[.size] as? NSNumber)?.uint64Value == manifest.entries[index].installedSize else {
-                throw MagicWineError.setup("The bottle's DXVK DLLs are missing or changed. Restore Standard, then enable DXVK again.")
+                throw MagicWineError.setup("The bottle's graphics DLLs are missing or changed. Restore Standard, then enable the renderer again.")
             }
         }
     }
@@ -143,16 +195,19 @@ internal enum GraphicsPrefix {
     static func prepare(from previous: GraphicsConfiguration, to next: GraphicsConfiguration,
                         componentRoot: URL?, bottleDirectory: URL, previousMetadata: Data,
                         nextMetadata: Data) throws -> URL {
-        guard previous.backend != .dxvk || next.backend != .dxvk else {
-            throw MagicWineError.setup("In-place DXVK component updates are not supported. Create a new bottle, or choose Standard to restore this bottle's original graphics files.")
+        guard previous.backend == .standard || previous.backend != next.backend else {
+            throw MagicWineError.setup("In-place graphics component updates are not supported. Choose Standard first to restore this bottle's original graphics files.")
         }
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
         let graphics = bottleDirectory.appendingPathComponent("graphics", isDirectory: true)
         let active = graphics.appendingPathComponent("active", isDirectory: true)
+        let incoming = mappings(for: next.backend)
+        try validateDestinations(prefix: prefix, paths: incoming.map(\.destination))
+        if try exists(graphics) { try ensureDirectory(graphics) }
         let oldManifest: Manifest?
-        if previous.backend == .dxvk {
+        if previous.backend != .standard {
             let manifest = try readManifest(active)
-            guard manifest.componentID == previous.componentID else {
+            guard manifest.componentID == previous.componentID, manifest.resolvedBackend == previous.backend else {
                 throw MagicWineError.setup("The bottle's graphics backup does not match its selected component.")
             }
             oldManifest = manifest
@@ -160,18 +215,25 @@ internal enum GraphicsPrefix {
             guard try !exists(active) else { throw MagicWineError.setup("The bottle has an unexpected graphics backup; refusing to overwrite it.") }
             oldManifest = nil
         }
-        let count = oldManifest?.entries.count ?? dllPaths.count
-        try validateDestinations(prefix: prefix, count: count)
-        try ensureDirectory(graphics, create: true)
-        if next.backend == .dxvk {
-            guard let componentRoot, let id = next.componentID, !id.isEmpty,
-                  ![".", ".."].contains(id), !id.contains("/"), !id.contains("\\") else {
-                throw MagicWineError.setup("DXVK requires an installed graphics component.")
+        let previousPaths = oldManifest?.resolvedPaths ?? []
+        let nextPaths = incoming.map(\.destination)
+        let paths = union(previousPaths, nextPaths)
+        try validateDestinations(prefix: prefix, paths: paths)
+        if next.backend != .standard {
+            guard let componentRoot, let id = next.componentID, validComponentID(id) else {
+                throw MagicWineError.setup("This renderer requires an installed graphics component.")
             }
             try ensureDirectory(componentRoot)
-            for architecture in ["x64", "x32"] { try ensureDirectory(componentRoot.appendingPathComponent(architecture)) }
-            for path in sourcePaths { try requireRegularFile(componentRoot.appendingPathComponent(path)) }
+            for mapping in incoming {
+                var parent = componentRoot
+                for part in mapping.source.split(separator: "/").dropLast() {
+                    parent.appendPathComponent(String(part))
+                    try ensureDirectory(parent)
+                }
+                try requireRegularFile(componentRoot.appendingPathComponent(mapping.source))
+            }
         }
+        try ensureDirectory(graphics, create: true)
         let transaction = graphics.appendingPathComponent("transaction", isDirectory: true)
         guard try !exists(transaction) else { throw MagicWineError.setup("A graphics transaction must be recovered before setup.") }
         try ensureDirectory(transaction, create: true)
@@ -184,43 +246,49 @@ internal enum GraphicsPrefix {
                 try manager.copyItem(at: active, to: transaction.appendingPathComponent("before-active"))
             }
             let nextActive = transaction.appendingPathComponent("after-active", isDirectory: true)
-            if next.backend == .dxvk {
+            if next.backend != .standard {
                 try ensureDirectory(nextActive, create: true)
                 try ensureDirectory(nextActive.appendingPathComponent("originals"), create: true)
             }
             var before: [Snapshot] = []
             var after: [Snapshot] = []
-            var entries: [Entry] = []
+            var entries: [String: Entry] = [:]
             var displaced: [Bool] = []
-            for (index, path) in dllPaths.prefix(count).enumerated() {
+            for (index, path) in paths.enumerated() {
                 let destination = prefix.appendingPathComponent(path)
                 let beforeSnapshot = try snapshot(destination)
                 before.append(beforeSnapshot)
                 if beforeSnapshot.exists { try manager.copyItem(at: destination, to: beforeDirectory.appendingPathComponent(String(index))) }
-                displaced.append(oldManifest != nil && beforeSnapshot.exists && beforeSnapshot.fingerprint != "file:" + oldManifest!.entries[index].installedHash)
-                let originalExists = oldManifest?.entries[index].originalExists ?? beforeSnapshot.exists
-                let original = oldManifest == nil ? destination : active.appendingPathComponent("originals/\(index)")
+                let oldIndex = previousPaths.firstIndex(of: path)
+                let oldEntry = oldIndex.flatMap { oldManifest?.entries[$0] }
+                displaced.append(oldEntry != nil && beforeSnapshot.exists && beforeSnapshot.fingerprint != "file:" + oldEntry!.installedHash)
+                // Overlap carries the pre-renderer original, not the outgoing renderer.
+                // Incoming-only paths capture their current file/link/absence instead.
+                let originalExists = oldEntry?.originalExists ?? beforeSnapshot.exists
+                let original = oldIndex.map { active.appendingPathComponent("originals/\($0)") } ?? destination
                 if originalExists { try requireFileOrLink(original) }
-                if next.backend == .dxvk {
-                    if originalExists { try manager.copyItem(at: original, to: nextActive.appendingPathComponent("originals/\(index)")) }
-                    let source = componentRoot!.appendingPathComponent(sourcePaths[index])
-                    let staged = afterDirectory.appendingPathComponent(String(index))
+                let staged = afterDirectory.appendingPathComponent(String(index))
+                if let nextIndex = nextPaths.firstIndex(of: path) {
+                    if originalExists { try manager.copyItem(at: original, to: nextActive.appendingPathComponent("originals/\(nextIndex)")) }
+                    let source = componentRoot!.appendingPathComponent(incoming[nextIndex].source)
                     try manager.copyItem(at: source, to: staged)
                     let digest = try hash(staged)
-                    entries.append(Entry(originalExists: originalExists, installedHash: digest.hex, installedSize: digest.size))
+                    entries[path] = Entry(originalExists: originalExists, installedHash: digest.hex, installedSize: digest.size)
                     after.append(Snapshot(exists: true, fingerprint: "file:" + digest.hex))
                 } else {
-                    let staged = afterDirectory.appendingPathComponent(String(index))
+                    // Outgoing-only paths are restored in this same transaction.
                     if originalExists { try manager.copyItem(at: original, to: staged) }
                     after.append(try snapshot(staged))
                 }
             }
-            if next.backend == .dxvk {
-                let manifest = Manifest(componentID: next.componentID!, entries: entries)
+            if next.backend != .standard {
+                let manifest = Manifest(schema: schema, backend: next.backend, paths: nextPaths,
+                                        componentID: next.componentID!, entries: nextPaths.map { entries[$0]! })
                 try JSONEncoder().encode(manifest).write(to: nextActive.appendingPathComponent("manifest.json"), options: .atomic)
             }
-            let journal = Journal(previousMetadata: previousMetadata, nextMetadata: nextMetadata, before: before,
-                                  after: after, hadActive: oldManifest != nil, hasActive: next.backend == .dxvk,
+            let journal = Journal(schema: schema, paths: paths, previousPaths: previousPaths, nextPaths: nextPaths,
+                                  previousMetadata: previousMetadata, nextMetadata: nextMetadata, before: before,
+                                  after: after, hadActive: oldManifest != nil, hasActive: next.backend != .standard,
                                   displaced: displaced)
             try JSONEncoder().encode(journal).write(to: transaction.appendingPathComponent("journal.json"), options: .atomic)
             return transaction
@@ -233,12 +301,22 @@ internal enum GraphicsPrefix {
     static func apply(transaction: URL, bottleDirectory: URL) throws {
         let graphics = bottleDirectory.appendingPathComponent("graphics", isDirectory: true)
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
+        try ensureDirectory(graphics)
+        try ensureDirectory(transaction)
         let journal = try readJournal(transaction.appendingPathComponent("journal.json"))
-        try validateDestinations(prefix: prefix, count: journal.before.count)
-        for (index, path) in dllPaths.prefix(journal.before.count).enumerated() {
+        try validateDestinations(prefix: prefix, paths: journal.resolvedPaths)
+        // A malformed or incomplete staged payload must fail before the first deletion.
+        try validateActiveBackup(journal: journal, transaction: transaction, after: false)
+        try validateActiveBackup(journal: journal, transaction: transaction, after: true)
+        try validateSnapshots(journal.before, directory: transaction.appendingPathComponent("before"))
+        try validateSnapshots(journal.after, directory: transaction.appendingPathComponent("after"))
+        for (index, path) in journal.resolvedPaths.enumerated() {
             let destination = prefix.appendingPathComponent(path)
-            if journal.displaced[index], try exists(destination) {
-                try preserve(destination, index: index, graphics: graphics)
+            let current = try snapshot(destination)
+            if current.exists,
+               journal.displaced[index] || (current.fingerprint != journal.before[index].fingerprint &&
+                                             current.fingerprint != journal.after[index].fingerprint) {
+                try preserve(destination, path: path, graphics: graphics)
             }
             try replace(destination, with: transaction.appendingPathComponent("after/\(index)"), exists: journal.after[index].exists)
         }
@@ -246,26 +324,16 @@ internal enum GraphicsPrefix {
     }
 
     private static func restoreSnapshot(journal: Journal, transaction: URL, graphics: URL, prefix: URL) throws {
-        try ensureDirectory(transaction.appendingPathComponent("before"))
-        if journal.hadActive {
-            let manifest = try readManifest(transaction.appendingPathComponent("before-active"))
-            guard manifest.entries.count == journal.before.count else {
-                throw MagicWineError.setup("The bottle graphics recovery backup does not match its journal.")
-            }
-        }
-        // Validate all saved entries before changing anything during recovery.
-        for index in journal.before.indices where journal.before[index].exists {
-            let saved = transaction.appendingPathComponent("before/\(index)")
-            guard try snapshot(saved).fingerprint == journal.before[index].fingerprint else {
-                throw MagicWineError.setup("A saved graphics rollback DLL is missing or changed.")
-            }
-        }
-        for (index, path) in dllPaths.prefix(journal.before.count).enumerated() {
+        try validateActiveBackup(journal: journal, transaction: transaction, after: false)
+        // The old active footprint is a subset of the union journal when renderers differ.
+        // Recovery deliberately does not depend on an intact, possibly failed after stage.
+        try validateSnapshots(journal.before, directory: transaction.appendingPathComponent("before"))
+        for (index, path) in journal.resolvedPaths.enumerated() {
             let destination = prefix.appendingPathComponent(path)
             let current = try snapshot(destination)
             if current.exists, current.fingerprint != journal.before[index].fingerprint,
                current.fingerprint != journal.after[index].fingerprint {
-                try preserve(destination, index: index, graphics: graphics)
+                try preserve(destination, path: path, graphics: graphics)
             }
             try replace(destination, with: transaction.appendingPathComponent("before/\(index)"), exists: journal.before[index].exists)
         }
@@ -276,9 +344,33 @@ internal enum GraphicsPrefix {
         try requireRegularFile(url)
         let journal = try JSONDecoder().decode(Journal.self, from: Data(contentsOf: url))
         let count = journal.before.count
-        guard (count == legacyDLLCount || count == dllPaths.count),
-              journal.after.count == count, journal.displaced.count == count else {
+        guard journal.after.count == count, journal.displaced.count == count,
+              journal.before.allSatisfy(validSnapshot), journal.after.allSatisfy(validSnapshot),
+              journal.previousMetadata != journal.nextMetadata else {
             throw MagicWineError.setup("The bottle graphics recovery journal is invalid.")
+        }
+        let previous = try JSONDecoder().decode(Bottle.self, from: journal.previousMetadata).graphics
+        let next = try JSONDecoder().decode(Bottle.self, from: journal.nextMetadata).graphics
+        guard previous.backend != next.backend,
+              journal.hadActive == (previous.backend != .standard),
+              journal.hasActive == (next.backend != .standard) else {
+            throw MagicWineError.setup("The bottle graphics recovery journal has inconsistent selections.")
+        }
+        if let version = journal.schema {
+            guard version == schema, let paths = journal.paths,
+                  let previousPaths = journal.previousPaths, let nextPaths = journal.nextPaths,
+                  validPaths(paths), paths.count == count,
+                  validFootprint(previousPaths, backend: previous.backend, allowLegacy: true),
+                  validFootprint(nextPaths, backend: next.backend, allowLegacy: false),
+                  paths == union(previousPaths, nextPaths) else {
+                throw MagicWineError.setup("The bottle graphics recovery journal has invalid DLL paths.")
+            }
+        } else {
+            guard journal.paths == nil, journal.previousPaths == nil, journal.nextPaths == nil,
+                  count == legacyDLLCount || count == dllPaths.count,
+                  [previous.backend, next.backend].allSatisfy({ $0 == .standard || $0 == .dxvk }) else {
+                throw MagicWineError.setup("The bottle graphics legacy recovery journal is invalid.")
+            }
         }
         return journal
     }
@@ -289,17 +381,95 @@ internal enum GraphicsPrefix {
         let url = active.appendingPathComponent("manifest.json")
         try requireRegularFile(url)
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: url))
-        guard manifest.entries.count == legacyDLLCount || manifest.entries.count == dllPaths.count else {
+        guard validComponentID(manifest.componentID),
+              manifest.entries.allSatisfy({ validHash($0.installedHash) && $0.installedSize > 0 }) else {
             throw MagicWineError.setup("The bottle graphics backup is invalid.")
         }
+        if let version = manifest.schema {
+            guard version == schema, let backend = manifest.backend, backend != .standard,
+                  let paths = manifest.paths, validPaths(paths), paths.count == manifest.entries.count,
+                  validFootprint(paths, backend: backend, allowLegacy: false) else {
+                throw MagicWineError.setup("The bottle graphics backup has invalid DLL paths.")
+            }
+        } else {
+            guard manifest.backend == nil, manifest.paths == nil,
+                  manifest.entries.count == legacyDLLCount || manifest.entries.count == dllPaths.count else {
+                throw MagicWineError.setup("The bottle graphics legacy backup is invalid.")
+            }
+        }
         try ensureDirectory(active.appendingPathComponent("originals"))
-        for index in manifest.entries.indices where manifest.entries[index].originalExists {
-            try requireFileOrLink(active.appendingPathComponent("originals/\(index)"))
+        for index in manifest.entries.indices {
+            let original = active.appendingPathComponent("originals/\(index)")
+            if manifest.entries[index].originalExists {
+                try requireFileOrLink(original)
+            } else if try exists(original) {
+                throw MagicWineError.setup("The bottle graphics backup contains an unexpected original DLL.")
+            }
         }
         return manifest
     }
 
-    private static func validateDestinations(prefix: URL, count: Int = dllPaths.count) throws {
+    private static func validPaths(_ paths: [String]) -> Bool {
+        !paths.isEmpty && Set(paths).count == paths.count && paths.allSatisfy { allowedPaths.contains($0) }
+    }
+
+    private static func validFootprint(_ paths: [String], backend: GraphicsBackend, allowLegacy: Bool) -> Bool {
+        let expected = mappings(for: backend)
+        return (paths.count == expected.count && zip(paths, expected).allSatisfy { $0.0 == $0.1.destination }) ||
+            (allowLegacy && backend == .dxvk && paths.elementsEqual(dllPaths.prefix(legacyDLLCount)))
+    }
+
+    private static func validComponentID(_ value: String) -> Bool {
+        !value.isEmpty && value != "." && value != ".." && !value.contains("/") &&
+            !value.contains("\\") && !value.utf8.contains(0)
+    }
+
+    private static func validHash(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    private static func validSnapshot(_ value: Snapshot) -> Bool {
+        guard value.exists else { return value.fingerprint == nil }
+        guard let fingerprint = value.fingerprint else { return false }
+        if fingerprint.hasPrefix("file:") { return validHash(String(fingerprint.dropFirst(5))) }
+        return fingerprint.hasPrefix("link:") && fingerprint.count > 5 && !fingerprint.utf8.contains(0)
+    }
+
+    private static func validateSnapshots(_ snapshots: [Snapshot], directory: URL) throws {
+        try ensureDirectory(directory)
+        for index in snapshots.indices {
+            let saved = try snapshot(directory.appendingPathComponent(String(index)))
+            guard saved.exists == snapshots[index].exists, saved.fingerprint == snapshots[index].fingerprint else {
+                throw MagicWineError.setup("A saved graphics transaction DLL is missing or changed.")
+            }
+        }
+    }
+
+    private static func validateActiveBackup(journal: Journal, transaction: URL, after: Bool) throws {
+        let active = transaction.appendingPathComponent(after ? "after-active" : "before-active")
+        guard after ? journal.hasActive : journal.hadActive else {
+            guard try !exists(active) else { throw MagicWineError.setup("The graphics transaction has an unexpected active backup.") }
+            return
+        }
+        let manifest = try readManifest(active)
+        let metadata = after ? journal.nextMetadata : journal.previousMetadata
+        let configuration = try JSONDecoder().decode(Bottle.self, from: metadata).graphics
+        let expectedPaths = (after ? journal.nextPaths : journal.previousPaths) ?? journal.resolvedPaths
+        guard manifest.resolvedPaths == expectedPaths, manifest.resolvedBackend == configuration.backend,
+              manifest.componentID == configuration.componentID else {
+            throw MagicWineError.setup("The bottle graphics recovery backup does not match its journal.")
+        }
+        if after {
+            for (index, path) in manifest.resolvedPaths.enumerated() {
+                guard let journalIndex = journal.resolvedPaths.firstIndex(of: path),
+                      journal.after[journalIndex].fingerprint == "file:" + manifest.entries[index].installedHash else {
+                    throw MagicWineError.setup("The graphics transaction DLLs do not match their active backup.")
+                }
+            }
+        }
+    }
+
+    private static func validateDestinations(prefix: URL, paths: [String]) throws {
         let bottleDirectory = prefix.deletingLastPathComponent()
         let bottlesDirectory = bottleDirectory.deletingLastPathComponent()
         try ensureDirectory(bottlesDirectory.deletingLastPathComponent())
@@ -309,18 +479,18 @@ internal enum GraphicsPrefix {
         for path in ["drive_c", "drive_c/windows", "drive_c/windows/system32", "drive_c/windows/syswow64"] {
             try ensureDirectory(prefix.appendingPathComponent(path))
         }
-        for path in dllPaths.prefix(count) {
+        for path in paths {
             let file = prefix.appendingPathComponent(path)
             if try exists(file) { try requireFileOrLink(file) }
         }
     }
 
-    private static func preserve(_ file: URL, index: Int, graphics: URL) throws {
+    private static func preserve(_ file: URL, path: String, graphics: URL) throws {
         let recovered = graphics.appendingPathComponent("recovered", isDirectory: true)
         try ensureDirectory(recovered, create: true)
         let group = recovered.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try ensureDirectory(group, create: true)
-        let architecture = sourcePaths[index].hasPrefix("x64/") ? "x64" : "x32"
+        let architecture = path.hasPrefix("drive_c/windows/system32/") ? "x64" : "x32"
         try manager.moveItem(at: file, to: group.appendingPathComponent(architecture + "-" + file.lastPathComponent))
     }
 
