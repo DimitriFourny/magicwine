@@ -142,6 +142,9 @@ internal enum GraphicsPrefix {
     static func prepare(from previous: GraphicsConfiguration, to next: GraphicsConfiguration,
                         componentRoot: URL?, bottleDirectory: URL, previousMetadata: Data,
                         nextMetadata: Data) throws -> URL {
+        guard previous.backend != .dxvk || next.backend != .dxvk else {
+            throw MagicWineError.setup("In-place DXVK component updates are not supported. Create a new bottle, or choose Standard to restore this bottle's original graphics files.")
+        }
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
         try validateDestinations(prefix: prefix)
         let graphics = bottleDirectory.appendingPathComponent("graphics", isDirectory: true)

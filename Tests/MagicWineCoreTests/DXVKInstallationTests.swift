@@ -20,7 +20,7 @@ struct DXVKInstallationTests {
         func cleanUp() { try? FileManager.default.removeItem(at: directory) }
     }
 
-    private let metadataNames = ["LICENSE-DXVK.txt", "LICENSE-DXVK-macOS.txt", "PROVENANCE.txt"]
+    private let metadataNames = ["LICENSE-DXVK.txt", "LICENSE-DXVK-macOS.txt", "LICENSE-DXVK-DEPENDENCIES.txt", "PROVENANCE.txt"]
     private let dllPaths = ["x32/d3d10core.dll", "x32/d3d11.dll", "x64/d3d10core.dll", "x64/d3d11.dll"]
 
     // Small structurally valid PE images exercise validation without networking or
@@ -172,7 +172,8 @@ struct DXVKInstallationTests {
         #expect(throws: MagicWineError.self) { try DXVKInstallation.validatePayloadLayout(at: fixture.component) }
     }
 
-    @Test(arguments: ["../escape", "/absolute", "dxvk-macos-other-version", "", "x32/d3d11.dll"])
+    @Test(arguments: ["../escape", "/absolute", "dxvk-macos-other-version", "", "x32/d3d11.dll",
+                       "dxvk-macos-1.10.3-20230507-repack-acd1520ad105"])
     func immutableLookupRejectsNonPinnedComponentIDs(id: String) throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
@@ -242,7 +243,8 @@ struct DXVKInstallationTests {
     }
 
     @Test(arguments: ["x32/d3d10core.dll", "x32/d3d11.dll", "x64/d3d10core.dll", "x64/d3d11.dll",
-                       "dxvk.conf", "installation.json", "LICENSE-DXVK.txt", "LICENSE-DXVK-macOS.txt", "PROVENANCE.txt"])
+                       "dxvk.conf", "installation.json", "LICENSE-DXVK.txt", "LICENSE-DXVK-macOS.txt",
+                       "LICENSE-DXVK-DEPENDENCIES.txt", "PROVENANCE.txt"])
     func incompleteManagedPackageIsNeverAdopted(path: String) throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }

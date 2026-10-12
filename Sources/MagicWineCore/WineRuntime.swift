@@ -206,6 +206,9 @@ public actor WineRuntime {
         guard current.isInitialized else {
             throw MagicWineError.setup("Initialize this bottle before changing its graphics backend.")
         }
+        guard backend != .dxvk || current.graphics.backend != .dxvk || current.graphics.usesCurrentDXVK else {
+            throw MagicWineError.setup("In-place DXVK component updates are not supported. Create a new bottle to use the corrected component, or choose Standard to restore this bottle's original graphics files.")
+        }
         if backend == .dxvk { try validateVulkanRuntime(current.runtime.executableURL) }
         progress?(.stopping)
         _ = try await stopProcesses(current)
@@ -213,8 +216,7 @@ public actor WineRuntime {
                                                                 kind: .lifetime, exclusive: true, timeout: .seconds(15))
         defer { lifetime.release() }
         try Task.checkCancellation()
-        let retainingComponent = backend == .dxvk && current.graphics.backend == .dxvk &&
-            current.graphics.componentID == DXVKInstallation.componentID
+        let retainingComponent = backend == .dxvk && current.graphics.usesCurrentDXVK
         let componentRoot: URL?
         let configuration: GraphicsConfiguration
         if backend == .dxvk {
@@ -347,7 +349,7 @@ public actor WineRuntime {
     private func graphicsEnvironment(for bottle: Bottle, prefix: URL,
                                      base: [String: String]) throws -> [String: String] {
         guard let componentID = bottle.graphics.componentID else {
-            throw MagicWineError.setup("This bottle has no pinned DXVK component. Restore Standard, then enable DXVK again to reinstall this bottle's graphics files.")
+            throw MagicWineError.setup("This bottle has no pinned DXVK component. Create a new bottle and enable DXVK, or choose Standard to restore this bottle's original graphics files.")
         }
         let component = try DXVKInstallation.validate(componentID: componentID, paths: paths)
         try validateVulkanRuntime(bottle.runtime.executableURL)

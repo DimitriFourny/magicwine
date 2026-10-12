@@ -5,25 +5,29 @@ import Foundation
 /// The native macOS fork is deliberately pinned: these DLLs are not interchangeable
 /// with upstream Vulkan-only DXVK or Gcenx's Wine builtin DLL package.
 enum DXVKInstallation {
-    static let componentID = "dxvk-macos-1.10.3-20230507-repack-acd1520ad105"
-    static let version = "1.10.3-20230507-repack"
-    static let notice = "DXVK — Experimental uses Gcenx's unsigned, 1.10.3-based macOS DXVK fork for Direct3D 10/11 only. It does not provide Direct3D 9 or 12, anti-cheat compatibility, or proprietary D3DMetal/GPTK binaries. The curated SHA-256 pin identifies the package; it is not malware verification. MagicWine does not remove DXVK quarantine attributes or modify global Wine files."
-    static let archiveRoot = "dxvk-macOS-async-v1.10.3-20230507-repack"
-    static let source = "https://github.com/Gcenx/DXVK-macOS/releases/download/v1.10.3-20230507-repack/dxvk-macOS-async-v1.10.3-20230507-repack.tar.gz"
-    static let archiveSHA256 = "acd1520ad105d8ef124a09c8e11a259a5dc8bdc565ad18e0e52693f9807b2477"
+    static let componentID = "dxvk-macos-1.10.3-magicwine.1"
+    static let version = "1.10.3-magicwine.1"
+    static let notice = "DXVK — Experimental uses MagicWine's unsigned, altered build of Gcenx's public 1.10.3-based macOS DXVK fork for Direct3D 10/11 only. The native D3D11 implementation rejects unsupported queries instead of reporting fabricated counters. It does not provide Direct3D 9 or 12, anti-cheat compatibility, or proprietary D3DMetal/GPTK binaries. The curated SHA-256 pin identifies the bundled package; it is not malware verification. MagicWine does not remove DXVK quarantine attributes or modify global Wine files."
+    static let archiveRoot = "dxvk-macos-1.10.3-magicwine.1"
+    static let source = "bundled:Sources/MagicWineCore/Resources/dxvk-macos-1.10.3-magicwine.1.tar.gz"
+    static let archiveSHA256 = "88c1664e348c06c27469ef9acc8704a26e998835f9110281ffec6a96b4b26d18"
     private static let repository = "https://github.com/Gcenx/DXVK-macOS"
+    private static let sourceCommit = "8f1e28deed3ad30802f7e1bdff428ec14e6e7817"
+    private static let sourceArchiveSHA256 = "b3fc4a0415b3e4cdfb40497bec191c10f183ec2eb498950aa1f638f176cb996b"
     private static let upstreamLicenseSource = "https://github.com/doitsujin/dxvk/blob/v1.10.3/LICENSE"
-    private static let forkLicenseSource = "https://github.com/Gcenx/DXVK-macOS/blob/master/LICENSE"
+    private static let forkLicenseSource = "https://github.com/Gcenx/DXVK-macOS/blob/\(sourceCommit)/LICENSE"
     private static let dllNames = ["d3d10core.dll", "d3d11.dll"]
+    private static let dependencyNoticeName = "LICENSE-DXVK-DEPENDENCIES.txt"
+    private static let dependencyNoticeSHA256 = "077bb8f90c2e8dc662cefa54c77309ee5cbee3b4b03bdd5b47ebb14f594b7bb9"
 
     // Independently recorded from the pinned archive. A forged receipt cannot bless
     // different binaries, even if its archive checksum claims to match our pin.
     private static let payloadDigests = [
         "dxvk.conf": "0e9e39c27db318a8efe787380b09dae1676f0344101ec37dbb78bfb282991bf2",
-        "x32/d3d10core.dll": "2277187a4e13fc2049fe28cb8dd05b34b48c68031c386c3597ba0e18b0c3d327",
-        "x32/d3d11.dll": "f79d417f675d00008375eb4ea2318af6fcd0b27971d604d3cf345a0dcfa998a0",
-        "x64/d3d10core.dll": "0fa08bba860c63e3abeeabfc96d0e7aa327411a975f8f23d2dc63594ef5f796e",
-        "x64/d3d11.dll": "0ff0b0835dde29556bd01dfce7b1ae348d7f229cb1e1a37cc71ea1a028beeca4",
+        "x32/d3d10core.dll": "2ba107be7ff7ad6236117f2f68a842569ef0fe96ddf7ed30d6ee41521ba24276",
+        "x32/d3d11.dll": "c6786019a36b80ae15f6dd51aca1780f7c5e161553a5b1dc979f3796bfb06b64",
+        "x64/d3d10core.dll": "890e26f26a37adc97ef9711c82baaec815c99bcc256115f3c28c92a5d85306b7",
+        "x64/d3d11.dll": "3384ad1538fd53cc9db5e88ac4c7a18f93ce9ebe2b37bb1a91262b9ffb719d61",
     ]
 
     private static let licenseTerms = """
@@ -71,15 +75,27 @@ enum DXVKInstallation {
     Archive SHA-256: \(archiveSHA256)
     Checksum authority: MagicWine curated pin (not an upstream signature)
     Fork source: \(repository)
+    Fork source commit: \(sourceCommit)
+    Source archive: https://codeload.github.com/Gcenx/DXVK-macOS/tar.gz/\(sourceCommit)
+    Source archive SHA-256: \(sourceArchiveSHA256)
+    MagicWine build recipe: scripts/build-dxvk.sh
+    MagicWine source alteration: patches/dxvk-pipeline-statistics.patch
+    Build tools: MinGW-w64 14.0.0_3 / GCC 16.2.0, Meson 1.12.1,
+    glslang 16.6.0; release native DLLs with static C/C++ runtimes.
+    Dependency notices: \(dependencyNoticeName), SHA-256 \(dependencyNoticeSHA256)
     Upstream source: https://github.com/doitsujin/dxvk/tree/v1.10.3
     Upstream zlib/libpng attribution: \(upstreamLicenseSource)
     macOS fork zlib/libpng attribution: \(forkLicenseSource)
 
-    DXVK was created by Philip Rebohle and its contributors. This is the
-    altered Gcenx macOS/async fork, not the original upstream distribution.
-    MagicWine preserves the package's native x32/x64 d3d10core.dll and d3d11.dll
-    and dxvk.conf without changing their contents. No d3d9.dll or dxgi.dll is
-    included. The receipt records all payload and attribution checksums.
+    DXVK was created by Philip Rebohle and its contributors. This is MagicWine's
+    altered build of the Gcenx macOS/async fork, not an original upstream or
+    Gcenx distribution. MagicWine changes native D3D11Device::CreateQuery1 to
+    reject unsupported PIPELINE_STATISTICS queries with E_INVALIDARG and a
+    null output before returning validation-only S_FALSE. No query interceptor,
+    proxy, invented counters, or newly advertised features are included.
+    The bundled native x32/x64 d3d10core.dll and d3d11.dll and dxvk.conf are
+    installed unchanged. No d3d9.dll or dxgi.dll is included; DXGI stays Wine
+    builtin. The receipt records all payload and attribution checksums.
     \(notice)
 
     """
@@ -102,7 +118,8 @@ enum DXVKInstallation {
     }
 
     private static var expectedReceipt: Receipt {
-        let metadataDigests = attributionFiles.mapValues { digest(Data($0.utf8)) }
+        var metadataDigests = attributionFiles.mapValues { digest(Data($0.utf8)) }
+        metadataDigests[dependencyNoticeName] = dependencyNoticeSHA256
         return Receipt(schema: 1, componentID: componentID, version: version,
                        source: source, archiveSHA256: archiveSHA256, repository: repository,
                        upstreamLicenseSource: upstreamLicenseSource, forkLicenseSource: forkLicenseSource,
@@ -175,19 +192,15 @@ enum DXVKInstallation {
                 try Task.checkCancellation()
                 return destination
             }
-            var request = URLRequest(url: URL(string: source)!)
-            request.timeoutInterval = 600
-            let (download, response) = try await RuntimeDownload.download(for: request, progress: progress.map { callback in
-                { @Sendable update in callback(.downloading(update)) }
-            })
-            defer { try? FileManager.default.removeItem(at: download) }
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  http.url?.scheme?.lowercased() == "https" else {
-                throw MagicWineError.setup("DXVK download returned an unsuccessful or insecure HTTPS response (\((response as? HTTPURLResponse)?.statusCode ?? 0)).")
-            }
-            let archive = stage.appendingPathComponent("dxvk.tar.gz")
-            try FileManager.default.moveItem(at: download, to: archive)
             progress?(.verifying)
+            guard let bundledArchive = Bundle.module.url(forResource: archiveRoot, withExtension: "tar.gz") else {
+                throw MagicWineError.setup("The bundled DXVK package is missing. Reinstall this MagicWine build; no component was installed.")
+            }
+            try requireFile(bundledArchive)
+            let archive = stage.appendingPathComponent("dxvk.tar.gz")
+            try FileManager.default.copyItem(at: bundledArchive, to: archive)
+            try preserveQuarantine(from: bundledArchive, to: archive)
+            try Task.checkCancellation()
             let hashing = Task.detached(priority: .utility) { try hash(archive, maximum: 64 * 1_048_576) }
             let checksum = try await withTaskCancellationHandler { try await hashing.value } onCancel: { hashing.cancel() }
             guard checksum == archiveSHA256 else {
@@ -214,6 +227,12 @@ enum DXVKInstallation {
             for (name, contents) in attributionFiles {
                 try Data(contents.utf8).write(to: component.appendingPathComponent(name), options: .atomic)
             }
+            guard let dependencyNotice = Bundle.module.url(forResource: "LICENSE-DXVK-DEPENDENCIES", withExtension: "txt") else {
+                throw MagicWineError.setup("The bundled DXVK dependency notices are missing. Reinstall this MagicWine build.")
+            }
+            try requireFile(dependencyNotice)
+            try FileManager.default.copyItem(at: dependencyNotice,
+                                            to: component.appendingPathComponent(dependencyNoticeName))
             try writeReceipt(at: component)
             try preserveQuarantine(from: archive, to: component)
             try validateRoot(component, rehash: true)
@@ -232,7 +251,7 @@ enum DXVKInstallation {
 
     static func validate(componentID requested: String, paths: ApplicationPaths) throws -> URL {
         guard requested == componentID else {
-            throw MagicWineError.setup("Unsupported DXVK component ID: \(requested). This build requires \(componentID); it will not substitute a different version.")
+            throw MagicWineError.setup("This bottle selects an older or unsupported DXVK component (\(requested)). Create a new bottle and enable DXVK to use \(componentID). In-place component updates are not supported. Choose Standard to restore this bottle's original graphics files.")
         }
         try validateManagedParents(paths)
         let root = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
@@ -294,7 +313,10 @@ enum DXVKInstallation {
         try requireDirectory(root)
         var expected = Set(payloadDigests.keys)
         expected.formUnion(["x32", "x64"])
-        if includesMetadata { expected.formUnion(attributionFiles.keys); expected.insert("installation.json") }
+        if includesMetadata {
+            expected.formUnion(attributionFiles.keys)
+            expected.formUnion(["installation.json", dependencyNoticeName])
+        }
         var actual = Set<String>()
         var enumerationError: Error?
         guard let enumeration = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [],
@@ -386,19 +408,19 @@ enum DXVKInstallation {
         let name = "com.apple.quarantine"
         let size = archive.path.withCString { getxattr($0, name, nil, 0, 0, XATTR_NOFOLLOW) }
         if size < 0 {
-            guard errno == ENOATTR else { throw pathError("inspect download quarantine on", archive) }
+            guard errno == ENOATTR else { throw pathError("inspect package quarantine on", archive) }
             return
         }
-        guard size <= 65_536 else { throw MagicWineError.setup("DXVK download quarantine metadata exceeds its safety limit.") }
+        guard size <= 65_536 else { throw MagicWineError.setup("DXVK package quarantine metadata exceeds its safety limit.") }
         var data = Data(count: size)
         let received = data.withUnsafeMutableBytes { bytes in
             archive.path.withCString { getxattr($0, name, bytes.baseAddress, bytes.count, 0, XATTR_NOFOLLOW) }
         }
-        guard received == size else { throw pathError("read download quarantine on", archive) }
+        guard received == size else { throw pathError("read package quarantine on", archive) }
         let result = data.withUnsafeBytes { bytes in
             root.path.withCString { setxattr($0, name, bytes.baseAddress, bytes.count, 0, XATTR_NOFOLLOW) }
         }
-        guard result == 0 else { throw pathError("preserve download quarantine on", root) }
+        guard result == 0 else { throw pathError("preserve package quarantine on", root) }
     }
 
     private static func logRows(_ logURL: URL) throws -> [String] {

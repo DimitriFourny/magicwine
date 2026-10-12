@@ -337,7 +337,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // The graphics view asks for consent before calling this for a new DXVK selection.
+    // The graphics view asks for consent before enabling DXVK.
     func setGraphics(_ backend: GraphicsBackend, in bottle: Bottle, showHUD: Bool = false) {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
               bottle.isInitialized else { return }
@@ -371,8 +371,6 @@ final class AppModel: ObservableObject {
         switch progress {
         case .stopping:
             state.title = "Stopping Windows processes…"
-        case .downloading:
-            state.title = "Downloading DXVK…"
         case .verifying:
             state.title = "Verifying DXVK…"
         case .installing:

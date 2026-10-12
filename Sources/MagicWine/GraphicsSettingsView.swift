@@ -21,7 +21,8 @@ struct GraphicsSettingsView: View {
             Picker("Graphics", selection: Binding(
                 get: { currentBottle.graphics.backend },
                 set: { backend in
-                    guard !unavailable, backend != currentBottle.graphics.backend else { return }
+                    guard !unavailable else { return }
+                    guard backend != currentBottle.graphics.backend else { return }
                     if backend == .dxvk {
                         confirmsDXVK = true
                     } else {
@@ -36,15 +37,21 @@ struct GraphicsSettingsView: View {
             .disabled(unavailable)
 
             if currentBottle.graphics.backend == .dxvk {
+                if !currentBottle.graphics.usesCurrentDXVK {
+                    Text("This bottle uses an earlier DXVK component. Create a new bottle to use the corrected component, or choose Standard to restore its original graphics files.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Show Graphics HUD", isOn: Binding(
                     get: { currentBottle.graphics.showHUD },
                     set: { showHUD in
-                        guard !unavailable else { return }
+                        guard !unavailable, currentBottle.graphics.usesCurrentDXVK else { return }
                         model.setGraphics(.dxvk, in: currentBottle, showHUD: showHUD)
                     }
                 ))
-                .disabled(unavailable)
-                Text("Selected: DXVK 1.10.3-based macOS fork · Direct3D 10/11 only")
+                .disabled(unavailable || !currentBottle.graphics.usesCurrentDXVK)
+                Text(currentBottle.graphics.usesCurrentDXVK
+                     ? "Selected: DXVK 1.10.3-magicwine.1 · Direct3D 10/11 only"
+                     : "Selected: \(currentBottle.graphics.componentID ?? "unspecified DXVK component")")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Choose Standard to restore this bottle’s original graphics files.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -61,19 +68,19 @@ struct GraphicsSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            if case let .downloading(progress) = state.graphicsProgress {
-                WineDownloadProgressView(progress: progress, title: "Downloading DXVK…")
-            } else if state.graphicsProgress != nil, let title = state.title {
+            if state.graphicsProgress != nil, let title = state.title {
                 ProgressView(title)
                     .controlSize(.small)
             }
         }
         .alert("Enable DXVK — Experimental?", isPresented: $confirmsDXVK) {
-            Button("Enable DXVK") { model.setGraphics(.dxvk, in: currentBottle) }
+            Button("Enable DXVK") {
+                model.setGraphics(.dxvk, in: currentBottle, showHUD: currentBottle.graphics.showHUD)
+            }
                 .disabled(unavailable)
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text(WineRuntime.dxvkNotice + "\n\nThe package is downloaded from Gcenx/DXVK-macOS and installed only in this bottle. Changing graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files without another download.")
+            Text(WineRuntime.dxvkNotice + "\n\nThe package is bundled with MagicWine and installed only in this bottle without a download. Changing graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files. In-place DXVK component updates are not supported.")
         }
     }
 }

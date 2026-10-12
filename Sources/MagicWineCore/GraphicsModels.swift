@@ -15,11 +15,15 @@ public struct GraphicsConfiguration: Codable, Hashable, Sendable {
         self.componentID = componentID
         self.showHUD = showHUD
     }
+
+    /// Whether this selection uses the component shipped by this MagicWine build.
+    public var usesCurrentDXVK: Bool {
+        backend == .dxvk && componentID == DXVKInstallation.componentID
+    }
 }
 
 public enum GraphicsSetupProgress: Sendable {
     case stopping
-    case downloading(WineDownloadProgress)
     case verifying
     case installing
     case restoring
