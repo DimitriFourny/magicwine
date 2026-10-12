@@ -10,6 +10,8 @@ struct BottleActivity {
     var isStopping = false
     var error: String?
     var logURL: URL?
+    var graphicsProgress: GraphicsSetupProgress?
+    var graphicsSetupID: UUID?
 }
 
 struct AppNotice: Identifiable {
@@ -335,9 +337,55 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // The graphics view asks for consent before calling this for a new DXVK selection.
+    func setGraphics(_ backend: GraphicsBackend, in bottle: Bottle, showHUD: Bool = false) {
+        guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
+              bottle.isInitialized else { return }
+        var state = activity(for: bottle)
+        guard state.title == nil, !state.isStopping else { return }
+        let showHUD = backend == .dxvk && showHUD
+        guard bottle.graphics.backend != backend || bottle.graphics.showHUD != showHUD else { return }
+
+        let setupID = UUID()
+        state.graphicsSetupID = setupID
+        state.logURL = nil
+        state.graphicsProgress = .stopping
+        activities[bottle.id] = state
+        perform(in: bottle, title: "Stopping Windows processes…") { [self] in
+            let updated = try await self.wine.configureGraphics(
+                backend, in: bottle, showHUD: showHUD, acceptExperimental: backend == .dxvk
+            ) { [weak self] progress in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.activities[bottle.id]?.graphicsSetupID == setupID else { return }
+                    self.updateGraphicsProgress(progress, for: bottle.id)
+                }
+            }
+            self.replace(updated)
+            return nil
+        }
+    }
+
+    private func updateGraphicsProgress(_ progress: GraphicsSetupProgress, for id: UUID) {
+        guard var state = activities[id], state.graphicsSetupID != nil else { return }
+        state.graphicsProgress = progress
+        switch progress {
+        case .stopping:
+            state.title = "Stopping Windows processes…"
+        case .downloading:
+            state.title = "Downloading DXVK…"
+        case .verifying:
+            state.title = "Verifying DXVK…"
+        case .installing:
+            state.title = "Installing DXVK in this bottle…"
+        case .restoring:
+            state.title = "Restoring Standard graphics…"
+        }
+        activities[id] = state
+    }
+
     func stop(_ bottle: Bottle) {
         var state = activity(for: bottle)
-        guard !state.isStopping else { return }
+        guard !state.isStopping, state.graphicsSetupID == nil else { return }
         state.isStopping = true
         activities[bottle.id] = state
         Task {
@@ -402,6 +450,8 @@ final class AppModel: ObservableObject {
             var latest = activity(for: bottle)
             latest.title = nil
             latest.canStop = false
+            latest.graphicsProgress = nil
+            latest.graphicsSetupID = nil
             activities[bottle.id] = latest
         }
     }
