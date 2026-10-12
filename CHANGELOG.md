@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — 2026-10-12
+
+- Remove only `com.apple.quarantine` from managed Wine bundles after consent, using native no-follow filesystem APIs; preserve other attributes and reject escaping paths.
+- Reuse the existing installation confirmation for unsigned-runtime trust instead of adding a second prompt; the CLI requires `--accept-unsigned`, and the core API explicitly requires consent.
+- Apply the same quarantine removal to cached Wine after validating its provenance receipt and layout, so previously blocked downloads can be reused without downloading the archive again.
+- Add quarantine and consent regressions; verify real fresh/cached Wine execution and the native trust-install workflow.
+
 ## 0.1.0 — 2026-10-11
 
 - Native macOS bottle library with Wine onboarding and persisted runtime preferences.

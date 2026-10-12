@@ -17,7 +17,7 @@ The script builds the native app for your Mac, creates an ad-hoc-signed developm
 
 ## First Windows application
 
-1. Open MagicWine and choose **Install / Update Wine**, or **Choose Wine Executable** for an existing installation. For a Wine application bundle, the executable is usually inside `Contents/Resources/wine/bin/wine`.
+1. Open MagicWine and choose **Install / Update Wine**, then **Trust and Install Wine**, or **Choose Wine Executable** for an existing installation. For a Wine application bundle, the executable is usually inside `Contents/Resources/wine/bin/wine`.
 2. Create a bottle. MagicWine initializes its own Windows environment with the selected Wine runtime.
 3. Select **Install EXE/MSI** and choose the application's Windows installer. Complete the actual Windows installer normally.
 4. Launch its discovered Start Menu shortcut. Use **Refresh Shortcuts** if necessary, or **Add Program** to select an EXE or LNK manually.
@@ -30,10 +30,11 @@ Removing a program only removes its MagicWine launcher. Trashing a bottle stops 
 
 MagicWine does not fork or freeze Wine. Managed installation uses the maintained [Gcenx macOS Wine builds](https://github.com/Gcenx/macOS_Wine_builds), with the download URL and SHA-256 checksum from [Homebrew's Wine metadata](https://formulae.brew.sh/api/cask/wine-stable.json). Downloads are staged, checksum-verified, and installed privately without Homebrew or administrator access.
 
-- **Unsigned distribution:** the current public Wine build is unsigned, and Homebrew flags it for Gatekeeper checks. MagicWine asks for consent, preserves/applies download quarantine, and never disables Gatekeeper or removes quarantine. macOS may refuse to execute it or require manual approval through Privacy & Security. If approval is unavailable, select a Wine installation macOS permits; MagicWine will report the failure rather than bypass security. A checksum is integrity verification against metadata, not a publisher signature.
+- **Unsigned distribution:** the current public Wine build is unsigned, and Homebrew flags it for Gatekeeper checks. The existing installation confirmation authorizes running unsigned Wine: MagicWine verifies the download checksum and removes only `com.apple.quarantine` inside its managed Wine bundle. This bypasses download-quarantine checks for that bundle, without changing system-wide security settings or custom Wine installations. Other extended attributes are preserved, and symbolic links are not followed. A checksum is integrity verification against metadata, not a publisher signature or malware assessment.
 - **Apple Silicon:** Intel Wine requires [Rosetta](https://support.apple.com/102527). Install it yourself through Apple's prompt or `softwareupdate --install-rosetta`, reviewing Apple's license. MagicWine does not install Rosetta or accept the license.
 - **Multimedia:** the inspected Wine 11.0_1 distribution's optional multimedia plugin needs the [GStreamer Universal runtime](https://gstreamer.freedesktop.org/download/), version 1.28.2 or newer, in `/Library/Frameworks/GStreamer.framework`. Basic Wine setup and ordinary programs do not require it. MagicWine does not install privileged system frameworks.
 - Each bottle **pins its Wine executable**. Installing a newer managed runtime changes the default for new bottles, not existing bottles. Keep runtimes referenced by existing bottles installed. Custom executable paths must also remain available.
+- **Already blocked managed Wine:** run **Install / Update Wine** again and accept **Trust and Install Wine**. When the latest runtime is already downloaded, MagicWine checks its provenance receipt and layout, removes its quarantine, and reuses it without downloading the archive again. Existing bottles are not deleted or migrated.
 
 Wine compatibility varies by application. This app does not include CrossOver's application recipes, proprietary D3DMetal/GPTK components, DXVK installation, or a compatibility guarantee for DirectX games, DRM, or anti-cheat. These are not interchangeable with a generic Wine installation.
 
@@ -50,7 +51,7 @@ Wine compatibility varies by application. This app does not include CrossOver's 
 
 Use the bottle and program UUIDs printed by `list` and `apps` for subsequent commands. `install`, `add`, `refresh`, `launch`, `stop`, and `configure` use the same runtime and storage as the desktop app. `exec` invokes Wine with the bottle's environment and preserves each argument without shell interpolation.
 
-`--root /path/to/data` isolates CLI development data. The CLI managed-download command requires explicit consent: `install-wine --accept-unsigned`.
+`--root /path/to/data` isolates CLI development data. The CLI managed-download command requires explicit consent: `install-wine --accept-unsigned`. This authorizes unsigned Wine and scoped quarantine removal, including reuse of an existing managed runtime.
 
 ## Data and development
 
@@ -76,13 +77,13 @@ The test script uses the installed Swift Testing plugin and disables XCTest, whi
 
 Development checks on Apple Silicon with macOS 27, Rosetta, and public Wine 11.0:
 
-- Four storage regressions pass, including exact timestamp round-trips and preserving programs registered from stale bottle snapshots.
+- Thirteen regression tests pass: four storage tests plus nine quarantine/consent tests covering nested removal, other-attribute preservation, repeat operations, managed-path and symlink boundaries, and refusal without filesystem mutation.
 - Two real prefixes keep Windows files separate. Real 7-Zip 26.04 EXE and MSI installations create and validate archives.
 - Saved EXEs and installed LNK shortcuts launch real Windows processes. Stop, repeated idle stop, timeout, and task cancellation leave the runtime usable.
 - The native app launches and its model runs a Windows GUI program through the running → stop → idle transition without displaying a failure for a requested stop.
 - The EXE/MSI installer and Wine configuration entry points open their actual Windows processes, and bottle Stop terminates them.
 - Moving a bottle to macOS Trash leaves its externally registered executable unchanged.
-- Managed Wine downloads pass checksum/extraction/provenance checks. The first execution of the quarantined runtime timed out on this machine; manual macOS approval may be required. MagicWine does not bypass it.
+- Managed Wine downloads pass checksum/extraction/provenance checks. The native trust confirmation starts a real fresh installation and saves its runtime preference; Wine reports `wine-11.0`. Reinstalling the previously quarantined cached runtime removes its quarantine and also passes Wine version inspection without downloading the archive again.
 
 Native views were captured in-process. Full compositor screenshots and automated mouse/keyboard interaction were unavailable without Screen Recording and Accessibility permissions; some layer-backed controls are incomplete in those snapshots. Interactive installer completion still requires the normal Windows installer UI. These checks do not establish general Windows-application or game compatibility.
 
