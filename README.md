@@ -22,6 +22,8 @@ The script builds the native app for your Mac, creates an ad-hoc-signed developm
 3. Select **Install EXE/MSI** and choose the application's Windows installer. Complete the actual Windows installer normally.
 4. Launch its discovered Start Menu shortcut. Use **Refresh Shortcuts** if necessary, or **Add Program** to select an EXE or LNK manually.
 
+Managed Wine downloads show a progress bar, percentage, received/total size, and recent download speed. If the server does not supply a total size, the bar stays indeterminate while received bytes and speed still update. Release lookup, checksum verification, extraction, preparation, and runtime inspection have separate status messages. An already-installed runtime is reused without displaying a fictitious download.
+
 **Stop** terminates the selected bottle's Windows processes, not other bottles. **Wine Configuration** opens Wine's settings. **Reveal C: Drive** opens the bottle's Windows files. Errors retain their operation logs; **Reveal Logs** makes them accessible.
 
 Removing a program only removes its MagicWine launcher. Trashing a bottle stops its processes and moves its entire Windows environment to macOS Trash; external executables are not deleted. Failed initialization leaves a bottle available for **Retry Setup**.
@@ -77,13 +79,14 @@ The test script uses the installed Swift Testing plugin and disables XCTest, whi
 
 Development checks on Apple Silicon with macOS 27, Rosetta, and public Wine 11.0:
 
-- Thirteen regression tests pass: four storage tests plus nine quarantine/consent tests covering nested removal, other-attribute preservation, repeat operations, managed-path and symlink boundaries, and refusal without filesystem mutation.
+- Twenty-two regression tests pass: four storage tests, nine quarantine/consent tests, and nine download-progress tests covering unknown lengths, fractions, finite speeds, slow transfers, and final completion.
 - Two real prefixes keep Windows files separate. Real 7-Zip 26.04 EXE and MSI installations create and validate archives.
 - Saved EXEs and installed LNK shortcuts launch real Windows processes. Stop, repeated idle stop, timeout, and task cancellation leave the runtime usable.
 - The native app launches and its model runs a Windows GUI program through the running → stop → idle transition without displaying a failure for a requested stop.
 - The EXE/MSI installer and Wine configuration entry points open their actual Windows processes, and bottle Stop terminates them.
 - Moving a bottle to macOS Trash leaves its externally registered executable unchanged.
 - Managed Wine downloads pass checksum/extraction/provenance checks. The native trust confirmation starts a real fresh installation and saves its runtime preference; Wine reports `wine-11.0`. Reinstalling the previously quarantined cached runtime removes its quarantine and also passes Wine version inspection without downloading the archive again.
+- Throttled real HTTP transfers with known and unknown sizes emit intermediate byte counts and measured speeds, preserve the complete payload, and propagate cancellation and interrupted connections. The native progress view receives live actual-Wine download updates; success, cached reuse, and a failed provenance check clear download statistics correctly.
 
 Native views were captured in-process. Full compositor screenshots and automated mouse/keyboard interaction were unavailable without Screen Recording and Accessibility permissions; some layer-backed controls are incomplete in those snapshots. Interactive installer completion still requires the normal Windows installer UI. These checks do not establish general Windows-application or game compatibility.
 

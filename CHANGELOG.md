@@ -6,6 +6,9 @@
 - Reuse the existing installation confirmation for unsigned-runtime trust instead of adding a second prompt; the CLI requires `--accept-unsigned`, and the core API explicitly requires consent.
 - Apply the same quarantine removal to cached Wine after validating its provenance receipt and layout, so previously blocked downloads can be reused without downloading the archive again.
 - Add quarantine and consent regressions; verify real fresh/cached Wine execution and the native trust-install workflow.
+- Show native Wine download progress with percentage, received/total size, and recent transfer speed; unknown-length downloads retain byte counts and speed without inventing a percentage.
+- Stream downloads through a task-owning native delegate with throttled progress callbacks, ordered installation phases, cancellation cleanup, and no stale statistics after completion or failure.
+- Add progress arithmetic and final-emission regressions; verify slow known-length/chunked downloads and live native Wine-install progress.
 
 ## 0.1.0 — 2026-10-11
 
