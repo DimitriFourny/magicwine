@@ -40,6 +40,7 @@
 - Generalize transactional DLL backup/recovery across DXVK/DXMT/D3DMetal footprints while retaining legacy rollback. Direct backend switches and missing-component Standard restoration preserve original files, links, absent paths, and displaced user replacements.
 - Reject stock managed Wine's incompatible Metal ABI before mutation; retain each bottle's pinned runtime and require explicit selection of a compatible native custom Wine loader.
 - Verify real DXMT D3D10/11 rendering/readback in both architectures and D3DMetal D3D11/12 in 64-bit, repeated packaged launches, HUD-only preservation, direct Metal switches, missing-import rollback, unchanged original runtime hashes, and managed-Wine DXVK rendering. All 107 Swift regressions pass; rebuild and sign the app/CLI.
+- Exercise the native four-backend picker, DXMT/D3DMetal consent, folder-only library import presentation, and cancellation back to the unchanged Standard selection; document compositor-capture limitations.
 
 ## 0.1.0 — 2026-10-11
 
