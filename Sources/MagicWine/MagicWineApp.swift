@@ -444,11 +444,11 @@ private struct RuntimeSetupView: View {
             }
             #endif
         }
-        .confirmationDialog("Download Third-Party Wine?", isPresented: $confirmInstall, titleVisibility: .visible) {
-            Button("Download and Install Wine") { model.installWine() }
+        .confirmationDialog("Trust Third-Party Wine?", isPresented: $confirmInstall, titleVisibility: .visible) {
+            Button("Trust and Install Wine") { model.installWine() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This downloads unsigned third-party Wine from Gcenx/macOS_Wine_builds and verifies it against the Homebrew SHA256 checksum. This is not a signed or official WineHQ installer. macOS may block it or require your manual approval. MagicWine does not bypass Gatekeeper, remove quarantine, or relax security settings.")
+            Text("This Wine build is not notarized by Apple. MagicWine checks its download checksum and removes this bundle’s quarantine to let it run. This is not a malware check; system-wide security settings are unchanged.")
         }
     }
 }

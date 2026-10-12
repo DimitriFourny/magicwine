@@ -32,9 +32,9 @@ struct MagicWineCLI {
             for candidate in await runtime.discover() { print("\(candidate.version)\t\(candidate.executableURL.path)") }
         case "install-wine":
             guard values == ["--accept-unsigned"] else {
-                throw MagicWineError.setup("Public Wine builds are third-party and unsigned. macOS may require manual approval. To download and verify the managed runtime without changing security settings, use install-wine --accept-unsigned.")
+                throw MagicWineError.setup("Public Wine builds are third-party and unsigned. To verify the download and remove only the managed Wine bundle's quarantine, use install-wine --accept-unsigned. This permits unsigned code to run; a checksum is not a malware assessment. System-wide security settings are unchanged.")
             }
-            let installed = try await runtime.installLatest()
+            let installed = try await runtime.installLatest(acceptUnsigned: true)
             print("\(installed.version)\t\(installed.executableURL.path)")
         case "list":
             for bottle in try await store.list() {
@@ -106,7 +106,7 @@ struct MagicWineCLI {
 
     magicwine [--root <data-directory>] <command>
       runtimes                                 Find installed Wine
-      install-wine --accept-unsigned            Download verified public Wine
+      install-wine --accept-unsigned            Install/reuse Wine and remove its quarantine
       list                                     List bottles and their UUIDs
       create <name> <wine-executable>           Create and initialize a bottle
       initialize <bottle-UUID>                  Retry setup

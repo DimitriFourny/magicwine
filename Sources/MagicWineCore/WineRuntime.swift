@@ -58,7 +58,7 @@ public actor WineRuntime {
             environment: environment(executable: executable, prefix: nil), directory: nil, logURL: log, timeout: 15)
         do { _ = try await operation.run() }
         catch ProcessOperation.Interrupted.timedOut(let log) {
-            throw MagicWineError.runtimeUnavailable("Wine version inspection timed out for \(executable.path). macOS may be waiting for approval of this unsigned download; review System Settings > Privacy & Security, then retry or choose an approved Wine installation. MagicWine does not bypass Gatekeeper. Log: \(log.path)")
+            throw MagicWineError.runtimeUnavailable("Wine version inspection timed out for \(executable.path). If macOS is blocking a custom Wine installation, review System Settings > Privacy & Security. For managed Wine, run Install / Update Wine again and accept the unsigned-runtime confirmation. Log: \(log.path)")
         }
         let text = try RuntimeInstallation.boundedLog(log)
         guard let version = text.components(separatedBy: .newlines).dropFirst(2)
@@ -70,7 +70,10 @@ public actor WineRuntime {
         return RuntimeDescriptor(executableURL: executable, version: version)
     }
 
-    public func installLatest() async throws -> RuntimeDescriptor {
+    public func installLatest(acceptUnsigned: Bool) async throws -> RuntimeDescriptor {
+        guard acceptUnsigned else {
+            throw MagicWineError.setup("Installing managed Wine requires consent to run unsigned third-party code and remove its download quarantine.")
+        }
         guard !installing else { throw MagicWineError.setup("A managed Wine installation is already in progress.") }
         installing = true
         defer { installing = false }
