@@ -38,7 +38,7 @@ struct MagicWineCLI {
             print("\(installed.version)\t\(installed.executableURL.path)")
         case "list":
             for bottle in try await store.list() {
-                print("\(bottle.id)\t\(bottle.name)\t\(bottle.isInitialized ? "ready" : "setup required")\t\(bottle.runtime.version)")
+                print("\(bottle.id)\t\(bottle.name)\t\(bottle.isInitialized ? "ready" : "setup required")\t\(bottle.runtime.version)\t\(bottle.graphics.backend.rawValue)")
             }
         case "create":
             guard values.count == 2 else { throw argumentError("create <name> <wine-executable>") }
@@ -49,7 +49,7 @@ struct MagicWineCLI {
             bottle.isInitialized = true
             try await store.save(bottle)
             print("Ready. Log: \(result.logURL.path)")
-        case "initialize", "install", "add", "refresh", "apps", "launch", "stop", "configure", "exec":
+        case "initialize", "install", "add", "refresh", "apps", "launch", "stop", "configure", "graphics", "exec":
             guard let identifier = values.first else { throw argumentError("\(command) <bottle-UUID> …") }
             let bottle = try await findBottle(identifier, store: store)
             let rest = Array(values.dropFirst())
@@ -78,6 +78,25 @@ struct MagicWineCLI {
                 print("Log: \(try await runtime.launch(program, in: bottle).logURL.path)")
             case "stop": print("Log: \(try await runtime.stop(bottle).logURL.path)")
             case "configure": print("Log: \(try await runtime.configure(bottle).logURL.path)")
+            case "graphics":
+                if rest.isEmpty {
+                    print("\(bottle.graphics.backend.rawValue)\t\(bottle.graphics.componentID ?? "Wine default")\tHUD \(bottle.graphics.showHUD ? "on" : "off")")
+                    return
+                }
+                guard let backend = GraphicsBackend(rawValue: rest[0]) else {
+                    throw argumentError("graphics <bottle-UUID> standard|dxvk [--accept-experimental] [--hud|--no-hud]")
+                }
+                let flags = Set(rest.dropFirst())
+                guard flags.count == rest.count - 1,
+                      flags.isSubset(of: ["--accept-experimental", "--hud", "--no-hud"]),
+                      !(flags.contains("--hud") && flags.contains("--no-hud")),
+                      backend == .dxvk || flags.isEmpty else {
+                    throw argumentError("graphics <bottle-UUID> standard|dxvk [--accept-experimental] [--hud|--no-hud]")
+                }
+                let showHUD = flags.contains("--hud") || (!flags.contains("--no-hud") && bottle.graphics.showHUD)
+                let updated = try await runtime.configureGraphics(backend, in: bottle, showHUD: showHUD,
+                                                                   acceptExperimental: flags.contains("--accept-experimental"))
+                print("\(updated.graphics.backend.rawValue)\t\(updated.graphics.componentID ?? "Wine default")\tHUD \(updated.graphics.showHUD ? "on" : "off")")
             case "exec":
                 guard !rest.isEmpty else { throw argumentError("exec <bottle-UUID> <wine-arguments…>") }
                 let result = try await runtime.run(arguments: rest, in: bottle)
@@ -117,6 +136,8 @@ struct MagicWineCLI {
       launch <bottle-UUID> <program-UUID>       Run a saved program
       stop <bottle-UUID>                        Stop this bottle only
       configure <bottle-UUID>                   Open Wine configuration
+      graphics <bottle-UUID> [standard|dxvk]     Inspect or change graphics backend
+        DXVK requires --accept-experimental; optional --hud or --no-hud
       exec <bottle-UUID> <wine-arguments…>       Run Wine with isolated prefix
     """
 }

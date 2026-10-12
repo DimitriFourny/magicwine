@@ -2,11 +2,19 @@ import Foundation
 
 public actor WineRuntime {
     public static let distributionNotice = RuntimeInstallation.notice
+    public static let dxvkNotice = DXVKInstallation.notice
     private let paths: ApplicationPaths
+    private let store: BottleStore
     private var active: [UUID: [UUID: ProcessOperation]] = [:]
     private var installing = false
+    private var graphicsChanging: Set<UUID> = []
+    private var pendingLaunches: [UUID: [UUID: Task<GraphicsOperationLease, Error>]] = [:]
+    private var installingDXVK = false
 
-    public init(paths: ApplicationPaths) { self.paths = paths }
+    public init(paths: ApplicationPaths) {
+        self.paths = paths
+        store = BottleStore(paths: paths)
+    }
 
     public func discover() async -> [RuntimeDescriptor] {
         var candidates: [URL] = []
@@ -130,9 +138,29 @@ public actor WineRuntime {
     }
 
     public func stop(_ bottle: Bottle) async throws -> OperationResult {
+        interruptOperations(in: bottle)
+        try paths.prepare()
+        let launch = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                              kind: .launch, exclusive: true)
+        defer { launch.release() }
+        let result = try await stopProcesses(bottle)
+        let lifetime = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                                kind: .lifetime, exclusive: true, timeout: .seconds(15))
+        lifetime.release()
+        return result
+    }
+
+    private func interruptOperations(in bottle: Bottle) {
+        for pending in pendingLaunches[bottle.id]?.values ?? Dictionary<UUID, Task<GraphicsOperationLease, Error>>().values {
+            pending.cancel()
+        }
         for operation in active[bottle.id]?.values ?? Dictionary<UUID, ProcessOperation>().values {
             operation.terminate()
         }
+    }
+
+    private func stopProcesses(_ bottle: Bottle) async throws -> OperationResult {
+        interruptOperations(in: bottle)
         let result: OperationResult
         do {
             result = try await execute(arguments: ["-k"], bottle: bottle, directory: nil,
@@ -152,20 +180,116 @@ public actor WineRuntime {
         try await execute(arguments: arguments, bottle: bottle, directory: nil, timeout: timeout)
     }
 
+    public func configureGraphics(_ backend: GraphicsBackend, in bottle: Bottle,
+                                  showHUD: Bool = false, acceptExperimental: Bool = false,
+                                  progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> Bottle {
+        guard backend != .dxvk || acceptExperimental else {
+            throw MagicWineError.setup("DXVK is experimental third-party code. Confirm its installation before enabling it.")
+        }
+        guard !graphicsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Graphics setup is already in progress for this bottle.")
+        }
+        guard backend != .dxvk || !installingDXVK else {
+            throw MagicWineError.setup("Another DXVK installation is in progress. Wait for it to finish before configuring another bottle.")
+        }
+        graphicsChanging.insert(bottle.id)
+        if backend == .dxvk { installingDXVK = true }
+        defer {
+            graphicsChanging.remove(bottle.id)
+            if backend == .dxvk { installingDXVK = false }
+        }
+        try paths.prepare()
+        let launch = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                              kind: .launch, exclusive: true)
+        defer { launch.release() }
+        let current = try await store.current(bottle)
+        guard current.isInitialized else {
+            throw MagicWineError.setup("Initialize this bottle before changing its graphics backend.")
+        }
+        if backend == .dxvk { try validateVulkanRuntime(current.runtime.executableURL) }
+        progress?(.stopping)
+        _ = try await stopProcesses(current)
+        let lifetime = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                                kind: .lifetime, exclusive: true, timeout: .seconds(15))
+        defer { lifetime.release() }
+        try Task.checkCancellation()
+        let retainingComponent = backend == .dxvk && current.graphics.backend == .dxvk &&
+            current.graphics.componentID == DXVKInstallation.componentID
+        let componentRoot: URL?
+        let configuration: GraphicsConfiguration
+        if backend == .dxvk {
+            if retainingComponent {
+                progress?(.verifying)
+                componentRoot = try DXVKInstallation.validate(componentID: DXVKInstallation.componentID, paths: paths)
+                let prefix = store.prefixURL(for: current)
+                try GraphicsPrefix.validateInstalled(configuration: current.graphics, prefix: prefix,
+                                                     bottleDirectory: prefix.deletingLastPathComponent())
+            } else {
+                componentRoot = try await DXVKInstallation.install(paths: paths, progress: progress)
+            }
+            configuration = GraphicsConfiguration(backend: .dxvk, componentID: DXVKInstallation.componentID,
+                                                   showHUD: showHUD)
+        } else {
+            componentRoot = nil
+            configuration = GraphicsConfiguration()
+        }
+        try Task.checkCancellation()
+        if backend == .standard { progress?(.restoring) }
+        else if !retainingComponent { progress?(.installing) }
+        return try await store.setGraphics(configuration, in: current, componentRoot: componentRoot)
+    }
+
     private func execute(arguments: [String], bottle: Bottle, directory: URL?, timeout: TimeInterval?,
                          server: Bool = false, tracked: Bool = true) async throws -> OperationResult {
+        guard server || !graphicsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Wait for this bottle's graphics setup to finish before running Windows programs.")
+        }
         try paths.prepare()
-        let prefix = try prefixURL(for: bottle)
+        let handoffID = UUID()
+        let launchTask: Task<GraphicsOperationLease, Error>? = server ? nil : Task {
+            try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id, kind: .launch, exclusive: false)
+        }
+        if let launchTask { pendingLaunches[bottle.id, default: [:]][handoffID] = launchTask }
+        defer {
+            pendingLaunches[bottle.id]?[handoffID] = nil
+            if pendingLaunches[bottle.id]?.isEmpty == true { pendingLaunches[bottle.id] = nil }
+        }
+        let launch: GraphicsOperationLease?
+        do {
+            launch = try await withTaskCancellationHandler {
+                try await launchTask?.value
+            } onCancel: {
+                launchTask?.cancel()
+            }
+        } catch is CancellationError {
+            if Task.isCancelled { throw CancellationError() }
+            throw try pendingStop(bottle)
+        }
+        defer { launch?.release() }
+        let lifetime = server ? nil : try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                                               kind: .lifetime, exclusive: false)
+        defer { lifetime?.release() }
+        let current = server ? bottle : try await store.current(bottle)
+        try Task.checkCancellation()
+        if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
+        guard server || !graphicsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Wait for this bottle's graphics setup to finish before running Windows programs.")
+        }
+        let prefix = try prefixURL(for: current)
         // The descriptor is pinned, never fall back to whichever Wine is in PATH today.
-        let wine = bottle.runtime.executableURL.standardizedFileURL
+        let wine = current.runtime.executableURL.standardizedFileURL
         try validateExecutable(wine)
         let executable = server ? wine.deletingLastPathComponent().appendingPathComponent("wineserver") : wine
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(executable.path). Select an intact Wine distribution; this bottle was not migrated.")
         }
+        var processEnvironment = environment(executable: wine, prefix: prefix)
+        if !server, current.graphics.backend == .dxvk {
+            processEnvironment = try graphicsEnvironment(for: current, prefix: prefix, base: processEnvironment)
+        }
         let id = UUID()
         let operation = ProcessOperation(executable: executable, arguments: arguments,
-            environment: environment(executable: wine, prefix: prefix), directory: directory ?? prefix,
+            environment: processEnvironment, directory: directory ?? prefix,
             logURL: logURL(name: "\(bottle.id.uuidString)-\(server ? "wineserver" : "wine")"), timeout: timeout)
         if tracked { active[bottle.id, default: [:]][id] = operation }
         defer {
@@ -174,7 +298,7 @@ public actor WineRuntime {
                 if active[bottle.id]?.isEmpty == true { active[bottle.id] = nil }
             }
         }
-        do { return try await operation.run() }
+        do { return try await operation.run(onStart: { launch?.release() }) }
         catch is CancellationError {
             if tracked { await cleanup(bottle) }
             throw CancellationError()
@@ -182,6 +306,12 @@ public actor WineRuntime {
             if tracked { await cleanup(bottle) }
             throw MagicWineError.setup("Wine operation timed out. Log: \(log.path)")
         }
+    }
+
+    private func pendingStop(_ bottle: Bottle) throws -> MagicWineError {
+        let log = logURL(name: "\(bottle.id.uuidString)-not-started")
+        try Data("Stop requested before the Windows process started.\n".utf8).write(to: log, options: .atomic)
+        return .stopped(logURL: log)
     }
 
     private func cleanup(_ bottle: Bottle) async {
@@ -196,13 +326,49 @@ public actor WineRuntime {
     private func environment(executable: URL, prefix: URL?) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         // Avoid accidental architecture/prefix/loader configuration from a launching shell.
-        for key in Array(environment.keys) where key.hasPrefix("WINE") || key.hasPrefix("DYLD_") {
+        for key in Array(environment.keys) where key.hasPrefix("WINE") || key.hasPrefix("DYLD_") || key.hasPrefix("DXVK_") {
             environment.removeValue(forKey: key)
         }
         environment["PATH"] = executable.deletingLastPathComponent().path + ":" +
             (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         if let prefix { environment["WINEPREFIX"] = prefix.path }
         return environment
+    }
+
+    private func validateVulkanRuntime(_ executable: URL) throws {
+        let root = executable.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: root.appendingPathComponent("lib/libMoltenVK.dylib").path),
+              manager.fileExists(atPath: root.appendingPathComponent("lib/wine/x86_64-unix/winevulkan.so").path) else {
+            throw MagicWineError.setup("This Wine installation does not provide the Vulkan/MoltenVK layout required by this experimental DXVK backend. Use MagicWine's managed Wine runtime or keep Standard rendering.")
+        }
+    }
+
+    private func graphicsEnvironment(for bottle: Bottle, prefix: URL,
+                                     base: [String: String]) throws -> [String: String] {
+        guard let componentID = bottle.graphics.componentID else {
+            throw MagicWineError.setup("This bottle has no pinned DXVK component. Restore Standard, then enable DXVK again to reinstall this bottle's graphics files.")
+        }
+        let component = try DXVKInstallation.validate(componentID: componentID, paths: paths)
+        try validateVulkanRuntime(bottle.runtime.executableURL)
+        let directory = prefix.deletingLastPathComponent()
+        try GraphicsPrefix.validateInstalled(configuration: bottle.graphics, prefix: prefix, bottleDirectory: directory)
+        let cache = directory.appendingPathComponent("graphics/cache", isDirectory: true)
+        let logs = paths.logsDirectory.appendingPathComponent("\(bottle.id.uuidString)-dxvk", isDirectory: true)
+        for folder in [cache, logs] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let attributes = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard attributes.isDirectory == true, attributes.isSymbolicLink != true else {
+                throw MagicWineError.setup("The DXVK cache/log directory must not be a symbolic link: \(folder.path)")
+            }
+        }
+        var result = base
+        result["WINEDLLOVERRIDES"] = "d3d10core,d3d11=n;dxgi=b"
+        result["DXVK_CONFIG_FILE"] = component.appendingPathComponent("dxvk.conf").path
+        result["DXVK_STATE_CACHE_PATH"] = cache.path
+        result["DXVK_LOG_PATH"] = logs.path
+        if bottle.graphics.showHUD { result["DXVK_HUD"] = "version,api,devinfo,fps,frametimes" }
+        return result
     }
 
     private func prefixURL(for bottle: Bottle) throws -> URL {
