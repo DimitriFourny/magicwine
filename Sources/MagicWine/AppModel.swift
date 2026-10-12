@@ -181,7 +181,7 @@ final class AppModel: ObservableObject {
 
     func chooseWineExecutable() {
         guard runtimeActivity == nil else { return }
-        chooseFile(title: "Choose the Wine Executable", message: "Select the wine executable inside a Wine installation, not the Wine application bundle.", extensions: nil) { [weak self] url in
+        chooseFile(title: "Choose the Wine Executable", message: "Select the native wine or wineloader executable inside a Wine installation, not its application bundle or a wrapper that changes WINEPREFIX. Metal backends require a compatible Metal driver.", extensions: nil) { [weak self] url in
             self?.inspectCustomWine(url)
         }
     }
@@ -337,14 +337,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // The graphics view asks for consent before enabling DXVK.
-    func setGraphics(_ backend: GraphicsBackend, in bottle: Bottle, showHUD: Bool = false) {
+    // The graphics view asks for consent before enabling third-party backends.
+    func setGraphics(_ backend: GraphicsBackend, in bottle: Bottle, showHUD: Bool = false,
+                     componentSource: URL? = nil) {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
               bottle.isInitialized else { return }
         var state = activity(for: bottle)
         guard state.title == nil, !state.isStopping else { return }
-        let showHUD = backend == .dxvk && showHUD
-        guard bottle.graphics.backend != backend || bottle.graphics.showHUD != showHUD else { return }
+        let showHUD = backend != .standard && showHUD
+        guard bottle.graphics.backend != backend || bottle.graphics.showHUD != showHUD || componentSource != nil else { return }
 
         let setupID = UUID()
         state.graphicsSetupID = setupID
@@ -353,7 +354,8 @@ final class AppModel: ObservableObject {
         activities[bottle.id] = state
         perform(in: bottle, title: "Stopping Windows processes…") { [self] in
             let updated = try await self.wine.configureGraphics(
-                backend, in: bottle, showHUD: showHUD, acceptExperimental: backend == .dxvk
+                backend, in: bottle, showHUD: showHUD, acceptExperimental: backend != .standard,
+                componentSource: componentSource
             ) { [weak self] progress in
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.activities[bottle.id]?.graphicsSetupID == setupID else { return }
@@ -372,13 +374,31 @@ final class AppModel: ObservableObject {
         case .stopping:
             state.title = "Stopping Windows processes…"
         case .verifying:
-            state.title = "Verifying DXVK…"
+            state.title = "Verifying graphics component…"
         case .installing:
-            state.title = "Installing DXVK in this bottle…"
+            state.title = "Installing graphics in this bottle…"
         case .restoring:
             state.title = "Restoring Standard graphics…"
         }
         activities[id] = state
+    }
+
+    func importD3DMetal(in bottle: Bottle) {
+        let panel = NSOpenPanel()
+        panel.title = "Import D3DMetal Libraries"
+        panel.message = "Choose the library folder from your legally obtained Apple evaluation toolkit. MagicWine does not download these libraries or accept Apple's terms for you."
+        panel.prompt = "Import"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = true
+        panel.begin { [weak self] response in
+            Task { @MainActor in
+                if response == .OK, let url = panel.url {
+                    self?.setGraphics(.d3dmetal, in: bottle, componentSource: url)
+                }
+            }
+        }
     }
 
     func stop(_ bottle: Bottle) {

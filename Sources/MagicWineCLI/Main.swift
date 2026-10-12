@@ -84,18 +84,32 @@ struct MagicWineCLI {
                     return
                 }
                 guard let backend = GraphicsBackend(rawValue: rest[0]) else {
-                    throw argumentError("graphics <bottle-UUID> standard|dxvk [--accept-experimental] [--hud|--no-hud]")
+                    throw argumentError(graphicsUsage)
                 }
-                let flags = Set(rest.dropFirst())
-                guard flags.count == rest.count - 1,
-                      flags.isSubset(of: ["--accept-experimental", "--hud", "--no-hud"]),
-                      !(flags.contains("--hud") && flags.contains("--no-hud")),
-                      backend == .dxvk || flags.isEmpty else {
-                    throw argumentError("graphics <bottle-UUID> standard|dxvk [--accept-experimental] [--hud|--no-hud]")
+                var flags = Set<String>()
+                var componentSource: URL?
+                var index = 1
+                while index < rest.count {
+                    let flag = rest[index]
+                    guard flags.insert(flag).inserted else { throw argumentError(graphicsUsage) }
+                    if flag == "--import" {
+                        guard backend == .d3dmetal, index + 1 < rest.count,
+                              !rest[index + 1].hasPrefix("--") else { throw argumentError(graphicsUsage) }
+                        componentSource = URL(fileURLWithPath: rest[index + 1], isDirectory: true)
+                        index += 2
+                    } else {
+                        guard ["--accept-experimental", "--hud", "--no-hud"].contains(flag) else {
+                            throw argumentError(graphicsUsage)
+                        }
+                        index += 1
+                    }
                 }
+                guard !(flags.contains("--hud") && flags.contains("--no-hud")),
+                      backend != .standard || flags.isEmpty else { throw argumentError(graphicsUsage) }
                 let showHUD = flags.contains("--hud") || (!flags.contains("--no-hud") && bottle.graphics.showHUD)
                 let updated = try await runtime.configureGraphics(backend, in: bottle, showHUD: showHUD,
-                                                                   acceptExperimental: flags.contains("--accept-experimental"))
+                                                                   acceptExperimental: flags.contains("--accept-experimental"),
+                                                                   componentSource: componentSource)
                 print("\(updated.graphics.backend.rawValue)\t\(updated.graphics.componentID ?? "Wine default")\tHUD \(updated.graphics.showHUD ? "on" : "off")")
             case "exec":
                 guard !rest.isEmpty else { throw argumentError("exec <bottle-UUID> <wine-arguments…>") }
@@ -120,6 +134,8 @@ struct MagicWineCLI {
 
     private static func argumentError(_ detail: String) -> MagicWineError { .setup("\(detail)\nRun magicwine --help for usage.") }
 
+    private static let graphicsUsage = "graphics <bottle-UUID> standard|dxvk|dxmt|d3dmetal [--accept-experimental] [--hud|--no-hud] [--import <D3DMetal-library-folder>]"
+
     private static let usage = """
     MagicWine — isolated Windows apps on macOS
 
@@ -136,8 +152,9 @@ struct MagicWineCLI {
       launch <bottle-UUID> <program-UUID>       Run a saved program
       stop <bottle-UUID>                        Stop this bottle only
       configure <bottle-UUID>                   Open Wine configuration
-      graphics <bottle-UUID> [standard|dxvk]     Inspect or change graphics backend
-        DXVK requires --accept-experimental; optional --hud or --no-hud
+      graphics <bottle-UUID> [standard|dxvk|dxmt|d3dmetal]
+        Third-party backends require --accept-experimental; optional --hud or --no-hud
+        D3DMetal first selection requires --import <library-folder> obtained under Apple's terms
       exec <bottle-UUID> <wine-arguments…>       Run Wine with isolated prefix
     """
 }

@@ -194,8 +194,10 @@ private struct LibraryView: View {
                     Text("4. Use Add Program for an existing EXE/LNK, or Refresh Shortcuts after installation.")
                 }
                 WineCard(title: "Graphics & Compatibility", icon: "gamecontroller") {
-                    Text("Standard uses Wine’s built-in graphics. DXVK is an optional experimental Direct3D 9/10/11 backend using the bundled corrected 1.10.3-based macOS fork. Direct3D 12 is not provided.")
-                    Text("Legacy DXVK components cannot be upgraded in place. Switch a legacy bottle to Standard, then enable DXVK to use the bundled corrected component.")
+                    Text("Standard uses Wine’s built-in graphics. Bundled DXVK translates Direct3D 9/10/11 through Vulkan/MoltenVK; bundled DXMT translates Direct3D 10/11 through Metal. Imported D3DMetal supports 64-bit Direct3D 11/12.")
+                    Text("Metal backends require Apple Silicon and a compatible Wine Metal driver. DXMT needs macOS 15+; D3DMetal needs macOS 14+ or its library’s higher minimum. Stock managed Wine lacks the driver interface. Choose a compatible custom Wine executable in Settings before creating a Metal bottle; existing bottles are not migrated.")
+                    Text("D3DMetal is not bundled or downloaded. Obtain the libraries from Apple under its terms, then select the library folder when enabling D3DMetal. Experimental-backend consent does not accept Apple’s license.")
+                    Text("Components cannot be upgraded in place. Switch to Standard to restore the original files, then enable a backend again. Direct backend switches preserve the same originals.")
                     Text("Changing graphics stops that bottle’s Windows processes. Existing bottles keep their pinned Wine runtime when you install a Wine update.")
                     Text("Compatibility depends on the Windows program, Wine runtime, and graphics backend. DRM and anti-cheat compatibility are not guaranteed.")
                         .foregroundStyle(WineTheme.muted)

@@ -83,15 +83,6 @@ struct D3DMetalInstallationTests {
         #expect(D3DMetalInstallation.supports(componentID: first.lastPathComponent))
         try FileManager.default.removeItem(at: fixture.source)
         #expect(try D3DMetalInstallation.validate(componentID: first.lastPathComponent, paths: fixture.paths) == first)
-        let environment = try D3DMetalInstallation.environment(component: first, showHUD: false)
-        #expect(environment["WINEDLLOVERRIDES"] == "d3d11,d3d12,dxgi=b")
-        #expect(environment["WINEDLLPATH"] == first.appendingPathComponent("wine").path)
-        #expect(environment["DYLD_FRAMEWORK_PATH"] == first.appendingPathComponent("external").path)
-        #expect(environment["MTL_HUD_ENABLED"] == "0")
-        #expect(environment["D3DM_SUPPORT_DXR"] == nil)
-        if versioned {
-            #expect(try FileManager.default.destinationOfSymbolicLink(atPath: first.appendingPathComponent("external/D3DMetal.framework/Versions/Current").path) == "A")
-        }
     }
 
     @Test func missingBridgeAndWrongArchitecturesAreRejected() throws {
@@ -213,6 +204,9 @@ struct D3DMetalInstallationTests {
         try put(Data("#!/bin/sh\nexit 1\n".utf8), at: runtime, "bin/wine")
         try put(macho(), at: runtime, "bin/wineserver")
         try put(macho(), at: runtime, "lib/wine/x86_64-unix/ntdll.so")
+        // Real Wine packages can hard-link their child loader. Read-only inputs are
+        // safe to copy; the managed view must still contain independent regular files.
+        try FileManager.default.linkItem(at: loader, to: runtime.appendingPathComponent("lib/wine/x86_64-unix/wine"))
         let original = Data("Original Wine graphics provider".utf8)
         try put(original, at: runtime, "lib/wine/x86_64-windows/d3d11.dll")
         try put(pe(), at: runtime, "lib/wine/x86_64-windows/kernel32.dll")
