@@ -12,7 +12,10 @@ let package = Package(
     targets: [
         .target(name: "MagicWineCore", resources: [
             .copy("Resources/dxvk-macos-1.10.3-magicwine.2.tar.gz"),
-            .copy("Resources/LICENSE-DXVK-DEPENDENCIES.txt")
+            .copy("Resources/LICENSE-DXVK-DEPENDENCIES.txt"),
+            .copy("Resources/wow64cpu-wine11.0-magicwine.1.dll"),
+            .copy("Resources/wow64cpu-wine11.0-magicwine.1-source.tar.gz"),
+            .copy("Resources/LICENSE-WINE-WOW64CPU.txt")
         ]),
         .executableTarget(name: "MagicWine", dependencies: ["MagicWineCore"]),
         .executableTarget(name: "MagicWineCLI", dependencies: ["MagicWineCore"]),

@@ -286,6 +286,14 @@ public actor WineRuntime {
             throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(executable.path). Select an intact Wine distribution; this bottle was not migrated.")
         }
         var processEnvironment = environment(executable: wine, prefix: prefix)
+        if !server, current.isInitialized {
+            let directory = prefix.deletingLastPathComponent()
+            let repaired = try GraphicsPrefix.withLock(bottleDirectory: directory) {
+                try RosettaCPUCompatibility.prepare(runtime: current.runtime, prefix: prefix,
+                                                     bottleDirectory: directory)
+            }
+            if repaired { processEnvironment["WINEDLLOVERRIDES", default: ""] += ";wow64cpu=n" }
+        }
         if !server, current.graphics.backend == .dxvk {
             processEnvironment = try graphicsEnvironment(for: current, prefix: prefix, base: processEnvironment)
         }
@@ -334,6 +342,8 @@ public actor WineRuntime {
         environment["PATH"] = executable.deletingLastPathComponent().path + ":" +
             (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         if let prefix { environment["WINEPREFIX"] = prefix.path }
+        // Prefer application-local browser interop assemblies over Wine's namesake DLL.
+        environment["WINEDLLOVERRIDES"] = "shdocvw=n,b"
         return environment
     }
 
@@ -365,7 +375,7 @@ public actor WineRuntime {
             }
         }
         var result = base
-        result["WINEDLLOVERRIDES"] = "d3d9,d3d10core,d3d11=n;dxgi=b"
+        result["WINEDLLOVERRIDES", default: ""] += ";d3d9,d3d10core,d3d11=n;dxgi=b"
         // Builtin DXGI enumerates a WineD3D adapter before handing devices to DXVK.
         // Avoid its OpenGL/WoW64 initialization path even when the HUD is disabled.
         result["WINE_D3D_CONFIG"] = "renderer=vulkan"

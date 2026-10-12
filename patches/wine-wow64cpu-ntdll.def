@@ -1,0 +1,7 @@
+LIBRARY ntdll.dll
+EXPORTS
+__wine_dbg_header
+__wine_dbg_output
+memcpy
+strstr
+_vsnprintf

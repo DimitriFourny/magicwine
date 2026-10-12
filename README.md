@@ -11,7 +11,7 @@ Requires macOS 14 or newer and Swift 6 developer tools. Install Apple's Command 
 open dist/MagicWine.app
 ```
 
-The script builds the native app for your Mac, creates an ad-hoc-signed development bundle, and also produces `dist/magicwine`, the command-line companion. Keep `dist/MagicWine_MagicWineCore.bundle` beside the CLI: it contains the pinned DXVK component. The app carries its own copy in `Contents/Resources`. This is a local development build, not a notarized release. You can open `Package.swift` in Xcode instead.
+The script builds the native app for your Mac, creates an ad-hoc-signed development bundle, and also produces `dist/magicwine`, the command-line companion. Keep `dist/MagicWine_MagicWineCore.bundle` beside the CLI: it contains the pinned DXVK and Wine CPU compatibility resources. The app carries its own copy in `Contents/Resources`. This is a local development build, not a notarized release. You can open `Package.swift` in Xcode instead.
 
 **Preview toolchains:** the macOS 27 Command Line Tools installed during development omit the SwiftUI state macro plugin. The scripts use the complete installed macOS 26.5 SDK in that specific case; the resulting app still runs on macOS 27. Install complete Xcode tools if neither SDK is available. Set `MAGICWINE_SDK=/path/to/MacOSX.sdk` to select an SDK explicitly. No system developer settings are changed.
 
@@ -30,7 +30,7 @@ Removing a program only removes its MagicWine launcher. Trashing a bottle stops 
 
 ## Wine and macOS requirements
 
-MagicWine does not fork or freeze Wine. Managed installation uses the maintained [Gcenx macOS Wine builds](https://github.com/Gcenx/macOS_Wine_builds), with the download URL and SHA-256 checksum from [Homebrew's Wine metadata](https://formulae.brew.sh/api/cask/wine-stable.json). Downloads are staged, checksum-verified, and installed privately without Homebrew or administrator access.
+Managed installation uses the maintained [Gcenx macOS Wine builds](https://github.com/Gcenx/macOS_Wine_builds), with the download URL and SHA-256 checksum from [Homebrew's Wine metadata](https://formulae.brew.sh/api/cask/wine-stable.json). Downloads are staged, checksum-verified, and installed privately without Homebrew or administrator access. A narrowly scoped per-bottle CPU compatibility repair is described below; it does not modify the downloaded runtime.
 
 - **Unsigned distribution:** the current public Wine build is unsigned, and Homebrew flags it for Gatekeeper checks. The existing installation confirmation authorizes running unsigned Wine: MagicWine verifies the download checksum and removes only `com.apple.quarantine` inside its managed Wine bundle. This bypasses download-quarantine checks for that bundle, without changing system-wide security settings or custom Wine installations. Other extended attributes are preserved, and symbolic links are not followed. A checksum is integrity verification against metadata, not a publisher signature or malware assessment.
 - **Apple Silicon:** Intel Wine requires [Rosetta](https://support.apple.com/102527). Install it yourself through Apple's prompt or `softwareupdate --install-rosetta`, reviewing Apple's license. MagicWine does not install Rosetta or accept the license.
@@ -41,6 +41,18 @@ MagicWine does not fork or freeze Wine. Managed installation uses the maintained
 Wine compatibility varies by application. MagicWine offers an optional macOS DXVK backend below, but does not include CrossOver's application recipes, proprietary D3DMetal/GPTK components, or compatibility guarantees for DirectX games, DRM, or anti-cheat.
 
 **A bottle is not a security sandbox.** Windows programs run with your macOS user's permissions, and Wine can expose host files through its drives. Only run software you trust. Logs may contain paths and application output; review them before sharing.
+
+## Rosetta and legacy browser launchers
+
+On Apple Silicon, the verified stock Wine 11.0 CPU transition code can crash while starting 32-bit .NET launchers under Rosetta. MagicWine bundles `wow64cpu-wine11.0-magicwine.1`, built from public Wine source with CodeWeavers' Rosetta far-call/far-return correction (CW HACK 20760). This fixes Tropics Demo v1.3's failure before its settings window appears; no CrossOver binary is used.
+
+Before launching an initialized bottle, MagicWine checks the runtime version and original CPU DLL SHA-256, then atomically replaces only that bottle's known-stock `system32/wow64cpu.dll`. Its original DLL, corresponding source, and LGPL notice are preserved in `runtime-compatibility/wow64cpu-wine11.0-magicwine.1/`. Keep that backup intact. Custom prefix DLLs, links, corrupt resources, and missing or modified backups are rejected rather than overwritten; unknown runtime builds are left untouched. The process-local `wow64cpu=n` override is independent of DXVK and its HUD. Shared Wine files and bottle metadata are unchanged.
+
+Launches also prefer application-provided `SHDocVw.dll` with `shdocvw=n,b`, retaining Wine's built-in fallback. This prevents Wine's namesake browser DLL from replacing the managed interop assembly shipped with older .NET launchers.
+
+Rebuild with `brew install mingw-w64 python` and `bash scripts/build-wow64cpu.sh`. The recipe verifies pinned Wine and public CodeWeavers source, applies `patches/wine-wow64cpu-rosetta.patch`, and retains tool/source/command provenance under `.local/wow64cpu-magicwine-build.*/`. The bundled `wow64cpu-wine11.0-magicwine.1-source.tar.gz` contains the complete inputs and recipe for rebuilding offline with those tools. Update the independent resource pins in `RosettaCPUCompatibility.swift` when rebuilding with a different toolchain.
+
+The original Tropics settings window and browser controls were exercised through the packaged saved shortcut. Its **Run** button has a separate `forms.settings` scripting failure reproduced in both MagicWine and the isolated CrossOver reference; it is intentionally unchanged, as are the game's files. Use the working DirectX demo shortcuts to start the game.
 
 ## Graphics and game testing
 
@@ -100,6 +112,7 @@ Data lives in `~/Library/Application Support/MagicWine/`:
 - `Bottles/<UUID>/bottle.json`: atomically saved metadata and launchers.
 - `Bottles/<UUID>/prefix/`: Wine prefix and Windows filesystem.
 - `Bottles/<UUID>/graphics/`: original-DLL backups, interrupted-change recovery, retained custom replacements, and per-bottle DXVK shader cache.
+- `Bottles/<UUID>/runtime-compatibility/`: verified original Wine CPU DLL, corresponding repair source, and LGPL notice.
 - `Bottles/.graphics-locks/`: storage and launch/lifetime locks shared by the app and CLI.
 - `Runtimes/`: immutable, version/checksum-specific managed Wine installations with provenance receipts.
 - `Components/`: immutable DXVK version/checksum-specific packages, verified receipts, and zlib attribution.
@@ -120,7 +133,7 @@ The test script uses the installed Swift Testing plugin and disables XCTest, whi
 
 Development checks on Apple Silicon with macOS 27, Rosetta, and public Wine 11.0:
 
-- Fifty-six regression tests pass across storage, quarantine/consent, download progress, DXVK integrity/architecture, reversible prefix changes/recovery, rejection of in-place component replacement, displaced user-DLL preservation, and graphics concurrency boundaries.
+- Seventy-four regression tests pass across storage, quarantine/consent, download progress, DXVK integrity/architecture, reversible prefix changes/recovery, rejection of in-place component replacement, displaced user-DLL preservation, graphics concurrency boundaries, and safe Wine CPU repair/backup handling.
 - Two real prefixes keep Windows files separate. Real 7-Zip 26.04 EXE and MSI installations create and validate archives.
 - Saved EXEs and installed LNK shortcuts launch real Windows processes. Stop, repeated idle stop, timeout, and task cancellation leave the runtime usable.
 - The native app launches and its model runs a Windows GUI program through the running → stop → idle transition without displaying a failure for a requested stop.
@@ -139,6 +152,6 @@ Native views were captured in-process, and the fresh-bottle enable/HUD/rollback 
 
 ## License and references
 
-MagicWine's original code is **GPL-3.0-or-later**; see [LICENSE](LICENSE). Wine and its separately downloaded distribution retain their own licenses and notices; Wine is not bundled. DXVK and the altered macOS fork use the zlib/libpng license. The source tree and development app include the corrected public-source-built DXVK archive; installed packages carry both attributions and source/provenance links. `LICENSE-DXVK-DEPENDENCIES.txt` preserves MinGW/Winpthreads, GCC runtime exception, OpenVR, SPIR-V, and Vulkan-header notices in the app/CLI resource bundle and installed component. No proprietary graphics runtime is bundled.
+MagicWine's original code is **GPL-3.0-or-later**; see [LICENSE](LICENSE). The full Wine distribution is downloaded separately and retains its own licenses and notices. The bundled Wine CPU repair is LGPL-2.1-or-later; `LICENSE-WINE-WOW64CPU.txt` preserves its attribution and license, and its complete corresponding source archive accompanies the DLL in the app/CLI resources and bottle backup. DXVK and the altered macOS fork use the zlib/libpng license. Installed DXVK packages carry both attributions and source/provenance links; `LICENSE-DXVK-DEPENDENCIES.txt` preserves their dependency notices. No proprietary graphics runtime is bundled.
 
-Whisky and CrossOver supplied in `references/` informed workflow and dependency research only. Their implementations and assets were not copied. `references/`, build output, and local verification downloads are ignored by Git. CrossOver and Whisky are independent projects, not affiliations or endorsements.
+Whisky and CrossOver supplied in `references/` informed workflow and dependency research. Reference application binaries and assets are not redistributed. The Wine CPU correction comes from the [public LGPL CodeWeavers source mirror](https://github.com/rnowak/wine-crossover-sources/blob/b4f3c510a1808e6e32fb99e9bc11fa46ccc207dc/wine/dlls/wow64cpu/cpu.c), not an extracted CrossOver binary. `references/`, build output, and local verification downloads are ignored by Git. CrossOver and Whisky are independent projects, not affiliations or endorsements.
