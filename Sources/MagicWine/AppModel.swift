@@ -131,7 +131,7 @@ final class AppModel: ObservableObject {
         runtimeError = nil
         Task {
             do {
-                let installed = try await wine.installLatest()
+                let installed = try await wine.installLatest(acceptUnsigned: true)
                 addRuntime(installed)
                 var updated = settings
                 updated.preferredRuntimePath = installed.executableURL.path

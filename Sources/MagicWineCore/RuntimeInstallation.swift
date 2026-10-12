@@ -11,7 +11,7 @@ struct RuntimeInstallation {
         let disable_reason: String?
     }
 
-    static let notice = "MagicWine downloads original Gcenx public Wine builds, not a notarized MagicWine runtime. Homebrew currently flags this distribution for Gatekeeper checks. MagicWine never disables Gatekeeper or removes quarantine. Wine's optional Windows multimedia support requires the upstream universal GStreamer runtime (1.28.2 or newer) in /Library/Frameworks/GStreamer.framework; missing multimedia support is not a failure of basic Wine setup."
+    static let notice = "MagicWine downloads original Gcenx public Wine builds, not a notarized MagicWine runtime. By confirming installation, you authorize use of unsigned Wine and removal of com.apple.quarantine only inside MagicWine's managed Wine Stable.app. MagicWine does not disable Gatekeeper or change system-wide security settings. The SHA-256 checksum verifies the archive matches the published checksum; it is not malware verification. Homebrew currently flags this distribution for Gatekeeper checks. Wine's optional Windows multimedia support requires the upstream universal GStreamer runtime (1.28.2 or newer) in /Library/Frameworks/GStreamer.framework; missing multimedia support is not a failure of basic Wine setup."
 
     static func install(paths: ApplicationPaths) async throws -> URL {
         try paths.prepare()
@@ -48,9 +48,21 @@ struct RuntimeInstallation {
             let destination = paths.runtimesDirectory.appendingPathComponent("wine-stable-\(metadata.version)-\(metadata.sha256.prefix(12))", isDirectory: true)
             let relativeExecutable = "Wine Stable.app/Contents/Resources/wine/bin/wine"
             if FileManager.default.fileExists(atPath: destination.path) {
-                let existing = destination.appendingPathComponent(relativeExecutable)
-                try validateLayout(at: destination)
-                return existing
+                try validateManagedDirectory(destination, paths: paths)
+                let receiptURL = destination.appendingPathComponent("installation.json")
+                guard try fileType(at: receiptURL) == mode_t(S_IFREG) else {
+                    throw MagicWineError.setup("The cached Wine installation receipt is not an ordinary file.")
+                }
+                let receipt = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: receiptURL))
+                guard receipt["source"] == source.absoluteString,
+                      receipt["sha256"]?.lowercased() == metadata.sha256.lowercased(),
+                      receipt["version"] == metadata.version else {
+                    throw MagicWineError.setup("The cached Wine installation receipt does not match the current publisher metadata.")
+                }
+                let removed = try removeQuarantine(from: destination, paths: paths)
+                try append("Quarantine removal after user consent: \(destination.appendingPathComponent("Wine Stable.app").path); removed \(removed) com.apple.quarantine attributes.\n", to: logURL)
+                try writeReceipt(receipt, at: destination)
+                return destination.appendingPathComponent(relativeExecutable)
             }
             request = URLRequest(url: source)
             request.timeoutInterval = 600
@@ -78,20 +90,11 @@ struct RuntimeInstallation {
             // macOS bsdtar rejects traversal through symlinks and escaping hard links by default.
             _ = try await tool("/usr/bin/tar", arguments: ["-xf", archive.path, "-C", extraction.path,
                     "--no-same-owner", "--no-same-permissions"], paths: paths, name: "archive-extract", timeout: 180)
-            try validateLayout(at: extraction)
             try Task.checkCancellation()
-            let app = extraction.appendingPathComponent("Wine Stable.app", isDirectory: true)
-            // URLSession is not a browser and does not reliably apply download quarantine.
-            // Add provenance protection; never clear an existing quarantine attribute.
-            let quarantine = "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));MagicWine;"
-            for url in [app, extraction.appendingPathComponent(relativeExecutable),
-                        app.appendingPathComponent("Contents/Resources/wine/bin/wineserver")] {
-                try addQuarantineIfAbsent(to: url, value: quarantine)
-            }
-            let receipt: [String: String] = ["source": source.absoluteString, "sha256": checksum,
-                "version": metadata.version, "notice": notice]
-            let receiptData = try JSONEncoder().encode(receipt)
-            try receiptData.write(to: extraction.appendingPathComponent("installation.json"), options: .atomic)
+            let removed = try removeQuarantine(from: extraction, paths: paths)
+            try append("Quarantine removal after user consent: \(extraction.appendingPathComponent("Wine Stable.app").path); removed \(removed) com.apple.quarantine attributes.\n", to: logURL)
+            try writeReceipt(["source": source.absoluteString, "sha256": checksum,
+                              "version": metadata.version], at: extraction)
             try Task.checkCancellation()
             try FileManager.default.moveItem(at: extraction, to: destination)
             try append("Published: \(destination.path)\n", to: logURL)
@@ -148,37 +151,123 @@ struct RuntimeInstallation {
         return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
 
-    private static func validateLayout(at root: URL) throws {
-        let base = root.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        let app = root.appendingPathComponent("Wine Stable.app")
-        guard let enumerator = FileManager.default.enumerator(at: app,
-              includingPropertiesForKeys: [.isSymbolicLinkKey], options: []) else {
-            throw MagicWineError.setup("The archive is missing Wine Stable.app.")
+    private static func fileType(at url: URL) throws -> mode_t {
+        var status = stat()
+        guard url.path.withCString({ lstat($0, &status) }) == 0 else {
+            let code = errno
+            throw MagicWineError.setup("Cannot inspect Wine installation path \(url.path): \(String(cString: strerror(code)))")
         }
-        for case let entry as URL in enumerator {
-            let values = try entry.resourceValues(forKeys: [.isSymbolicLinkKey])
-            if values.isSymbolicLink == true && !entry.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(base) {
-                throw MagicWineError.setup("The Wine archive contains an escaping symbolic link: \(entry.path)")
-            }
+        return status.st_mode & mode_t(S_IFMT)
+    }
+
+    private static func validateManagedDirectory(_ directory: URL, paths: ApplicationPaths) throws {
+        let managed = paths.runtimesDirectory.standardizedFileURL
+        let target = directory.standardizedFileURL
+        guard directory.isFileURL, target.path.hasPrefix(managed.path + "/"),
+              try fileType(at: paths.root) == mode_t(S_IFDIR),
+              try fileType(at: managed) == mode_t(S_IFDIR),
+              target.resolvingSymlinksInPath().path.hasPrefix(managed.resolvingSymlinksInPath().path + "/") else {
+            throw MagicWineError.setup("Quarantine removal is restricted to ordinary directories inside MagicWine's managed Runtimes directory.")
         }
-        for name in ["wine", "wineserver"] {
-            let executable = app.appendingPathComponent("Contents/Resources/wine/bin/\(name)")
-            guard FileManager.default.isExecutableFile(atPath: executable.path),
-                  executable.resolvingSymlinksInPath().path.hasPrefix(base) else {
-                throw MagicWineError.setup("The Wine archive is missing its executable \(name).")
+        var current = target
+        while current.path != managed.path {
+            guard try fileType(at: current) == mode_t(S_IFDIR) else {
+                throw MagicWineError.setup("The managed Wine installation contains a symbolic link or non-directory root: \(current.path)")
             }
+            current.deleteLastPathComponent()
         }
     }
 
-    private static func addQuarantineIfAbsent(to url: URL, value: String) throws {
-        let present = url.path.withCString { getxattr($0, "com.apple.quarantine", nil, 0, 0, 0) }
-        if present >= 0 { return }
-        guard errno == ENOATTR else { throw MagicWineError.setup("Cannot inspect download quarantine: \(url.path)") }
-        let bytes = Array(value.utf8)
-        let result = url.path.withCString { path in
-            bytes.withUnsafeBytes { setxattr(path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, XATTR_CREATE) }
+    private static func validateLayout(at root: URL) throws -> [URL] {
+        let app = root.appendingPathComponent("Wine Stable.app", isDirectory: true)
+        guard try fileType(at: app) == mode_t(S_IFDIR) else {
+            throw MagicWineError.setup("Wine Stable.app must be an ordinary directory.")
         }
-        guard result == 0 else { throw MagicWineError.setup("Cannot apply download quarantine: \(url.path)") }
+        let base = root.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        var enumerationError: Error?
+        guard let enumerator = FileManager.default.enumerator(at: app,
+              includingPropertiesForKeys: [], options: [], errorHandler: { _, error in
+                  enumerationError = error
+                  return false
+              }) else {
+            throw MagicWineError.setup("Cannot enumerate Wine Stable.app.")
+        }
+        // Validate the complete bundle before clearing any attributes.
+        var targets = [app]
+        for item in enumerator {
+            guard let entry = item as? URL else {
+                throw MagicWineError.setup("Wine Stable.app enumeration returned an invalid entry.")
+            }
+            let type = try fileType(at: entry)
+            guard entry.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(base) else {
+                throw MagicWineError.setup("The Wine archive contains an escaping symbolic link: \(entry.path)")
+            }
+            if type == mode_t(S_IFLNK) {
+                enumerator.skipDescendants()
+            } else if type == mode_t(S_IFREG) || type == mode_t(S_IFDIR) {
+                targets.append(entry)
+            } else {
+                throw MagicWineError.setup("The Wine archive contains an unsupported filesystem entry: \(entry.path)")
+            }
+        }
+        if let enumerationError { throw enumerationError }
+        for name in ["wine", "wineserver"] {
+            let executable = app.appendingPathComponent("Contents/Resources/wine/bin/\(name)")
+            guard FileManager.default.isExecutableFile(atPath: executable.path),
+                  executable.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(base),
+                  try fileType(at: executable.resolvingSymlinksInPath()) == mode_t(S_IFREG) else {
+                throw MagicWineError.setup("The Wine archive is missing its executable \(name).")
+            }
+        }
+        return targets
+    }
+
+    static func removeQuarantine(from runtimeDirectory: URL, paths: ApplicationPaths) throws -> Int {
+        try validateManagedDirectory(runtimeDirectory, paths: paths)
+        let targets = try validateLayout(at: runtimeDirectory)
+        let app = runtimeDirectory.appendingPathComponent("Wine Stable.app", isDirectory: true)
+        let base = app.resolvingSymlinksInPath().standardizedFileURL.path
+        var removed = 0
+        for target in targets {
+            let type = try fileType(at: target)
+            let resolved = target.resolvingSymlinksInPath().standardizedFileURL.path
+            guard (type == mode_t(S_IFREG) || type == mode_t(S_IFDIR)),
+                  resolved == base || resolved.hasPrefix(base + "/") else {
+                throw MagicWineError.setup("The Wine bundle changed during quarantine removal: \(target.path)")
+            }
+            let result = target.path.withCString { removexattr($0, "com.apple.quarantine", XATTR_NOFOLLOW) }
+            if result == 0 {
+                removed += 1
+            } else {
+                let code = errno
+                guard code == ENOATTR else {
+                    throw MagicWineError.setup("Cannot remove download quarantine from \(target.path): \(String(cString: strerror(code)))")
+                }
+            }
+        }
+        return removed
+    }
+
+    private static func writeReceipt(_ provenance: [String: String], at root: URL) throws {
+        var receipt = provenance
+        receipt["notice"] = notice
+        receipt["unsignedConsent"] = "accepted"
+        receipt["quarantine"] = "Removed com.apple.quarantine only from managed Wine Stable.app after user consent."
+        let data = try JSONEncoder().encode(receipt)
+        let receiptURL = root.appendingPathComponent("installation.json")
+        if FileManager.default.fileExists(atPath: receiptURL.path) {
+            guard try fileType(at: receiptURL) == mode_t(S_IFREG) else {
+                throw MagicWineError.setup("The Wine installation receipt is not an ordinary file.")
+            }
+            // Preserve the cached receipt's attributes outside the quarantine-removal scope.
+            let handle = try FileHandle(forWritingTo: receiptURL)
+            defer { try? handle.close() }
+            try handle.seek(toOffset: 0)
+            try handle.write(contentsOf: data)
+            try handle.truncate(atOffset: UInt64(data.count))
+        } else {
+            try data.write(to: receiptURL, options: .atomic)
+        }
     }
 
     private static func append(_ text: String, to url: URL) throws {
