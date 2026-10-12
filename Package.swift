@@ -17,7 +17,7 @@ let package = Package(
             .copy("Resources/wow64cpu-wine11.0-magicwine.1-source.tar.gz"),
             .copy("Resources/LICENSE-WINE-WOW64CPU.txt")
         ]),
-        .executableTarget(name: "MagicWine", dependencies: ["MagicWineCore"]),
+        .executableTarget(name: "MagicWine", dependencies: ["MagicWineCore"], resources: [.process("Assets")]),
         .executableTarget(name: "MagicWineCLI", dependencies: ["MagicWineCore"]),
         .testTarget(name: "MagicWineCoreTests", dependencies: ["MagicWineCore"])
     ]

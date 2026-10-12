@@ -11,13 +11,19 @@ Requires macOS 14 or newer and Swift 6 developer tools. Install Apple's Command 
 open dist/MagicWine.app
 ```
 
-The script builds the native app for your Mac, creates an ad-hoc-signed development bundle, and also produces `dist/magicwine`, the command-line companion. Keep `dist/MagicWine_MagicWineCore.bundle` beside the CLI: it contains the pinned DXVK and Wine CPU compatibility resources. The app carries its own copy in `Contents/Resources`. This is a local development build, not a notarized release. You can open `Package.swift` in Xcode instead.
+The script builds the native app for your Mac, creates an ad-hoc-signed development bundle, and also produces `dist/magicwine`, the command-line companion. Keep `dist/MagicWine_MagicWineCore.bundle` beside the CLI: it contains the pinned DXVK and Wine CPU compatibility resources. The app carries its own core bundle plus `MagicWine_MagicWine.bundle` for interface artwork in `Contents/Resources`, and its icon in `AppIcon.icns`. This is a local development build, not a notarized release. You can open `Package.swift` in Xcode instead.
 
 **Preview toolchains:** the macOS 27 Command Line Tools installed during development omit the SwiftUI state macro plugin. The scripts use the complete installed macOS 26.5 SDK in that specific case; the resulting app still runs on macOS 27. Install complete Xcode tools if neither SDK is available. Set `MAGICWINE_SDK=/path/to/MacOSX.sdk` to select an SDK explicitly. No system developer settings are changed.
 
+## Native interface
+
+The dark wine-themed library has a searchable bottle sidebar and dedicated **Downloads**, **Settings**, and **Documentation** pages. Search filters bottle names, not installed programs. Select a bottle to open its dashboard: pinned runtime and status, installed-program launchers, installer and shortcut actions, graphics controls, logs, and confirmed Trash. Dashboard cards switch from two columns to one in narrower windows.
+
+**Downloads** manages Wine installation and displays installed runtimes. **Settings** chooses the default for new bottles or an existing Wine executable; existing bottles retain their pinned runtime. The sidebar **+** button and **Command-N** open bottle creation. Native file pickers, installer URL handling, Wine trust confirmation, and bottle-specific busy/stop guards remain in place.
+
 ## First Windows application
 
-1. Open MagicWine and choose **Install / Update Wine**, then **Trust and Install Wine**, or **Choose Wine Executable** for an existing installation. For a Wine application bundle, the executable is usually inside `Contents/Resources/wine/bin/wine`.
+1. Open MagicWine's **Downloads** page and choose **Install / Update Wine**, then **Trust and Install Wine**, or **Choose Wine Executable** for an existing installation.
 2. Create a bottle. MagicWine initializes its own Windows environment with the selected Wine runtime.
 3. Select **Install EXE/MSI** and choose the application's Windows installer. Complete the actual Windows installer normally.
 4. Launch its discovered Start Menu shortcut. Use **Refresh Shortcuts** if necessary, or **Add Program** to select an EXE or LNK manually.
@@ -121,6 +127,14 @@ Data lives in `~/Library/Application Support/MagicWine/`:
 
 `Sources/MagicWineCore` owns persistence, subprocess lifecycle, runtime discovery, and managed installation. `Sources/MagicWine` owns native UI state and views. `Sources/MagicWineCLI` is the command-line client. Subprocesses wait asynchronously; each bottle has separate UI activity, so another bottle remains usable.
 
+For an isolated native-app library, launch the executable with `MAGICWINE_DATA_ROOT`:
+
+```sh
+MAGICWINE_DATA_ROOT="$PWD/.local/ui-smoke" ./dist/MagicWine.app/Contents/MacOS/MagicWine
+```
+
+The app and CLI can share this directory by passing the same path to CLI `--root`. Leave the variable unset for the normal library. For a separately named development bundle, `scripts/build-app.sh` accepts `MAGICWINE_APP_NAME` and `MAGICWINE_BUNDLE_ID`; both default to the normal MagicWine identity when unset.
+
 Run deterministic storage regressions with:
 
 ```sh
@@ -137,6 +151,7 @@ Development checks on Apple Silicon with macOS 27, Rosetta, and public Wine 11.0
 - Two real prefixes keep Windows files separate. Real 7-Zip 26.04 EXE and MSI installations create and validate archives.
 - Saved EXEs and installed LNK shortcuts launch real Windows processes. Stop, repeated idle stop, timeout, and task cancellation leave the runtime usable.
 - The native app launches and its model runs a Windows GUI program through the running → stop → idle transition without displaying a failure for a requested stop.
+- The redesigned packaged app renders its welcome, Downloads, Settings, Documentation, and bottle dashboard with bundled artwork. App-local mouse/key events exercise navigation, no-match/clear bottle search, and bottle-creation presentation. Resizing to 1000 pixels switches the dashboard to one column. Its Launch and Stop buttons run real 7-Zip through busy → ready, restore enabled controls without an operation error, and leave no live bottle Wine server.
 - The EXE/MSI installer and Wine configuration entry points open their actual Windows processes, and bottle Stop terminates them.
 - Moving a bottle to macOS Trash leaves its externally registered executable unchanged.
 - Managed Wine downloads pass checksum/extraction/provenance checks. The native trust confirmation starts a real fresh installation and saves its runtime preference; Wine reports `wine-11.0`. Reinstalling the previously quarantined cached runtime removes its quarantine and also passes Wine version inspection without downloading the archive again.

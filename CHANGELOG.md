@@ -30,6 +30,9 @@
 - Fix Tropics Demo v1.3 launcher startup on Apple Silicon with a public-source-built Wine 11.0 Rosetta CPU transition repair, scoped to SHA-verified stock runtimes and ordinary bottle-owned DLLs. Preserve and validate the original CPU, source archive, and LGPL notice before atomic replacement; leave shared runtimes and unknown builds untouched.
 - Prefer the launcher's application-local `SHDocVw.dll` managed assembly over Wine's namesake DLL, with built-in fallback, while composing the CPU/browser overrides with the selected graphics backend.
 - Verify the original saved Tropics launcher opens its settings window and embedded browser through the packaged CLI; 74 regression tests pass. Leave the separate Run-button scripting bug unchanged after reproducing it in both runtimes; game files remain unmodified.
+- Port the redesigned dark wine-themed native interface: searchable bottle sidebar, adaptive dashboard cards, installed-program launchers, and Downloads, Settings, and Documentation pages.
+- Bundle original interface artwork and the application icon alongside the current DXVK/Wine compatibility resources and redistribution notices; retain newer Direct3D 9/10/11 support, legacy-component guards, and per-bottle runtime/operation behavior.
+- Support isolated native UI libraries through `MAGICWINE_DATA_ROOT` and optional development bundle names/identifiers without changing the default library.
 
 ## 0.1.0 — 2026-10-11
 

@@ -3,15 +3,22 @@ import MagicWineCore
 
 @main
 struct MagicWineApp: App {
-    @StateObject private var model = AppModel()
+    @NSApplicationDelegateAdaptor(ApplicationDelegate.self) private var applicationDelegate
+    @StateObject private var model = AppModel(paths: ApplicationPaths(
+        root: ProcessInfo.processInfo.environment["MAGICWINE_DATA_ROOT"]
+            .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+    ))
 
     var body: some Scene {
         WindowGroup {
             LibraryView(model: model)
-                .frame(minWidth: 820, minHeight: 560)
+                .frame(minWidth: 1000, minHeight: 720)
+                .preferredColorScheme(.dark)
                 .task { await model.start() }
                 .onOpenURL { model.openInstallerURL($0) }
         }
+        .defaultSize(width: 1440, height: 960)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Bottle…") { model.showsNewBottle = true }
@@ -38,6 +45,8 @@ struct MagicWineApp: App {
             WineSettingsView(model: model)
                 .frame(width: 620)
                 .padding(24)
+                .background(WineTheme.background)
+                .preferredColorScheme(.dark)
         }
     }
 
@@ -57,55 +66,41 @@ struct MagicWineApp: App {
 private struct LibraryView: View {
     @ObservedObject var model: AppModel
     @State private var trashTarget: Bottle?
+    @State private var destination: LibraryDestination = .bottles
+    @State private var search = ""
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $model.selectedBottleID) {
-                ForEach(model.bottles) { bottle in
-                    HStack {
-                        Image(systemName: "shippingbox")
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(bottle.name)
-                            if let title = model.activity(for: bottle).title {
-                                Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            } else if !bottle.isInitialized {
-                                Text("Setup needed").font(.caption).foregroundStyle(.secondary)
-                            }
+        HStack(spacing: 0) {
+            LibrarySidebarView(model: model, destination: $destination, search: search,
+                               trash: { trashTarget = $0 })
+                .frame(width: 250)
+            Rectangle().fill(WineTheme.border).frame(width: 1)
+            VStack(spacing: 0) {
+                topBar
+                Group {
+                    switch destination {
+                    case .bottles:
+                        if let bottle = model.selectedBottle {
+                            BottleDashboardView(model: model, bottle: bottle, trash: { trashTarget = bottle })
+                                .id(bottle.id)
+                        } else {
+                            WelcomeView(model: model)
                         }
-                    }
-                    .tag(bottle.id)
-                    .contextMenu {
-                        Button("Reveal Logs") { model.revealLogs(for: bottle) }
-                        Button("Move Bottle to Trash…", role: .destructive) { trashTarget = bottle }
-                            .disabled(model.activity(for: bottle).title != nil || model.activity(for: bottle).isStopping)
+                    case .downloads:
+                        downloads
+                    case .settings:
+                        WineSettingsView(model: model).padding(24)
+                    case .documentation:
+                        documentation
                     }
                 }
-            }
-            .navigationTitle("Bottles")
-            .navigationSplitViewColumnWidth(min: 190, ideal: 235)
-            .overlay {
-                if model.bottles.isEmpty {
-                    Text(model.isLoading ? "Loading bottles…" : "Your bottles will appear here.")
-                        .font(.callout).foregroundStyle(.secondary).padding()
-                }
-            }
-            .toolbar {
-                ToolbarItem {
-                    Button { model.showsNewBottle = true } label: {
-                        Label("New Bottle", systemImage: "plus")
-                    }
-                    .help("Create a bottle")
-                    .disabled(model.isLoading)
-                }
-            }
-        } detail: {
-            if let bottle = model.selectedBottle {
-                BottleDetailView(model: model, bottle: bottle, trash: { trashTarget = bottle })
-                    .id(bottle.id)
-            } else {
-                WelcomeView(model: model)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
+        .foregroundStyle(WineTheme.text)
+        .background(WineTheme.background)
+        .tint(WineTheme.accent)
+        .buttonStyle(WineButtonStyle())
         .sheet(isPresented: $model.showsNewBottle) {
             NewBottleView(model: model)
         }
@@ -129,6 +124,93 @@ private struct LibraryView: View {
             Text("This moves the bottle and its Windows files to macOS Trash. Programs outside the bottle are not deleted. Stop all Windows processes in the bottle first.")
         }
     }
+
+    private var topBar: some View {
+        HStack(spacing: 22) {
+            Spacer(minLength: 0)
+            HStack(spacing: 9) {
+                Image(systemName: "magnifyingglass").foregroundStyle(WineTheme.muted)
+                TextField("Search bottles…", text: $search)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("Search bottles")
+                if !search.isEmpty {
+                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(WineTheme.muted)
+                        .accessibilityLabel("Clear bottle search")
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .frame(width: 270)
+            .background(WineTheme.elevated.opacity(0.7), in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(WineTheme.border))
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles").font(.system(size: 25)).foregroundStyle(WineTheme.accent)
+                Text("Good games\nbetter on Mac.").font(.system(size: 12)).foregroundStyle(WineTheme.muted)
+            }
+        }
+        .padding(.horizontal, 24)
+        .frame(height: 64)
+    }
+
+    private var downloads: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Downloads").font(.system(size: 32, weight: .semibold, design: .serif))
+                Text("Install and manage the Wine runtime for your next bottle.")
+                    .foregroundStyle(WineTheme.muted)
+                WineCard(title: "Wine Runtime", icon: "arrow.down.to.line") {
+                    RuntimeSetupView(model: model)
+                }
+                if !model.runtimes.isEmpty {
+                    WineCard(title: "Available Runtimes", icon: "wineglass", trailing: "\(model.runtimes.count) installed") {
+                        ForEach(model.runtimes) { runtime in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(runtime.version).font(.headline)
+                                Text(runtime.executableURL.path)
+                                    .font(.caption).foregroundStyle(WineTheme.muted)
+                                    .textSelection(.enabled)
+                            }
+                            if runtime.id != model.runtimes.last?.id { Divider() }
+                        }
+                    }
+                }
+            }
+            .padding(24).frame(maxWidth: 850, alignment: .leading)
+        }
+    }
+
+    private var documentation: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("A little bottled knowledge.")
+                    .font(.system(size: 32, weight: .semibold, design: .serif))
+                Text("Everything you need to get started.")
+                    .foregroundStyle(WineTheme.muted)
+                WineCard(title: "Your First Windows Program", icon: "book") {
+                    Text("1. Install Wine in Downloads, or choose an existing Wine executable in Settings.")
+                    Text("2. Create a bottle with the + button. Each bottle keeps its own runtime and Windows files.")
+                    Text("3. Install an EXE/MSI, complete the Windows installer, and launch a discovered shortcut.")
+                    Text("4. Use Add Program for an existing EXE/LNK, or Refresh Shortcuts after installation.")
+                }
+                WineCard(title: "Graphics & Compatibility", icon: "gamecontroller") {
+                    Text("Standard uses Wine’s built-in graphics. DXVK is an optional experimental Direct3D 9/10/11 backend using the bundled corrected 1.10.3-based macOS fork. Direct3D 12 is not provided.")
+                    Text("Legacy DXVK components cannot be upgraded in place. Switch a legacy bottle to Standard, then enable DXVK to use the bundled corrected component.")
+                    Text("Changing graphics stops that bottle’s Windows processes. Existing bottles keep their pinned Wine runtime when you install a Wine update.")
+                    Text("Compatibility depends on the Windows program, Wine runtime, and graphics backend. DRM and anti-cheat compatibility are not guaranteed.")
+                        .foregroundStyle(WineTheme.muted)
+                }
+                WineCard(title: "Your Files & Safety", icon: "lock.shield") {
+                    Text("A bottle is not a security sandbox. Only run Windows software you trust.")
+                    Text("Removing a launcher does not delete its executable. Trash Bottle moves the bottle’s Windows environment to macOS Trash after stopping its processes.")
+                    Text("Current library: \(model.paths.root.path)")
+                        .font(.caption).foregroundStyle(WineTheme.muted).textSelection(.enabled)
+                    Button("Reveal Logs") { model.revealLogs() }
+                }
+            }
+            .padding(24).frame(maxWidth: 850, alignment: .leading)
+        }
+    }
 }
 
 private struct WelcomeView: View {
@@ -137,168 +219,39 @@ private struct WelcomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text("Welcome to MagicWine").font(.largeTitle)
+                HStack(spacing: 24) {
+                    Image(nsImage: WineArtwork.bottle)
+                        .resizable().scaledToFit().frame(width: 120, height: 120)
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Welcome to MagicWine")
+                            .font(.system(size: 34, weight: .regular, design: .serif))
+                        Text("Your Windows world, bottled.")
+                            .foregroundStyle(WineTheme.muted)
+                    }
+                }
                 Text("A bottle keeps a Windows environment, its programs, and its Wine version together.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(WineTheme.muted)
                 if model.isLoading {
                     ProgressView("Loading your library…")
                 } else if model.runtimes.isEmpty {
-                    Text("Set Up Wine").font(.title2)
-                    Text("Install a separately maintained Wine runtime or choose a Wine executable already on your Mac. Then create your first bottle.")
-                    RuntimeSetupView(model: model)
+                    WineCard(title: "Set Up Wine", icon: "wineglass") {
+                        Text("Install a separately maintained Wine runtime or choose a Wine executable already on your Mac. Then create your first bottle.")
+                            .foregroundStyle(WineTheme.muted)
+                        RuntimeSetupView(model: model)
+                    }
                 } else {
                     Button("Create Bottle…") { model.showsNewBottle = true }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(WineButtonStyle(prominent: true))
                     Text("Or select a bottle in the sidebar.").foregroundStyle(.secondary)
                     SettingsLink { Text("Wine Settings…") }
                 }
             }
             .padding(32)
-            .frame(maxWidth: 660, alignment: .leading)
+            .frame(maxWidth: 780, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle("MagicWine")
-    }
-}
-
-private struct BottleDetailView: View {
-    @ObservedObject var model: AppModel
-    let bottle: Bottle
-    let trash: () -> Void
-
-    private var state: BottleActivity { model.activity(for: bottle) }
-    private var busy: Bool { state.title != nil || state.isStopping }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(bottle.name).font(.title)
-                        Text(bottle.runtime.version).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button(state.isStopping ? "Stopping…" : "Stop") { model.stop(bottle) }
-                        .disabled(state.isStopping || (!state.canStop && (state.title != nil || !bottle.isInitialized)))
-                        .help("Stop all Windows processes in this bottle")
-                }
-                DisclosureGroup("Bottle Information") {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Wine executable: \(bottle.runtime.executableURL.path)")
-                        Text("This bottle keeps this runtime. Wine Settings only changes the default for new bottles.")
-                        if bottle.graphics.backend == .dxvk {
-                            Text("Graphics: DXVK — Experimental · 1.10.3-based macOS fork (Direct3D 9/10/11; no Direct3D 12)")
-                            if let componentID = bottle.graphics.componentID {
-                                Text("Graphics component: \(componentID)")
-                            }
-                        } else {
-                            Text("Graphics: Standard (Wine built-in)")
-                        }
-                        Text("Created \(bottle.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                    }
-                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
-                }
-                GraphicsSettingsView(model: model, bottle: bottle, busy: busy)
-                if state.graphicsProgress == nil, let title = state.title {
-                    HStack(spacing: 10) {
-                        ProgressView().controlSize(.small)
-                        Text(state.isStopping ? "Stopping Windows processes…" : title)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-                if let error = state.error {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Operation Failed", systemImage: "exclamationmark.triangle").font(.headline)
-                        Text(error).textSelection(.enabled)
-                        HStack {
-                            Button("Reveal Logs") { model.revealLogs(for: bottle) }
-                            Button("Dismiss") { model.dismissError(for: bottle) }
-                        }
-                    }
-                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                }
-                if !bottle.isInitialized {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("This bottle needs setup before you can run programs.")
-                        Text("If setup fails, the bottle stays here so you can resolve the error and retry.")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Button("Retry Setup") { model.initialize(bottle) }
-                            .disabled(busy)
-                    }
-                }
-                HStack {
-                    Button("Install EXE/MSI…") { model.chooseInstaller(in: bottle) }
-                    Button("Add Program…") { model.chooseProgram(in: bottle) }
-                    Button { model.refreshPrograms(in: bottle) } label: {
-                        Label("Refresh Shortcuts", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(busy || !bottle.isInitialized)
-            }
-            .padding(22)
-
-            Divider()
-            if bottle.programs.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "app.dashed").font(.system(size: 32)).foregroundStyle(.secondary)
-                    Text("No Programs Yet").font(.title2)
-                    Text("Install an EXE or MSI, or add an existing Windows program. Refresh Shortcuts finds Start Menu and Desktop shortcuts after installation.")
-                        .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 450)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity).padding(24)
-            } else {
-                List {
-                    ForEach(bottle.programs) { program in
-                        HStack(spacing: 12) {
-                            Image(systemName: "app")
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(program.name).font(.headline)
-                                Text(program.executablePath).font(.caption).foregroundStyle(.secondary)
-                                    .lineLimit(2).textSelection(.enabled)
-                            }
-                            Spacer()
-                            Button("Launch") { model.launch(program, in: bottle) }
-                                .disabled(busy || !bottle.isInitialized)
-                            Menu {
-                                Button("Remove from MagicWine", role: .destructive) {
-                                    model.removeProgram(program, in: bottle)
-                                }
-                            } label: {
-                                Image(systemName: "ellipsis")
-                            }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
-                            .disabled(busy)
-                            .help("Program actions; removal does not delete the executable")
-                        }
-                        .padding(.vertical, 5)
-                        .contextMenu {
-                            Button("Launch") { model.launch(program, in: bottle) }
-                                .disabled(busy || !bottle.isInitialized)
-                            Button("Remove from MagicWine", role: .destructive) {
-                                model.removeProgram(program, in: bottle)
-                            }
-                            .disabled(busy)
-                        }
-                    }
-                }
-            }
-            Divider()
-            HStack {
-                Button("Wine Configuration…") { model.configure(bottle) }
-                    .disabled(busy || !bottle.isInitialized)
-                Button("Reveal C: Drive") { model.revealDrive(bottle) }
-                    .disabled(!bottle.isInitialized)
-                Button("Reveal Logs") { model.revealLogs(for: bottle) }
-                Spacer()
-                Button("Trash Bottle…", role: .destructive, action: trash)
-                    .disabled(busy)
-            }
-            .padding(16)
-        }
-        .navigationTitle(bottle.name)
     }
 }
 
