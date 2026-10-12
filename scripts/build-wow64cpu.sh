@@ -1,0 +1,287 @@
+#!/bin/bash
+# Build the public Wine Rosetta fix; no CrossOver binaries or Wine build tools.
+# Run: bash scripts/build-wow64cpu.sh
+# The corresponding source archive contains everything needed for offline builds.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+COMPONENT="wow64cpu-wine11.0-magicwine.1"
+SOURCE_URL="https://codeload.github.com/wine-mirror/wine/tar.gz/refs/tags/wine-11.0"
+SOURCE_SHA256="f09e8153aa46a581d2b56a5b1363b04832070b9409d9244a68cf482b243ff14a"
+PUBLIC_URL="https://raw.githubusercontent.com/rnowak/wine-crossover-sources/b4f3c510a1808e6e32fb99e9bc11fa46ccc207dc/wine/dlls/wow64cpu/cpu.c"
+PUBLIC_SHA256="8e4a50f83b61ff8767d47aa99219583bd72901773458d618ddb56347b2e90ed8"
+CPU_SHA256="088246b519ef984b06b9278047ac894ede9fdd060e73264ee59aa7815bddd972"
+PATCHED_SHA256="9c1ecacf5149ad5cd0d556e5a5da75147adc9d58e9cc6a37b5037cf127ff4b90"
+OUTPUT="$ROOT/Sources/MagicWineCore/Resources"
+LICENSE="LICENSE-WINE-WOW64CPU.txt"
+TRIPLET=x86_64-w64-mingw32
+export SOURCE_DATE_EPOCH=1768262400
+export LC_ALL=C TZ=UTC COPYFILE_DISABLE=1
+
+missing=()
+for tool in python3 tar patch "$TRIPLET-gcc" "$TRIPLET-dlltool" "$TRIPLET-strip" "$TRIPLET-objdump" "$TRIPLET-ld"; do
+  command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+done
+if [[ ! -d "$ROOT/source-inputs/wine" ]]; then
+  command -v curl >/dev/null 2>&1 || missing+=(curl)
+fi
+if [[ ${#missing[@]} -ne 0 ]]; then
+  printf 'Missing prerequisites: %s\nInstall on macOS with: brew install mingw-w64 python\n' "${missing[*]}" >&2
+  exit 1
+fi
+# Do not inherit another toolchain, header search path or Wine configuration.
+unset CC CXX CFLAGS CXXFLAGS CPPFLAGS LDFLAGS AR LD STRIP
+unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH GCC_EXEC_PREFIX COMPILER_PATH
+unset WINEARCH WINEPREFIX
+mkdir -p "$ROOT/.local" "$OUTPUT"
+WORK="$(mktemp -d "$ROOT/.local/wow64cpu-magicwine-build.XXXXXX")"
+DOWNLOAD=""
+trap 'if [[ -n "$DOWNLOAD" ]]; then rm -f "$DOWNLOAD"; fi' EXIT
+printf 'Build directory: %s\n' "$WORK"
+
+verify_hash() {
+  python3 - "$1" "$2" <<'PY'
+import hashlib
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+actual = hashlib.sha256(path.read_bytes()).hexdigest()
+if actual != sys.argv[2]:
+    raise SystemExit(f"SHA-256 mismatch: {path}\nExpected: {sys.argv[2]}\nActual:   {actual}")
+PY
+}
+
+fetch() {
+  local url="$1" destination="$2" digest="$3"
+  if [[ ! -f "$destination" ]]; then
+    DOWNLOAD="$(mktemp "$ROOT/.local/wow64cpu-download.XXXXXX")"
+    curl --fail --location --proto '=https' --tlsv1.2 "$url" -o "$DOWNLOAD"
+    verify_hash "$DOWNLOAD" "$digest"
+    mv "$DOWNLOAD" "$destination"
+    DOWNLOAD=""
+  fi
+  verify_hash "$destination" "$digest"
+}
+
+if [[ -d "$ROOT/source-inputs/wine" ]]; then
+  ORIGINAL="$ROOT/source-inputs/wine"
+  PUBLIC="$ROOT/source-inputs/cpu-crossover.c"
+  # Validate every archived source input before using an offline bundle.
+  python3 - "$ROOT/source-inputs" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1])
+manifest = json.loads((root / 'sha256.json').read_text())
+for name, expected in manifest.items():
+    path = root / name
+    if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+        raise SystemExit(f"Invalid source input path: {name}")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        raise SystemExit(f"Source input SHA-256 mismatch: {name}")
+PY
+else
+  SOURCE_ARCHIVE="$ROOT/.local/wine-11.0-wow64cpu-source.tar.gz"
+  PUBLIC="$ROOT/.local/wine-11.0-wow64cpu-public.c"
+  fetch "$SOURCE_URL" "$SOURCE_ARCHIVE" "$SOURCE_SHA256"
+  fetch "$PUBLIC_URL" "$PUBLIC" "$PUBLIC_SHA256"
+  tar -xzf "$SOURCE_ARCHIVE" -C "$WORK"
+  ORIGINAL="$WORK/wine-wine-11.0"
+fi
+verify_hash "$PUBLIC" "$PUBLIC_SHA256"
+verify_hash "$ORIGINAL/dlls/wow64cpu/cpu.c" "$CPU_SHA256"
+
+# Stage a small self-contained source distribution, retaining ALL Wine headers.
+PAYLOAD="$WORK/$COMPONENT-source"
+python3 - "$ROOT" "$ORIGINAL" "$PUBLIC" "$PAYLOAD" "$LICENSE" <<'PY'
+import hashlib
+import json
+import pathlib
+import shutil
+import sys
+root, original, public, payload = map(pathlib.Path, sys.argv[1:5])
+inputs = payload / 'source-inputs'
+wine = inputs / 'wine'
+shutil.copytree(original / 'include', wine / 'include')
+for name in ('COPYING.LIB', 'dlls/wow64cpu/cpu.c', 'dlls/wow64cpu/wow64cpu.spec'):
+    target = wine / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(original / name, target)
+shutil.copyfile(public, inputs / 'cpu-crossover.c')
+manifest = {str(path.relative_to(inputs)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(inputs.rglob('*')) if path.is_file()}
+(inputs / 'sha256.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+for name in ('scripts/build-wow64cpu.sh', 'patches/wine-wow64cpu-rosetta.patch',
+             'patches/wine-wow64cpu.def', 'patches/wine-wow64cpu-ntdll.def',
+             'patches/wine-wow64cpu-wow64.def', 'Sources/MagicWineCore/Resources/' + sys.argv[5]):
+    target = payload / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(root / name, target)
+PY
+SRC="$WORK/patched"
+mkdir -p "$SRC/dlls/wow64cpu"
+cp "$ORIGINAL/dlls/wow64cpu/cpu.c" "$SRC/dlls/wow64cpu/cpu.c"
+patch --batch --forward --fuzz=0 -p1 -d "$SRC" < "$ROOT/patches/wine-wow64cpu-rosetta.patch"
+verify_hash "$SRC/dlls/wow64cpu/cpu.c" "$PATCHED_SHA256"
+# The minimal patch must match the pinned public source except for blank lines.
+python3 - "$SRC/dlls/wow64cpu/cpu.c" "$PUBLIC" <<'PY'
+import pathlib
+import sys
+sources = [[line for line in pathlib.Path(name).read_text().splitlines() if line.strip()]
+           for name in sys.argv[1:]]
+if sources[0] != sources[1]:
+    raise SystemExit('Patched CPU source differs from the pinned public implementation')
+PY
+mkdir -p "$PAYLOAD/patched/dlls/wow64cpu"
+cp "$SRC/dlls/wow64cpu/cpu.c" "$PAYLOAD/patched/dlls/wow64cpu/cpu.c"
+
+# Relative compile paths keep __FILE__ and compiler output independent of WORK.
+cp -R "$PAYLOAD/source-inputs/wine/include" "$SRC/include"
+cp "$ROOT/patches/wine-wow64cpu.def" "$SRC/wow64cpu.def"
+cp "$ROOT/patches/wine-wow64cpu-ntdll.def" "$SRC/ntdll-cpu.def"
+cp "$ROOT/patches/wine-wow64cpu-wow64.def" "$SRC/wow64.def"
+run() {
+  printf '%q ' "$@" >> "$WORK/commands.txt"
+  printf '\n' >> "$WORK/commands.txt"
+  "$@"
+}
+(
+  cd "$SRC"
+  run "$TRIPLET-dlltool" --machine i386:x86-64 --deterministic-libraries --input-def ntdll-cpu.def --output-lib ntdll-cpu.a
+  run "$TRIPLET-dlltool" --machine i386:x86-64 --deterministic-libraries --input-def wow64.def --output-lib wow64.a
+  run "$TRIPLET-gcc" -c -O2 -D__WINESRC__ -D__WINE_PE_BUILD -D_MSVCR_VER=0 \
+    -Iinclude -Iinclude/msvcrt dlls/wow64cpu/cpu.c -o wow64cpu.o
+  run "$TRIPLET-gcc" -shared -nostdlib -Wl,--entry,DllMain \
+    -Wl,--image-base,0x7a400000,--disable-dynamicbase,--no-insert-timestamp \
+    wow64cpu.o wow64cpu.def ntdll-cpu.a wow64.a -lntdll -o wow64cpu.dll
+  run "$TRIPLET-strip" --strip-unneeded wow64cpu.dll
+) 2>&1 | tee "$WORK/build.log"
+
+# Validate the native PE contract and record actual tools, ABI and provenance.
+python3 - "$ROOT" "$WORK" "$PAYLOAD" "$SRC" "$SOURCE_URL" "$SOURCE_SHA256" \
+  "$PUBLIC_URL" "$PUBLIC_SHA256" "$COMPONENT" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+root, work, payload, source = map(pathlib.Path, sys.argv[1:5])
+triplet = 'x86_64-w64-mingw32'
+dll = source / 'wow64cpu.dll'
+def capture(command):
+    return subprocess.run(command, check=True, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True).stdout.strip()
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+headers = capture([triplet + '-objdump', '-p', str(dll)])
+architecture = capture([triplet + '-objdump', '-f', str(dll)])
+imports = sorted(re.findall(r'DLL Name:\s*(\S+)', headers))
+exports = sorted(re.findall(r'^\s*\[\s*\d+\]\s+(?:\+base\[\s*\d+\]\s+[0-9a-fA-F]+\s+)?(\w+)\s*$', headers, re.MULTILINE))
+expected_exports = sorted((root / 'patches/wine-wow64cpu.def').read_text().splitlines()[2:])
+if 'pei-x86-64' not in architecture or 'architecture: i386:x86-64' not in architecture:
+    raise SystemExit('Output is not a native x86-64 PE DLL')
+if {name.lower() for name in imports} != {'ntdll.dll', 'wow64.dll'}:
+    raise SystemExit(f'Unexpected static DLL imports: {imports}')
+if exports != expected_exports:
+    raise SystemExit(f'Unexpected exports: {exports}; expected: {expected_exports}')
+spec = payload / 'source-inputs/wine/dlls/wow64cpu/wow64cpu.spec'
+spec_exports = sorted(re.findall(r'^@ stdcall (?:-norelay )?(\w+)\(', spec.read_text(), re.MULTILINE))
+if exports != spec_exports:
+    raise SystemExit('Export definition differs from the original Wine export ABI')
+tools = {}
+for name in ('python3', 'patch', *(triplet + '-' + suffix for suffix in ('gcc', 'dlltool', 'strip', 'objdump', 'ld'))):
+    executable = pathlib.Path(shutil.which(name)).resolve()
+    tools[name] = {'path': str(executable), 'sha256': sha(executable),
+                   'version': capture([name, '--version'])}
+# GCC supplies the standard ntdll import library in addition to our small .defs.
+ntdll = pathlib.Path(capture([triplet + '-gcc', '-print-file-name=libntdll.a']))
+if not ntdll.is_file():
+    raise SystemExit('Cannot identify the toolchain ntdll import library')
+inputs = {}
+for directory in ('scripts', 'patches', 'source-inputs', 'patched', 'Sources'):
+    for path in sorted((payload / directory).rglob('*')):
+        if path.is_file():
+            inputs[str(path.relative_to(payload))] = sha(path)
+metadata = {
+    'component': sys.argv[9],
+    'source': {'url': sys.argv[5], 'sha256': sys.argv[6], 'tag': 'wine-11.0'},
+    'public_patch_source': {'url': sys.argv[7], 'sha256': sys.argv[8], 'attribution': 'CW HACK 20760'},
+    'source_date_epoch': int(os.environ['SOURCE_DATE_EPOCH']),
+    'tools': tools,
+    'toolchain_ntdll_import_library': {'path': str(ntdll), 'sha256': sha(ntdll)},
+    'commands': (work / 'commands.txt').read_text().splitlines(),
+    'inputs_sha256': inputs,
+    'dll_sha256': sha(dll),
+    'imported_dlls': imports,
+    'exports': exports,
+}
+(payload / 'provenance.json').write_text(json.dumps(metadata, indent=2, sort_keys=True) + '\n')
+# Strip the temporary absolute filename from objdump reports for reproducibility.
+(payload / 'pe-imports-exports.txt').write_text(headers.replace(str(dll), 'wow64cpu.dll') + '\n')
+(payload / 'pe-architecture.txt').write_text(architecture.replace(str(dll), 'wow64cpu.dll') + '\n')
+PY
+
+# Deterministic tar/gzip with normalized metadata. Stage every output before
+# publication; rename each atomically, publishing the DLL only after its source
+# and license. A failed build never replaces a working bundled DLL.
+python3 - "$PAYLOAD" "$SRC/wow64cpu.dll" "$OUTPUT" "$COMPONENT" "$LICENSE" <<'PY'
+import gzip
+import hashlib
+import os
+import pathlib
+import shutil
+import sys
+import tarfile
+import tempfile
+payload, dll, output = map(pathlib.Path, sys.argv[1:4])
+component, license_name = sys.argv[4:6]
+staged = []
+try:
+    archive_name = component + '-source.tar.gz'
+    fd, temporary = tempfile.mkstemp(prefix=archive_name + '.', dir=output)
+    staged.append((pathlib.Path(temporary), output / archive_name))
+    with os.fdopen(fd, 'wb') as raw:
+        with gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=0, compresslevel=9) as compressed:
+            with tarfile.open(fileobj=compressed, mode='w', format=tarfile.PAX_FORMAT) as archive:
+                for path in (payload, *sorted(payload.rglob('*'))):
+                    if path.is_symlink() or not (path.is_file() or path.is_dir()):
+                        raise SystemExit(f'Unsupported source archive member: {path}')
+                    relative = path.relative_to(payload)
+                    name = payload.name if path == payload else payload.name + '/' + relative.as_posix()
+                    member = tarfile.TarInfo(name)
+                    member.uid = member.gid = 0
+                    member.uname = member.gname = 'root'
+                    member.mtime = int(os.environ['SOURCE_DATE_EPOCH'])
+                    if path.is_dir():
+                        member.type = tarfile.DIRTYPE
+                        member.mode = 0o755
+                        archive.addfile(member)
+                    else:
+                        member.mode = 0o755 if relative.as_posix() == 'scripts/build-wow64cpu.sh' else 0o644
+                        member.size = path.stat().st_size
+                        with path.open('rb') as data:
+                            archive.addfile(member, data)
+        raw.flush()
+        os.fsync(raw.fileno())
+    for source, name in ((payload / 'Sources/MagicWineCore/Resources' / license_name, license_name),
+                         (dll, component + '.dll')):
+        fd, temporary = tempfile.mkstemp(prefix=name + '.', dir=output)
+        staged.append((pathlib.Path(temporary), output / name))
+        with os.fdopen(fd, 'wb') as target, source.open('rb') as data:
+            shutil.copyfileobj(data, target)
+            target.flush()
+            os.fsync(target.fileno())
+    for temporary, destination in staged:
+        temporary.chmod(0o644)
+        os.replace(temporary, destination)
+        print(f'SHA256: {hashlib.sha256(destination.read_bytes()).hexdigest()}  {destination}')
+finally:
+    for temporary, _ in staged:
+        temporary.unlink(missing_ok=True)
+print(f'Provenance: {payload / "provenance.json"}')
+print(f'Build logs and source retained: {payload.parent}')
+PY

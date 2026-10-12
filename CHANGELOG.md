@@ -27,6 +27,9 @@
 - Include native D3D9 in both architectures, with current-MinGW header compatibility and Vulkan feature requests gated by driver support. D3D9 no longer falls through to WineD3D when DXVK is selected.
 - Verify Tropics' D3D9, D3D10, and D3D11 windowed demos reach world initialization without the HUD, plus native D3D9 triangle rendering/readback on both architectures.
 - Preserve legacy four-DLL rollback and interrupted recovery while managing all six DLLs for new installations; retain pre-existing D3D9 files during legacy restoration. Exercise real legacy rollback, six-DLL enablement, and restoration without altering the saved D3D9 originals.
+- Fix Tropics Demo v1.3 launcher startup on Apple Silicon with a public-source-built Wine 11.0 Rosetta CPU transition repair, scoped to SHA-verified stock runtimes and ordinary bottle-owned DLLs. Preserve and validate the original CPU, source archive, and LGPL notice before atomic replacement; leave shared runtimes and unknown builds untouched.
+- Prefer the launcher's application-local `SHDocVw.dll` managed assembly over Wine's namesake DLL, with built-in fallback, while composing the CPU/browser overrides with the selected graphics backend.
+- Verify the original saved Tropics launcher opens its settings window and embedded browser through the packaged CLI; 74 regression tests pass. Leave the separate Run-button scripting bug unchanged after reproducing it in both runtimes; game files remain unmodified.
 
 ## 0.1.0 — 2026-10-11
 
