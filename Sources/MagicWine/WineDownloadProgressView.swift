@@ -4,6 +4,7 @@ import MagicWineCore
 
 struct WineDownloadProgressView: View {
     let progress: WineDownloadProgress
+    var title = "Downloading Wine…"
 
     private var percentage: String? {
         progress.fractionCompleted?.formatted(.percent.precision(.fractionLength(0)))
@@ -37,7 +38,7 @@ struct WineDownloadProgressView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Downloading Wine…")
+                Text(title)
                 Spacer()
                 if let percentage { Text(percentage).monospacedDigit() }
             }
@@ -46,7 +47,7 @@ struct WineDownloadProgressView: View {
 
             ProgressView(value: progress.fractionCompleted, total: 1)
                 .progressViewStyle(.linear)
-                .accessibilityLabel("Wine download")
+                .accessibilityLabel(title)
                 .accessibilityValue(accessibilitySummary)
 
             HStack {

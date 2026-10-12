@@ -186,12 +186,21 @@ private struct BottleDetailView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Wine executable: \(bottle.runtime.executableURL.path)")
                         Text("This bottle keeps this runtime. Wine Settings only changes the default for new bottles.")
+                        if bottle.graphics.backend == .dxvk {
+                            Text("Graphics: DXVK — Experimental · 1.10.3-based macOS fork (Direct3D 10/11)")
+                            if let componentID = bottle.graphics.componentID {
+                                Text("Graphics component: \(componentID)")
+                            }
+                        } else {
+                            Text("Graphics: Standard (Wine built-in)")
+                        }
                         Text("Created \(bottle.createdAt.formatted(date: .abbreviated, time: .shortened))")
                     }
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
                 }
-                if let title = state.title {
+                GraphicsSettingsView(model: model, bottle: bottle, busy: busy)
+                if state.graphicsProgress == nil, let title = state.title {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
                         Text(state.isStopping ? "Stopping Windows processes…" : title)
