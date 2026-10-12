@@ -420,7 +420,12 @@ private struct RuntimeSetupView: View {
                 }
                 .font(.callout).padding(.top, 8)
             }
-            if let activity = model.runtimeActivity { ProgressView(activity) }
+            if case let .downloading(progress) = model.installationProgress {
+                WineDownloadProgressView(progress: progress)
+            } else if let activity = model.runtimeActivity {
+                ProgressView(activity)
+                    .controlSize(.small)
+            }
             if let error = model.runtimeError {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Wine Setup Failed", systemImage: "exclamationmark.triangle").font(.headline)

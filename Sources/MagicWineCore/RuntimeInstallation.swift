@@ -13,7 +13,8 @@ struct RuntimeInstallation {
 
     static let notice = "MagicWine downloads original Gcenx public Wine builds, not a notarized MagicWine runtime. By confirming installation, you authorize use of unsigned Wine and removal of com.apple.quarantine only inside MagicWine's managed Wine Stable.app. MagicWine does not disable Gatekeeper or change system-wide security settings. The SHA-256 checksum verifies the archive matches the published checksum; it is not malware verification. Homebrew currently flags this distribution for Gatekeeper checks. Wine's optional Windows multimedia support requires the upstream universal GStreamer runtime (1.28.2 or newer) in /Library/Frameworks/GStreamer.framework; missing multimedia support is not a failure of basic Wine setup."
 
-    static func install(paths: ApplicationPaths) async throws -> URL {
+    static func install(paths: ApplicationPaths,
+                        progress: (@Sendable (WineInstallationProgress) -> Void)? = nil) async throws -> URL {
         try paths.prepare()
         let logURL = paths.logsDirectory.appendingPathComponent("wine-install-\(UUID().uuidString).log")
         guard FileManager.default.createFile(atPath: logURL.path, contents: Data((notice + "\n").utf8),
@@ -25,6 +26,7 @@ struct RuntimeInstallation {
                                                 attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: stage) }
         do {
+            progress?(.fetchingMetadata)
             let metadataURL = URL(string: "https://formulae.brew.sh/api/cask/wine-stable.json")!
             var request = URLRequest(url: metadataURL)
             request.timeoutInterval = 30
@@ -48,6 +50,7 @@ struct RuntimeInstallation {
             let destination = paths.runtimesDirectory.appendingPathComponent("wine-stable-\(metadata.version)-\(metadata.sha256.prefix(12))", isDirectory: true)
             let relativeExecutable = "Wine Stable.app/Contents/Resources/wine/bin/wine"
             if FileManager.default.fileExists(atPath: destination.path) {
+                progress?(.reusing)
                 try validateManagedDirectory(destination, paths: paths)
                 let receiptURL = destination.appendingPathComponent("installation.json")
                 guard try fileType(at: receiptURL) == mode_t(S_IFREG) else {
@@ -59,6 +62,7 @@ struct RuntimeInstallation {
                       receipt["version"] == metadata.version else {
                     throw MagicWineError.setup("The cached Wine installation receipt does not match the current publisher metadata.")
                 }
+                progress?(.preparing)
                 let removed = try removeQuarantine(from: destination, paths: paths)
                 try append("Quarantine removal after user consent: \(destination.appendingPathComponent("Wine Stable.app").path); removed \(removed) com.apple.quarantine attributes.\n", to: logURL)
                 try writeReceipt(receipt, at: destination)
@@ -66,16 +70,20 @@ struct RuntimeInstallation {
             }
             request = URLRequest(url: source)
             request.timeoutInterval = 600
-            let (download, archiveResponse) = try await URLSession.shared.download(for: request)
+            let (download, archiveResponse) = try await RuntimeDownload.download(for: request, progress: progress.map { callback in
+                { @Sendable update in callback(.downloading(update)) }
+            })
             defer { try? FileManager.default.removeItem(at: download) }
             try checkHTTP(archiveResponse)
             let archive = stage.appendingPathComponent("wine.tar.xz")
             try FileManager.default.moveItem(at: download, to: archive)
             try Task.checkCancellation()
+            progress?(.verifying)
             let checksum = try await hash(archive)
             guard checksum == metadata.sha256.lowercased() else {
                 throw MagicWineError.setup("Wine archive SHA-256 mismatch. No runtime was installed.")
             }
+            progress?(.extracting)
             let extraction = stage.appendingPathComponent("payload", isDirectory: true)
             try FileManager.default.createDirectory(at: extraction, withIntermediateDirectories: false)
             let listing = try await tool("/usr/bin/tar", arguments: ["-tf", archive.path], paths: paths, name: "archive-list", timeout: 60)
@@ -91,6 +99,7 @@ struct RuntimeInstallation {
             _ = try await tool("/usr/bin/tar", arguments: ["-xf", archive.path, "-C", extraction.path,
                     "--no-same-owner", "--no-same-permissions"], paths: paths, name: "archive-extract", timeout: 180)
             try Task.checkCancellation()
+            progress?(.preparing)
             let removed = try removeQuarantine(from: extraction, paths: paths)
             try append("Quarantine removal after user consent: \(extraction.appendingPathComponent("Wine Stable.app").path); removed \(removed) com.apple.quarantine attributes.\n", to: logURL)
             try writeReceipt(["source": source.absoluteString, "sha256": checksum,
@@ -103,6 +112,10 @@ struct RuntimeInstallation {
             try? append("Installation cancelled.\n", to: logURL)
             throw CancellationError()
         } catch {
+            if Task.isCancelled {
+                try? append("Installation cancelled.\n", to: logURL)
+                throw CancellationError()
+            }
             try? append("Failure: \(error.localizedDescription)\n", to: logURL)
             throw MagicWineError.setup("Wine installation failed: \(error.localizedDescription)\nInstallation log: \(logURL.path)")
         }

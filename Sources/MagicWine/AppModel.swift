@@ -26,6 +26,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var activities: [UUID: BottleActivity] = [:]
     @Published private(set) var isLoading = true
     @Published private(set) var runtimeActivity: String?
+    @Published private(set) var installationProgress: WineInstallationProgress?
     @Published private(set) var runtimeError: String?
     @Published private(set) var isCreating = false
     @Published private(set) var creationError: String?
@@ -37,6 +38,7 @@ final class AppModel: ObservableObject {
     private let store: BottleStore
     private let wine: WineRuntime
     private var hasStarted = false
+    private var installationID: UUID?
     private var pendingOpenURLs: [URL] = []
 
     init(paths: ApplicationPaths = ApplicationPaths()) {
@@ -127,11 +129,23 @@ final class AppModel: ObservableObject {
 
     func installWine() {
         guard runtimeActivity == nil else { return }
-        runtimeActivity = "Downloading and installing Wine…"
+        let installationID = UUID()
+        self.installationID = installationID
+        updateInstallationProgress(.fetchingMetadata)
         runtimeError = nil
-        Task {
+        Task { [self] in
+            defer {
+                self.installationID = nil
+                installationProgress = nil
+                runtimeActivity = nil
+            }
             do {
-                let installed = try await wine.installLatest(acceptUnsigned: true)
+                let installed = try await wine.installLatest(acceptUnsigned: true) { [weak self] progress in
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.installationID == installationID else { return }
+                        self.updateInstallationProgress(progress)
+                    }
+                }
                 addRuntime(installed)
                 var updated = settings
                 updated.preferredRuntimePath = installed.executableURL.path
@@ -140,7 +154,26 @@ final class AppModel: ObservableObject {
             } catch {
                 runtimeError = error.localizedDescription
             }
-            runtimeActivity = nil
+        }
+    }
+
+    private func updateInstallationProgress(_ progress: WineInstallationProgress) {
+        installationProgress = progress
+        switch progress {
+        case .fetchingMetadata:
+            runtimeActivity = "Fetching Wine release…"
+        case .downloading:
+            runtimeActivity = "Downloading Wine…"
+        case .verifying:
+            runtimeActivity = "Verifying Wine download…"
+        case .extracting:
+            runtimeActivity = "Extracting Wine…"
+        case .preparing:
+            runtimeActivity = "Preparing Wine…"
+        case .reusing:
+            runtimeActivity = "Using installed Wine…"
+        case .checkingRuntime:
+            runtimeActivity = "Checking Wine…"
         }
     }
 
