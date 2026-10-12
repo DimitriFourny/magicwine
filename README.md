@@ -38,9 +38,26 @@ MagicWine does not fork or freeze Wine. Managed installation uses the maintained
 - Each bottle **pins its Wine executable**. Installing a newer managed runtime changes the default for new bottles, not existing bottles. Keep runtimes referenced by existing bottles installed. Custom executable paths must also remain available.
 - **Already blocked managed Wine:** run **Install / Update Wine** again and accept **Trust and Install Wine**. When the latest runtime is already downloaded, MagicWine checks its provenance receipt and layout, removes its quarantine, and reuses it without downloading the archive again. Existing bottles are not deleted or migrated.
 
-Wine compatibility varies by application. This app does not include CrossOver's application recipes, proprietary D3DMetal/GPTK components, DXVK installation, or a compatibility guarantee for DirectX games, DRM, or anti-cheat. These are not interchangeable with a generic Wine installation.
+Wine compatibility varies by application. MagicWine offers an optional macOS DXVK backend below, but does not include CrossOver's application recipes, proprietary D3DMetal/GPTK components, or compatibility guarantees for DirectX games, DRM, or anti-cheat.
 
 **A bottle is not a security sandbox.** Windows programs run with your macOS user's permissions, and Wine can expose host files through its drives. Only run software you trust. Logs may contain paths and application output; review them before sharing.
+
+## Graphics and game testing
+
+Every bottle defaults to **Standard**, including bottles saved by older MagicWine versions. Loading existing metadata does not rewrite it or change the bottle's Windows files.
+
+- **Standard:** Wine's built-in graphics; OpenGL and Direct3D support depend on the pinned Wine runtime.
+- **DXVK — Experimental:** optional Direct3D 10/11 translation through Vulkan/MoltenVK, using the older [Gcenx macOS DXVK fork](https://github.com/Gcenx/DXVK-macOS/releases/tag/v1.10.3-20230507-repack). This is not current upstream DXVK, and does not add Direct3D 9 or 12 support. Direct3D 12 remains a separate development milestone.
+
+Select an initialized bottle, choose **DXVK — Experimental** in **Graphics**, and accept its third-party/experimental warning. Setup stops only this bottle, shows download size/speed and verification/install phases, and saves the new selection only after success. The Wine runtime must include the supported Vulkan/MoltenVK layout; MagicWine's managed Wine provides it.
+
+The package is pinned to `v1.10.3-20230507-repack` with archive SHA-256 `acd1520ad105d8ef124a09c8e11a259a5dc8bdc565ad18e0e52693f9807b2477`. Archive layout, native 32/64-bit DLL architecture, individual payload hashes, and provenance are checked before use. A checksum is not a publisher signature or malware verification. No DXVK quarantine attributes or global Wine files are modified.
+
+Only native `d3d10core.dll` and `d3d11.dll` are installed in the selected prefix's `system32`/`syswow64`; Wine's built-in DXGI stays selected. **Standard** restores the original files, symbolic links, or absence without another download, even if the shared DXVK package is missing. User-modified replacement DLLs are retained in the bottle's `graphics/recovered/` directory instead of silently discarded. Keep the bottle's graphics backups intact.
+
+Enable **Show Graphics HUD** before launching the game to identify DXVK/API/GPU and inspect FPS/frame times. Changes, including HUD updates, stop the bottle's Windows processes; controls are disabled during its active MagicWine operation. Start with an **offline Direct3D 11 game**, preferably one with a windowed mode. Check menus, gameplay, textures, fullscreen/windowed transitions, and stutter for 10–15 minutes. Anti-cheat/DRM and general game compatibility are not guaranteed; do not use this experimental backend to bypass anti-cheat.
+
+Errors do not silently fall back to Standard. Use **Reveal Logs** for the Wine operation; DXVK logs are in `Logs/<bottle-UUID>-dxvk/`. If the managed component was manually changed, restore Standard first, move the affected version directory out of `Components/`, then enable DXVK again to download the pinned package.
 
 ## Command-line companion
 
@@ -55,13 +72,27 @@ Use the bottle and program UUIDs printed by `list` and `apps` for subsequent com
 
 `--root /path/to/data` isolates CLI development data. The CLI managed-download command requires explicit consent: `install-wine --accept-unsigned`. This authorizes unsigned Wine and scoped quarantine removal, including reuse of an existing managed runtime.
 
+Graphics commands use the same reversible setup:
+
+```sh
+./dist/magicwine graphics <bottle-UUID>
+./dist/magicwine graphics <bottle-UUID> dxvk --accept-experimental --hud
+./dist/magicwine graphics <bottle-UUID> dxvk --accept-experimental --no-hud
+./dist/magicwine graphics <bottle-UUID> standard
+```
+
+Core clients use `WineRuntime.configureGraphics(_:in:showHUD:acceptExperimental:progress:)`; DXVK requires explicit `acceptExperimental: true`. `BottleStore.save` rejects direct or stale graphics changes. Launch/setup gates also protect against another MagicWine CLI process replacing DLLs during a launch.
+
 ## Data and development
 
 Data lives in `~/Library/Application Support/MagicWine/`:
 
 - `Bottles/<UUID>/bottle.json`: atomically saved metadata and launchers.
 - `Bottles/<UUID>/prefix/`: Wine prefix and Windows filesystem.
+- `Bottles/<UUID>/graphics/`: original-DLL backups, interrupted-change recovery, retained custom replacements, and per-bottle DXVK shader cache.
+- `Bottles/.graphics-locks/`: storage and launch/lifetime locks shared by the app and CLI.
 - `Runtimes/`: immutable, version/checksum-specific managed Wine installations with provenance receipts.
+- `Components/`: immutable DXVK version/checksum-specific packages, verified receipts, and zlib attribution.
 - `Logs/`: file-backed process and installation logs; no output-buffer growth while Windows apps run.
 - `settings.json`: default and custom Wine selections.
 
@@ -79,7 +110,7 @@ The test script uses the installed Swift Testing plugin and disables XCTest, whi
 
 Development checks on Apple Silicon with macOS 27, Rosetta, and public Wine 11.0:
 
-- Twenty-two regression tests pass: four storage tests, nine quarantine/consent tests, and nine download-progress tests covering unknown lengths, fractions, finite speeds, slow transfers, and final completion.
+- Fifty-five regression tests pass across storage, quarantine/consent, download progress, DXVK integrity/architecture, reversible prefix changes/recovery, and graphics concurrency boundaries.
 - Two real prefixes keep Windows files separate. Real 7-Zip 26.04 EXE and MSI installations create and validate archives.
 - Saved EXEs and installed LNK shortcuts launch real Windows processes. Stop, repeated idle stop, timeout, and task cancellation leave the runtime usable.
 - The native app launches and its model runs a Windows GUI program through the running → stop → idle transition without displaying a failure for a requested stop.
@@ -87,11 +118,15 @@ Development checks on Apple Silicon with macOS 27, Rosetta, and public Wine 11.0
 - Moving a bottle to macOS Trash leaves its externally registered executable unchanged.
 - Managed Wine downloads pass checksum/extraction/provenance checks. The native trust confirmation starts a real fresh installation and saves its runtime preference; Wine reports `wine-11.0`. Reinstalling the previously quarantined cached runtime removes its quarantine and also passes Wine version inspection without downloading the archive again.
 - Throttled real HTTP transfers with known and unknown sizes emit intermediate byte counts and measured speeds, preserve the complete payload, and propagate cancellation and interrupted connections. The native progress view receives live actual-Wine download updates; success, cached reuse, and a failed provenance check clear download statistics correctly.
+- Real native 32-bit and 64-bit Direct3D 11 probes compile vertex/pixel shaders, render a colored triangle, present 90 frames, enter/leave fullscreen inside an isolated Wine desktop, and verify GPU readback. Logs identify `DXVK v1.10.3-20230507-async (macOS)`, MoltenVK 1.4.1, and Direct3D feature level 11.0. A registered EXE inside C: also renders and records its DXVK cache/logs.
+- Switching the same isolated bottle back to Standard restores Wine's original DLLs and passes a real Direct3D 9 triangle/presentation/GPU-readback check using Wine's OpenGL backend. The Standard Direct3D 11 probe could not create a feature-level-10+ device on this setup; no general Standard D3D11 compatibility is claimed.
+- The native graphics view and real application model exercise fresh DXVK download progress (received/total bytes and measured speed), cached enablement, HUD changes, Standard restoration, and cleared progress state. Existing user bottles are not modified by these isolated checks.
+- A separate CLI process runs a real long-lived Direct3D program while the core switches its bottle to Standard: the program exits, the four original DLL hashes are restored, and unrelated DXGI/D3D9 files and saved programs stay unchanged. Removing the selected component blocks launch without fallback; Standard restoration still succeeds with the component absent.
 
 Native views were captured in-process. Full compositor screenshots and automated mouse/keyboard interaction were unavailable without Screen Recording and Accessibility permissions; some layer-backed controls are incomplete in those snapshots. Interactive installer completion still requires the normal Windows installer UI. These checks do not establish general Windows-application or game compatibility.
 
 ## License and references
 
-MagicWine's original code is **GPL-3.0-or-later**; see [LICENSE](LICENSE). Wine and its separately downloaded distribution retain their own licenses and notices. No Wine binary is committed or bundled in the development app.
+MagicWine's original code is **GPL-3.0-or-later**; see [LICENSE](LICENSE). Wine and its separately downloaded distribution retain their own licenses and notices. DXVK and the altered macOS fork use the zlib/libpng license; managed packages include both attributions and source/provenance links. No Wine or DXVK binary is committed or bundled in the development app.
 
 Whisky and CrossOver supplied in `references/` informed workflow and dependency research only. Their implementations and assets were not copied. `references/`, build output, and local verification downloads are ignored by Git. CrossOver and Whisky are independent projects, not affiliations or endorsements.
