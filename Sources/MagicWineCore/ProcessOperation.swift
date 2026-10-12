@@ -24,11 +24,11 @@ final class ProcessOperation: @unchecked Sendable {
         process.currentDirectoryURL = directory
     }
 
-    func run() async throws -> OperationResult {
+    func run(onStart: (@Sendable () -> Void)? = nil) async throws -> OperationResult {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 lock.withLock { self.continuation = continuation }
-                DispatchQueue.global(qos: .userInitiated).async { self.start() }
+                DispatchQueue.global(qos: .userInitiated).async { self.start(onStart: onStart) }
             }
         } onCancel: {
             self.interrupt(CancellationError())
@@ -37,7 +37,7 @@ final class ProcessOperation: @unchecked Sendable {
 
     func terminate() { interrupt(MagicWineError.stopped(logURL: logURL)) }
 
-    private func start() {
+    private func start(onStart: (@Sendable () -> Void)?) {
         do {
             if let timeout, (!timeout.isFinite || timeout <= 0) {
                 throw MagicWineError.setup("The process timeout must be positive. Log: \(logURL.path)")
@@ -68,6 +68,7 @@ final class ProcessOperation: @unchecked Sendable {
                 return
             }
             try process.run()
+            onStart?()
             let stopImmediately = lock.withLock { interruption != nil }
             if stopImmediately { interrupt(nil) }
             if let timeout {
