@@ -15,7 +15,7 @@
 - Scope DLL overrides, optional version/API/GPU/FPS/frame-time HUD, shader cache, and diagnostics to the selected bottle; keep Wine's built-in DXGI and reject unavailable selected components instead of falling back silently.
 - Stop the bottle before changing graphics; protect metadata-to-spawn handoff and live-process completion across app/CLI processes. HUD-only updates avoid reinstalling DLLs.
 - Verify real 32/64-bit Direct3D 11 shader rendering and fullscreen/readback, C-drive launcher diagnostics, Standard Direct3D 9 switchback, interprocess stop/switch, and missing-component restoration. Add integrity, recovery, concurrency, and rejected-component-replacement regressions; 56 tests pass.
-- Keep Direct3D 12 separate; do not bundle proprietary D3DMetal/GPTK or claim anti-cheat/game compatibility.
+- Do not bundle proprietary D3DMetal/GPTK or claim anti-cheat/game compatibility.
 - Match CrossOver's unavailable-results behavior for unsupported pipeline-statistics queries: create the native query, preserve lifecycle validation, and return `S_FALSE` without fabricated counters or unsupported Vulkan allocations. This replaces the earlier strict rejection that crashed Tropics' D3D10 engine.
 - Cross-compile a separately versioned 32/64-bit component from SHA-pinned public source with a checked-in patch and build recipe; install it offline from the app/CLI resource bundle.
 - Remove the dedicated DXVK update UI and in-place component-replacement path after a user-reported failed update; retain fresh-bottle installation, current-component HUD changes, and Standard rollback. Older selections direct users to a new bottle without automatic migration or deletion.
@@ -33,6 +33,13 @@
 - Port the redesigned dark wine-themed native interface: searchable bottle sidebar, adaptive dashboard cards, installed-program launchers, and Downloads, Settings, and Documentation pages.
 - Bundle original interface artwork and the application icon alongside the current DXVK/Wine compatibility resources and redistribution notices; retain newer Direct3D 9/10/11 support, legacy-component guards, and per-bottle runtime/operation behavior.
 - Support isolated native UI libraries through `MAGICWINE_DATA_ROOT` and optional development bundle names/identifiers without changing the default library.
+- Add per-bottle DXMT and D3DMetal selections, experimental consent, Metal HUD controls, native library-folder import, and matching CLI/core APIs.
+- Bundle the unchanged MIT-licensed DXMT v0.80 builtin release with pinned archive/payload hashes and native Wine/GPU capability checks; support 32/64-bit Direct3D 10/11 without modifying shared Wine.
+- Import user-owned D3DMetal locally with content-addressed receipts, complete 64-bit Windows/Unix bridge validation, deployment-target checks, preserved notices/quarantine, and strict conventional-link validation. Never download, license, patch, or redistribute Apple's binaries.
+- Select Metal builtins through verified private Wine runtime views, preserving original executable bytes/signatures and child-process loader identity. Resolve materialized Apple Unix aliases to one canonical shared image for correct framework lookup and shared dispatch state.
+- Generalize transactional DLL backup/recovery across DXVK/DXMT/D3DMetal footprints while retaining legacy rollback. Direct backend switches and missing-component Standard restoration preserve original files, links, absent paths, and displaced user replacements.
+- Reject stock managed Wine's incompatible Metal ABI before mutation; retain each bottle's pinned runtime and require explicit selection of a compatible native custom Wine loader.
+- Verify real DXMT D3D10/11 rendering/readback in both architectures and D3DMetal D3D11/12 in 64-bit, repeated packaged launches, HUD-only preservation, direct Metal switches, missing-import rollback, unchanged original runtime hashes, and managed-Wine DXVK rendering. All 107 Swift regressions pass; rebuild and sign the app/CLI.
 
 ## 0.1.0 — 2026-10-11
 
