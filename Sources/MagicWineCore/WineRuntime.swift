@@ -70,14 +70,16 @@ public actor WineRuntime {
         return RuntimeDescriptor(executableURL: executable, version: version)
     }
 
-    public func installLatest(acceptUnsigned: Bool) async throws -> RuntimeDescriptor {
+    public func installLatest(acceptUnsigned: Bool,
+                              progress: (@Sendable (WineInstallationProgress) -> Void)? = nil) async throws -> RuntimeDescriptor {
         guard acceptUnsigned else {
             throw MagicWineError.setup("Installing managed Wine requires consent to run unsigned third-party code and remove its download quarantine.")
         }
         guard !installing else { throw MagicWineError.setup("A managed Wine installation is already in progress.") }
         installing = true
         defer { installing = false }
-        let executable = try await RuntimeInstallation.install(paths: paths)
+        let executable = try await RuntimeInstallation.install(paths: paths, progress: progress)
+        progress?(.checkingRuntime)
         return try await inspect(executableURL: executable)
     }
 
