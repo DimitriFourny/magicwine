@@ -50,13 +50,13 @@ struct GraphicsSettingsView: View {
                 ))
                 .disabled(unavailable || !currentBottle.graphics.usesCurrentDXVK)
                 Text(currentBottle.graphics.usesCurrentDXVK
-                     ? "Selected: DXVK 1.10.3-magicwine.1 · Direct3D 10/11 only"
+                     ? "Selected: DXVK 1.10.3-magicwine.2 · Direct3D 9/10/11 · No Direct3D 12"
                      : "Selected: \(currentBottle.graphics.componentID ?? "unspecified DXVK component")")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Choose Standard to restore this bottle’s original graphics files.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                Text("Standard uses Wine’s built-in graphics. DXVK is an optional experimental Direct3D 10/11 backend; it does not add Direct3D 9/12 support.")
+                Text("Standard uses Wine’s built-in graphics. DXVK is an optional experimental Direct3D 9/10/11 backend; it does not add Direct3D 12 support. DXGI stays Wine builtin.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

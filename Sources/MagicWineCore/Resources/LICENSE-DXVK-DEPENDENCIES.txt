@@ -1,4 +1,4 @@
-Third-party notices for DXVK 1.10.3-magicwine.1
+Third-party notices for DXVK 1.10.3-magicwine.2
 
 The native DLLs were compiled with MinGW-w64/GCC and statically linked
 C++ and threading runtimes. These notices supplement LICENSE-DXVK.txt

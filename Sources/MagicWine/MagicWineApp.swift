@@ -187,7 +187,7 @@ private struct BottleDetailView: View {
                         Text("Wine executable: \(bottle.runtime.executableURL.path)")
                         Text("This bottle keeps this runtime. Wine Settings only changes the default for new bottles.")
                         if bottle.graphics.backend == .dxvk {
-                            Text("Graphics: DXVK — Experimental · 1.10.3-based macOS fork (Direct3D 10/11)")
+                            Text("Graphics: DXVK — Experimental · 1.10.3-based macOS fork (Direct3D 9/10/11; no Direct3D 12)")
                             if let componentID = bottle.graphics.componentID {
                                 Text("Graphics component: \(componentID)")
                             }

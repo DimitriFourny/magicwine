@@ -5,29 +5,31 @@ import Foundation
 /// The native macOS fork is deliberately pinned: these DLLs are not interchangeable
 /// with upstream Vulkan-only DXVK or Gcenx's Wine builtin DLL package.
 enum DXVKInstallation {
-    static let componentID = "dxvk-macos-1.10.3-magicwine.1"
-    static let version = "1.10.3-magicwine.1"
-    static let notice = "DXVK — Experimental uses MagicWine's unsigned, altered build of Gcenx's public 1.10.3-based macOS DXVK fork for Direct3D 10/11 only. The native D3D11 implementation rejects unsupported queries instead of reporting fabricated counters. It does not provide Direct3D 9 or 12, anti-cheat compatibility, or proprietary D3DMetal/GPTK binaries. The curated SHA-256 pin identifies the bundled package; it is not malware verification. MagicWine does not remove DXVK quarantine attributes or modify global Wine files."
-    static let archiveRoot = "dxvk-macos-1.10.3-magicwine.1"
-    static let source = "bundled:Sources/MagicWineCore/Resources/dxvk-macos-1.10.3-magicwine.1.tar.gz"
-    static let archiveSHA256 = "88c1664e348c06c27469ef9acc8704a26e998835f9110281ffec6a96b4b26d18"
+    static let componentID = "dxvk-macos-1.10.3-magicwine.2"
+    static let version = "1.10.3-magicwine.2"
+    static let notice = "DXVK — Experimental uses MagicWine's unsigned, altered build of Gcenx's public 1.10.3-based macOS DXVK fork for Direct3D 9/10/11. D3D9 enables geometry shaders and shader cull distances only when the Vulkan driver supports them; geometry-dependent operations remain driver-limited. Unsupported pipeline-statistics queries stay unavailable, matching CrossOver compatibility behavior without fabricated counters; games that wait for those counters may stall. It does not provide Direct3D 12, anti-cheat compatibility, or proprietary D3DMetal/GPTK binaries. DXGI stays Wine builtin. The curated SHA-256 pin identifies the bundled package; it is not malware verification. MagicWine does not remove DXVK quarantine attributes or modify global Wine files."
+    static let archiveRoot = "dxvk-macos-1.10.3-magicwine.2"
+    static let source = "bundled:Sources/MagicWineCore/Resources/dxvk-macos-1.10.3-magicwine.2.tar.gz"
+    static let archiveSHA256 = "c06d15ed8bde38bc9fa9c22d8cb823a6904cc0d48fb967f3b43dd55b575458f7"
     private static let repository = "https://github.com/Gcenx/DXVK-macOS"
     private static let sourceCommit = "8f1e28deed3ad30802f7e1bdff428ec14e6e7817"
     private static let sourceArchiveSHA256 = "b3fc4a0415b3e4cdfb40497bec191c10f183ec2eb498950aa1f638f176cb996b"
     private static let upstreamLicenseSource = "https://github.com/doitsujin/dxvk/blob/v1.10.3/LICENSE"
     private static let forkLicenseSource = "https://github.com/Gcenx/DXVK-macOS/blob/\(sourceCommit)/LICENSE"
-    private static let dllNames = ["d3d10core.dll", "d3d11.dll"]
+    private static let dllNames = ["d3d9.dll", "d3d10core.dll", "d3d11.dll"]
     private static let dependencyNoticeName = "LICENSE-DXVK-DEPENDENCIES.txt"
-    private static let dependencyNoticeSHA256 = "077bb8f90c2e8dc662cefa54c77309ee5cbee3b4b03bdd5b47ebb14f594b7bb9"
+    private static let dependencyNoticeSHA256 = "f0ee2e0aae2a9e8871deb7f638a4531b0c738e9c2ae0875dd3263f962d60dc41"
 
     // Independently recorded from the pinned archive. A forged receipt cannot bless
     // different binaries, even if its archive checksum claims to match our pin.
     private static let payloadDigests = [
         "dxvk.conf": "0e9e39c27db318a8efe787380b09dae1676f0344101ec37dbb78bfb282991bf2",
-        "x32/d3d10core.dll": "2ba107be7ff7ad6236117f2f68a842569ef0fe96ddf7ed30d6ee41521ba24276",
-        "x32/d3d11.dll": "c6786019a36b80ae15f6dd51aca1780f7c5e161553a5b1dc979f3796bfb06b64",
-        "x64/d3d10core.dll": "890e26f26a37adc97ef9711c82baaec815c99bcc256115f3c28c92a5d85306b7",
-        "x64/d3d11.dll": "3384ad1538fd53cc9db5e88ac4c7a18f93ce9ebe2b37bb1a91262b9ffb719d61",
+        "x32/d3d9.dll": "394e3b1234119bfeab76d7963a3b7b7f8b542ce03e83f001ccd5d03967f3504a",
+        "x32/d3d10core.dll": "293a29b8f830bcf68a7b7d090f01e157cd685d686c6a7ed50f2a3d643dc5ea89",
+        "x32/d3d11.dll": "e6e94fadcd29072d33dc2007644f5b142729c370bea6c4e5bf22c07ab2876cfd",
+        "x64/d3d9.dll": "b3a7253b179c14db93d11791002c9cf45b8404d1044acf9917e4a697a67b9d58",
+        "x64/d3d10core.dll": "42fb5af68ac3eb12d1090980c03e2567fadf4e252fd05a8a3716f2e9ea4196f8",
+        "x64/d3d11.dll": "4015f988856da69e9b4a1007f796de0c5de56c1ce0b49d7840b78ef84790a41b",
     ]
 
     private static let licenseTerms = """
@@ -79,7 +81,8 @@ enum DXVKInstallation {
     Source archive: https://codeload.github.com/Gcenx/DXVK-macOS/tar.gz/\(sourceCommit)
     Source archive SHA-256: \(sourceArchiveSHA256)
     MagicWine build recipe: scripts/build-dxvk.sh
-    MagicWine source alteration: patches/dxvk-pipeline-statistics.patch
+    MagicWine source alterations: patches/dxvk-pipeline-statistics.patch,
+    patches/dxvk-d3d10-device.patch, patches/dxvk-d3d9-macos.patch
     Build tools: MinGW-w64 14.0.0_3 / GCC 16.2.0, Meson 1.12.1,
     glslang 16.6.0; release native DLLs with static C/C++ runtimes.
     Dependency notices: \(dependencyNoticeName), SHA-256 \(dependencyNoticeSHA256)
@@ -89,13 +92,24 @@ enum DXVKInstallation {
 
     DXVK was created by Philip Rebohle and its contributors. This is MagicWine's
     altered build of the Gcenx macOS/async fork, not an original upstream or
-    Gcenx distribution. MagicWine changes native D3D11Device::CreateQuery1 to
-    reject unsupported PIPELINE_STATISTICS queries with E_INVALIDARG and a
-    null output before returning validation-only S_FALSE. No query interceptor,
-    proxy, invented counters, or newly advertised features are included.
-    The bundled native x32/x64 d3d10core.dll and d3d11.dll and dxvk.conf are
-    installed unchanged. No d3d9.dll or dxgi.dll is included; DXGI stays Wine
-    builtin. The receipt records all payload and attribution checksums.
+    Gcenx distribution. When Vulkan pipelineStatisticsQuery is unavailable,
+    MagicWine's D3D11Query accepts creation and preserves Begin/End validation,
+    but GetData returns S_FALSE without writing counters or creating an
+    unsupported Vulkan query pool. Supported drivers retain real GPU queries.
+    This matches CrossOver's observed unavailable-results compatibility behavior
+    without falsely advertising Vulkan features or including CrossOver binaries.
+    D3D10CoreCreateDevice delegates adapter/feature-level validation to DXVK's
+    D3D11CoreCreateDevice instead of rejecting devices based on WineD3D's
+    unrelated CheckInterfaceSupport result.
+    The D3D9 patch removes an obsolete dummy resource-manager typedef that
+    conflicts with modern MinGW's definition. It enables Vulkan geometryShader
+    and shaderCullDistance only when supported by the device, instead of
+    unconditionally requesting features unavailable in the managed MoltenVK.
+    It does not advertise new features; geometry-dependent D3D9 operations
+    remain limited by driver support.
+    The bundled native x32/x64 d3d9.dll, d3d10core.dll, d3d11.dll and dxvk.conf
+    are installed unchanged. No dxgi.dll is included; DXGI stays Wine builtin.
+    The receipt records all payload and attribution checksums.
     \(notice)
 
     """

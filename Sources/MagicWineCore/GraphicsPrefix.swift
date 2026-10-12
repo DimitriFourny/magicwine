@@ -7,9 +7,15 @@ import Foundation
 internal enum GraphicsPrefix {
     static let dllPaths = [
         "drive_c/windows/system32/d3d10core.dll", "drive_c/windows/system32/d3d11.dll",
-        "drive_c/windows/syswow64/d3d10core.dll", "drive_c/windows/syswow64/d3d11.dll"
+        "drive_c/windows/syswow64/d3d10core.dll", "drive_c/windows/syswow64/d3d11.dll",
+        "drive_c/windows/system32/d3d9.dll", "drive_c/windows/syswow64/d3d9.dll"
     ]
-    private static let sourcePaths = ["x64/d3d10core.dll", "x64/d3d11.dll", "x32/d3d10core.dll", "x32/d3d11.dll"]
+    private static let sourcePaths = [
+        "x64/d3d10core.dll", "x64/d3d11.dll", "x32/d3d10core.dll", "x32/d3d11.dll",
+        "x64/d3d9.dll", "x32/d3d9.dll"
+    ]
+    // Historical backups and journals own only the first four paths, never D3D9.
+    private static let legacyDLLCount = 4
     private static var manager: FileManager { FileManager.default }
 
     private struct Entry: Codable {
@@ -66,12 +72,7 @@ internal enum GraphicsPrefix {
             try manager.removeItem(at: transaction)
             return
         }
-        try requireRegularFile(journalURL)
-        let journal = try JSONDecoder().decode(Journal.self, from: Data(contentsOf: journalURL))
-        guard journal.before.count == dllPaths.count, journal.after.count == dllPaths.count,
-              journal.displaced.count == dllPaths.count else {
-            throw MagicWineError.setup("The bottle graphics recovery journal is invalid.")
-        }
+        let journal = try readJournal(journalURL)
         let metadataURL = bottleDirectory.appendingPathComponent("bottle.json")
         try requireRegularFile(metadataURL)
         let metadata = try Data(contentsOf: metadataURL)
@@ -83,7 +84,7 @@ internal enum GraphicsPrefix {
             throw MagicWineError.setup("Bottle metadata changed during an interrupted graphics transaction. Its recovery files have been retained.")
         }
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
-        try validateDestinations(prefix: prefix)
+        try validateDestinations(prefix: prefix, count: journal.before.count)
         try restoreSnapshot(journal: journal, transaction: transaction, graphics: graphics, prefix: prefix)
         try manager.removeItem(at: transaction)
     }
@@ -95,7 +96,7 @@ internal enum GraphicsPrefix {
         try validateDestinations(prefix: prefix)
         let active = bottleDirectory.appendingPathComponent("graphics/active", isDirectory: true)
         let manifest = try readManifest(active)
-        guard manifest.componentID == configuration.componentID else {
+        guard manifest.componentID == configuration.componentID, manifest.entries.count == dllPaths.count else {
             throw MagicWineError.setup("The bottle's DXVK installation does not match its selected component. Restore Standard, then enable DXVK again.")
         }
         for (index, path) in dllPaths.enumerated() {
@@ -146,9 +147,7 @@ internal enum GraphicsPrefix {
             throw MagicWineError.setup("In-place DXVK component updates are not supported. Create a new bottle, or choose Standard to restore this bottle's original graphics files.")
         }
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
-        try validateDestinations(prefix: prefix)
         let graphics = bottleDirectory.appendingPathComponent("graphics", isDirectory: true)
-        try ensureDirectory(graphics, create: true)
         let active = graphics.appendingPathComponent("active", isDirectory: true)
         let oldManifest: Manifest?
         if previous.backend == .dxvk {
@@ -161,6 +160,9 @@ internal enum GraphicsPrefix {
             guard try !exists(active) else { throw MagicWineError.setup("The bottle has an unexpected graphics backup; refusing to overwrite it.") }
             oldManifest = nil
         }
+        let count = oldManifest?.entries.count ?? dllPaths.count
+        try validateDestinations(prefix: prefix, count: count)
+        try ensureDirectory(graphics, create: true)
         if next.backend == .dxvk {
             guard let componentRoot, let id = next.componentID, !id.isEmpty,
                   ![".", ".."].contains(id), !id.contains("/"), !id.contains("\\") else {
@@ -190,7 +192,7 @@ internal enum GraphicsPrefix {
             var after: [Snapshot] = []
             var entries: [Entry] = []
             var displaced: [Bool] = []
-            for (index, path) in dllPaths.enumerated() {
+            for (index, path) in dllPaths.prefix(count).enumerated() {
                 let destination = prefix.appendingPathComponent(path)
                 let beforeSnapshot = try snapshot(destination)
                 before.append(beforeSnapshot)
@@ -231,9 +233,9 @@ internal enum GraphicsPrefix {
     static func apply(transaction: URL, bottleDirectory: URL) throws {
         let graphics = bottleDirectory.appendingPathComponent("graphics", isDirectory: true)
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
-        try validateDestinations(prefix: prefix)
-        let journal = try JSONDecoder().decode(Journal.self, from: Data(contentsOf: transaction.appendingPathComponent("journal.json")))
-        for (index, path) in dllPaths.enumerated() {
+        let journal = try readJournal(transaction.appendingPathComponent("journal.json"))
+        try validateDestinations(prefix: prefix, count: journal.before.count)
+        for (index, path) in dllPaths.prefix(journal.before.count).enumerated() {
             let destination = prefix.appendingPathComponent(path)
             if journal.displaced[index], try exists(destination) {
                 try preserve(destination, index: index, graphics: graphics)
@@ -245,15 +247,20 @@ internal enum GraphicsPrefix {
 
     private static func restoreSnapshot(journal: Journal, transaction: URL, graphics: URL, prefix: URL) throws {
         try ensureDirectory(transaction.appendingPathComponent("before"))
-        if journal.hadActive { _ = try readManifest(transaction.appendingPathComponent("before-active")) }
+        if journal.hadActive {
+            let manifest = try readManifest(transaction.appendingPathComponent("before-active"))
+            guard manifest.entries.count == journal.before.count else {
+                throw MagicWineError.setup("The bottle graphics recovery backup does not match its journal.")
+            }
+        }
         // Validate all saved entries before changing anything during recovery.
-        for index in dllPaths.indices where journal.before[index].exists {
+        for index in journal.before.indices where journal.before[index].exists {
             let saved = transaction.appendingPathComponent("before/\(index)")
             guard try snapshot(saved).fingerprint == journal.before[index].fingerprint else {
                 throw MagicWineError.setup("A saved graphics rollback DLL is missing or changed.")
             }
         }
-        for (index, path) in dllPaths.enumerated() {
+        for (index, path) in dllPaths.prefix(journal.before.count).enumerated() {
             let destination = prefix.appendingPathComponent(path)
             let current = try snapshot(destination)
             if current.exists, current.fingerprint != journal.before[index].fingerprint,
@@ -265,21 +272,34 @@ internal enum GraphicsPrefix {
         try replace(graphics.appendingPathComponent("active"), with: transaction.appendingPathComponent("before-active"), exists: journal.hadActive)
     }
 
+    private static func readJournal(_ url: URL) throws -> Journal {
+        try requireRegularFile(url)
+        let journal = try JSONDecoder().decode(Journal.self, from: Data(contentsOf: url))
+        let count = journal.before.count
+        guard (count == legacyDLLCount || count == dllPaths.count),
+              journal.after.count == count, journal.displaced.count == count else {
+            throw MagicWineError.setup("The bottle graphics recovery journal is invalid.")
+        }
+        return journal
+    }
+
     private static func readManifest(_ active: URL) throws -> Manifest {
         try ensureDirectory(active.deletingLastPathComponent())
         try ensureDirectory(active)
         let url = active.appendingPathComponent("manifest.json")
         try requireRegularFile(url)
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: url))
-        guard manifest.entries.count == dllPaths.count else { throw MagicWineError.setup("The bottle graphics backup is invalid.") }
+        guard manifest.entries.count == legacyDLLCount || manifest.entries.count == dllPaths.count else {
+            throw MagicWineError.setup("The bottle graphics backup is invalid.")
+        }
         try ensureDirectory(active.appendingPathComponent("originals"))
-        for index in dllPaths.indices where manifest.entries[index].originalExists {
+        for index in manifest.entries.indices where manifest.entries[index].originalExists {
             try requireFileOrLink(active.appendingPathComponent("originals/\(index)"))
         }
         return manifest
     }
 
-    private static func validateDestinations(prefix: URL) throws {
+    private static func validateDestinations(prefix: URL, count: Int = dllPaths.count) throws {
         let bottleDirectory = prefix.deletingLastPathComponent()
         let bottlesDirectory = bottleDirectory.deletingLastPathComponent()
         try ensureDirectory(bottlesDirectory.deletingLastPathComponent())
@@ -289,7 +309,7 @@ internal enum GraphicsPrefix {
         for path in ["drive_c", "drive_c/windows", "drive_c/windows/system32", "drive_c/windows/syswow64"] {
             try ensureDirectory(prefix.appendingPathComponent(path))
         }
-        for path in dllPaths {
+        for path in dllPaths.prefix(count) {
             let file = prefix.appendingPathComponent(path)
             if try exists(file) { try requireFileOrLink(file) }
         }
@@ -300,7 +320,7 @@ internal enum GraphicsPrefix {
         try ensureDirectory(recovered, create: true)
         let group = recovered.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try ensureDirectory(group, create: true)
-        let architecture = index < 2 ? "x64" : "x32"
+        let architecture = sourcePaths[index].hasPrefix("x64/") ? "x64" : "x32"
         try manager.moveItem(at: file, to: group.appendingPathComponent(architecture + "-" + file.lastPathComponent))
     }
 

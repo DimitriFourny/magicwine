@@ -365,7 +365,10 @@ public actor WineRuntime {
             }
         }
         var result = base
-        result["WINEDLLOVERRIDES"] = "d3d10core,d3d11=n;dxgi=b"
+        result["WINEDLLOVERRIDES"] = "d3d9,d3d10core,d3d11=n;dxgi=b"
+        // Builtin DXGI enumerates a WineD3D adapter before handing devices to DXVK.
+        // Avoid its OpenGL/WoW64 initialization path even when the HUD is disabled.
+        result["WINE_D3D_CONFIG"] = "renderer=vulkan"
         result["DXVK_CONFIG_FILE"] = component.appendingPathComponent("dxvk.conf").path
         result["DXVK_STATE_CACHE_PATH"] = cache.path
         result["DXVK_LOG_PATH"] = logs.path

@@ -16,11 +16,17 @@
 - Stop the bottle before changing graphics; protect metadata-to-spawn handoff and live-process completion across app/CLI processes. HUD-only updates avoid reinstalling DLLs.
 - Verify real 32/64-bit Direct3D 11 shader rendering and fullscreen/readback, C-drive launcher diagnostics, Standard Direct3D 9 switchback, interprocess stop/switch, and missing-component restoration. Add integrity, recovery, concurrency, and rejected-component-replacement regressions; 56 tests pass.
 - Keep Direct3D 12 separate; do not bundle proprietary D3DMetal/GPTK or claim anti-cheat/game compatibility.
-- Correct native DXVK `CreateQuery1` capability validation for unsupported pipeline-statistics queries before object allocation or validation-only success; return `E_INVALIDARG` and null output without a proxy or fabricated counters.
+- Match CrossOver's unavailable-results behavior for unsupported pipeline-statistics queries: create the native query, preserve lifecycle validation, and return `S_FALSE` without fabricated counters or unsupported Vulkan allocations. This replaces the earlier strict rejection that crashed Tropics' D3D10 engine.
 - Cross-compile a separately versioned 32/64-bit component from SHA-pinned public source with a checked-in patch and build recipe; install it offline from the app/CLI resource bundle.
 - Remove the dedicated DXVK update UI and in-place component-replacement path after a user-reported failed update; retain fresh-bottle installation, current-component HUD changes, and Standard rollback. Older selections direct users to a new bottle without automatic migration or deletion.
 - Preserve pinned redistribution notices for the static MinGW/GCC/Winpthreads runtimes and public headers in the resource bundle and installed DXVK receipt; include MagicWine's GPL license in packaged app/CLI output.
 - Exercise native 32/64-bit query rejection and GPU readback, fresh-bottle native graphics enablement/rollback, legacy CLI rejection without side effects, and Tropics' DirectX 11 windowed shortcut through the corrected component. The user confirms Tropics works in a new bottle with very low FPS; do not claim a performance improvement.
+- Ship `1.10.3-magicwine.2` for both architectures, with D3D10 adapter validation delegated to DXVK rather than WineD3D's unrelated capabilities.
+- Use process-local WineD3D Vulkan initialization for DXVK launches, avoiding the built-in DXGI OpenGL/WoW64 crash without requiring the graphics HUD.
+- Verify D3D10 GPU clear/readback and D3D11 shader draw/readback in 32/64-bit managed Wine, and compare query completion against an isolated CrossOver bottle; 62 Swift tests pass after full integration.
+- Include native D3D9 in both architectures, with current-MinGW header compatibility and Vulkan feature requests gated by driver support. D3D9 no longer falls through to WineD3D when DXVK is selected.
+- Verify Tropics' D3D9, D3D10, and D3D11 windowed demos reach world initialization without the HUD, plus native D3D9 triangle rendering/readback on both architectures.
+- Preserve legacy four-DLL rollback and interrupted recovery while managing all six DLLs for new installations; retain pre-existing D3D9 files during legacy restoration. Exercise real legacy rollback, six-DLL enablement, and restoration without altering the saved D3D9 originals.
 
 ## 0.1.0 — 2026-10-11
 

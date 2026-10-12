@@ -1,16 +1,16 @@
 #!/bin/bash
-# Build the public macOS DXVK fork with MagicWine's query-capability fix.
+# Build the public macOS DXVK fork with MagicWine's compatibility fixes.
 # Run: bash scripts/build-dxvk.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.10.3-magicwine.1"
+VERSION="1.10.3-magicwine.2"
 COMPONENT="dxvk-macos-$VERSION"
 COMMIT="8f1e28deed3ad30802f7e1bdff428ec14e6e7817"
 SOURCE_URL="https://codeload.github.com/Gcenx/DXVK-macOS/tar.gz/$COMMIT"
 SOURCE_SHA256="b3fc4a0415b3e4cdfb40497bec191c10f183ec2eb498950aa1f638f176cb996b"
 SOURCE_ARCHIVE="$ROOT/.local/dxvk-magicwine-source.tar.gz"
-PATCH="$ROOT/patches/dxvk-pipeline-statistics.patch"
+PATCHES=("$ROOT/patches/dxvk-pipeline-statistics.patch" "$ROOT/patches/dxvk-d3d10-device.patch" "$ROOT/patches/dxvk-d3d9-macos.patch")
 OUTPUT="$ROOT/Sources/MagicWineCore/Resources/$COMPONENT.tar.gz"
 # Fixed release-day epoch for compiler macros and archive headers.
 export SOURCE_DATE_EPOCH=1683417600
@@ -67,14 +67,16 @@ fi
 verify_source "$SOURCE_ARCHIVE"
 tar -xzf "$SOURCE_ARCHIVE" -C "$WORK"
 SRC="$WORK/DXVK-macOS-$COMMIT"
-patch --batch --forward -p1 -d "$SRC" < "$PATCH"
+for patch_file in "${PATCHES[@]}"; do
+  patch --batch --forward -p1 -d "$SRC" < "$patch_file"
+done
 PAYLOAD="$WORK/$COMPONENT"
 mkdir -p "$PAYLOAD/x32" "$PAYLOAD/x64"
 cp "$SRC/dxvk.conf" "$PAYLOAD/dxvk.conf"
 
 # Keep provenance outside the tightly allowlisted runtime archive.
 python3 - "$WORK/provenance.json" "$SOURCE_URL" "$COMMIT" "$SOURCE_SHA256" \
-  "$PATCH" "$ROOT/scripts/build-dxvk.sh" "$SRC" "$VERSION" <<'PY'
+  "$ROOT/scripts/build-dxvk.sh" "$SRC" "$VERSION" "${PATCHES[@]}" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -94,18 +96,18 @@ for triplet in ('i686-w64-mingw32', 'x86_64-w64-mingw32'):
     for suffix in ('gcc', 'g++', 'ar', 'strip', 'windres', 'ld'):
         name = f'{triplet}-{suffix}'
         tools[name] = {'path': shutil.which(name), 'version': version([name, '-v' if suffix in ('gcc', 'g++') else '--version'])}
-source = pathlib.Path(sys.argv[7])
+source = pathlib.Path(sys.argv[6])
 metadata = {
-    'version': sys.argv[8],
+    'version': sys.argv[7],
     'source': {'repository': 'https://github.com/Gcenx/DXVK-macOS', 'url': sys.argv[2], 'commit': sys.argv[3], 'sha256': sys.argv[4]},
-    'patch': {'path': sys.argv[5], 'sha256': hashlib.sha256(pathlib.Path(sys.argv[5]).read_bytes()).hexdigest()},
-    'script': {'path': sys.argv[6], 'sha256': hashlib.sha256(pathlib.Path(sys.argv[6]).read_bytes()).hexdigest()},
+    'patches': [{'path': name, 'sha256': hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()} for name in sys.argv[8:]],
+    'script': {'path': sys.argv[5], 'sha256': hashlib.sha256(pathlib.Path(sys.argv[5]).read_bytes()).hexdigest()},
     'host': platform.platform(),
     'tools': tools,
     'source_date_epoch': 1683417600,
-    'meson_options': ['--buildtype=release', '--strip', '-Dbuild_id=false', '-Denable_dxgi=false', '-Denable_d3d9=false', '-Denable_d3d10=true', '-Denable_d3d11=true', '-Dc_link_args=-Wl,--no-insert-timestamp', '-Dcpp_link_args=-Wl,--no-insert-timestamp'],
+    'meson_options': ['--buildtype=release', '--strip', '-Dbuild_id=false', '-Denable_dxgi=false', '-Denable_d3d9=true', '-Denable_d3d10=true', '-Denable_d3d11=true', '-Dc_link_args=-Wl,--no-insert-timestamp', '-Dcpp_link_args=-Wl,--no-insert-timestamp'],
     'crossfiles': {name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in ('build-win32.txt', 'build-win64.txt')},
-    'targets': ['src/d3d10/d3d10core.dll', 'src/d3d11/d3d11.dll'],
+    'targets': ['src/d3d9/d3d9.dll', 'src/d3d10/d3d10core.dll', 'src/d3d11/d3d11.dll'],
     'build_directory': str(source.parent),
 }
 pathlib.Path(sys.argv[1]).write_text(json.dumps(metadata, indent=2) + '\n')
@@ -124,17 +126,17 @@ for bits in 64 32; do
     --cross-file "$SRC/build-win$bits.txt" \
     --buildtype release --strip --prefix "$PAYLOAD" \
     --bindir "x$bits" --libdir "x$bits" \
-    -Dbuild_id=false -Denable_dxgi=false -Denable_d3d9=false \
+    -Dbuild_id=false -Denable_dxgi=false -Denable_d3d9=true \
     -Denable_d3d10=true -Denable_d3d11=true \
     -Dc_link_args=-Wl,--no-insert-timestamp \
     -Dcpp_link_args=-Wl,--no-insert-timestamp 2>&1 | tee "$WORK/setup.$bits.log"
-  ninja -C "$BUILD" src/d3d10/d3d10core.dll src/d3d11/d3d11.dll \
+  ninja -C "$BUILD" src/d3d9/d3d9.dll src/d3d10/d3d10core.dll src/d3d11/d3d11.dll \
     2>&1 | tee "$WORK/build.$bits.log"
-  for dll in d3d10core d3d11; do
+  for dll in d3d9 d3d10core d3d11; do
     if [[ "$dll" == d3d10core ]]; then
       built="$BUILD/src/d3d10/$dll.dll"
     else
-      built="$BUILD/src/d3d11/$dll.dll"
+      built="$BUILD/src/$dll/$dll.dll"
     fi
     cp "$built" "$PAYLOAD/x$bits/$dll.dll"
     "$triplet-strip" --strip-unneeded "$PAYLOAD/x$bits/$dll.dll"
@@ -156,7 +158,7 @@ import sys
 payload = pathlib.Path(sys.argv[1])
 output = pathlib.Path(sys.argv[2])
 provenance = pathlib.Path(sys.argv[3])
-files = ('dxvk.conf', 'x32/d3d10core.dll', 'x32/d3d11.dll', 'x64/d3d10core.dll', 'x64/d3d11.dll')
+files = ('dxvk.conf', 'x32/d3d9.dll', 'x32/d3d10core.dll', 'x32/d3d11.dll', 'x64/d3d9.dll', 'x64/d3d10core.dll', 'x64/d3d11.dll')
 hashes = {name: hashlib.sha256((payload / name).read_bytes()).hexdigest() for name in files}
 fd, temporary = tempfile.mkstemp(prefix=output.name + '.', dir=output.parent)
 try:
