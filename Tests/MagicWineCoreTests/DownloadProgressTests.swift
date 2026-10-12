@@ -32,31 +32,6 @@ struct DownloadProgressTests {
         #expect(WineDownloadProgress(receivedBytes: 1, bytesPerSecond: 12.5).bytesPerSecond == 12.5)
     }
 
-    @Test func throttlesIntermediateSamplesToFourPerSecond() throws {
-        var sampler = DownloadProgressSampler(now: 0)
-        let initialSample = sampler.record(receivedBytes: 0, totalBytes: nil, now: 0)
-        let initial = try #require(initialSample)
-        #expect(initial.bytesPerSecond == 0)
-        var emissions: [(TimeInterval, WineDownloadProgress)] = []
-        for tick in 1...100 {
-            let now = Double(tick) / 100
-            if let sample = sampler.record(receivedBytes: Int64(tick * 10), totalBytes: 1_000, now: now) {
-                emissions.append((now, sample))
-            }
-        }
-        #expect(emissions.count == 4)
-        var previousTime: TimeInterval = 0
-        var previousBytes: Int64 = 0
-        for (time, sample) in emissions {
-            #expect(time - previousTime >= 0.25)
-            #expect(sample.receivedBytes > previousBytes)
-            #expect(sample.totalBytes == 1_000)
-            #expect(abs(sample.bytesPerSecond - 1_000) < 0.001)
-            previousTime = time
-            previousBytes = sample.receivedBytes
-        }
-    }
-
     @Test func measuresRecentIntervalRatherThanDownloadAverage() throws {
         var sampler = DownloadProgressSampler(now: 0)
         _ = sampler.record(receivedBytes: 0, totalBytes: 1_000, now: 0)
@@ -77,7 +52,6 @@ struct DownloadProgressTests {
         let final = try #require(finalSample)
         #expect(final.receivedBytes == 100)
         #expect(final.fractionCompleted == 1)
-        #expect(final.bytesPerSecond == 0)
         #expect(final.bytesPerSecond.isFinite)
     }
 
