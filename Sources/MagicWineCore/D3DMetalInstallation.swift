@@ -77,6 +77,15 @@ enum D3DMetalInstallation {
             try FileManager.default.createSymbolicLink(atPath: output.path, withDestinationPath: target)
             try DXVKInstallation.preserveQuarantine(from: payload.appendingPathComponent(name), to: output)
         }
+        // Unix bridges are aliases of one shared image. Preserve their quarantine
+        // on that canonical image too, including archives that expanded the links.
+        for bridge in bridges + optionalBridges {
+            let name = "wine/x86_64-unix/\(bridge).so"
+            if original.files[name] != nil || original.links[name] != nil {
+                try DXVKInstallation.preserveQuarantine(from: payload.appendingPathComponent(name),
+                    to: stage.appendingPathComponent("external/libd3dshared.dylib"))
+            }
+        }
         // Propagate directory/download quarantine even if it was not attached to each library.
         for name in original.files.keys {
             try DXVKInstallation.preserveQuarantine(from: source, to: stage.appendingPathComponent(name))
@@ -127,12 +136,9 @@ enum D3DMetalInstallation {
         guard !component.path.contains(":"), !component.path.contains("\n") else {
             throw failure("The component path cannot contain environment search-path separators.")
         }
-        let external = component.appendingPathComponent("external").path
         return [
             "WINEDLLPATH": component.appendingPathComponent("wine").path,
             "WINEDLLOVERRIDES": "d3d11,d3d12,dxgi=b",
-            "DYLD_LIBRARY_PATH": external + ":" + component.appendingPathComponent(framework + "/Resources").path,
-            "DYLD_FRAMEWORK_PATH": external,
             "CX_APPLEGPTK_LIBD3DSHARED_PATH": component.appendingPathComponent("external/libd3dshared.dylib").path,
             "MTL_HUD_ENABLED": showHUD ? "1" : "0",
         ]
@@ -222,12 +228,16 @@ enum D3DMetalInstallation {
             let type = status.st_mode & mode_t(S_IFMT)
             if type == mode_t(S_IFLNK) {
                 let target = try FileManager.default.destinationOfSymbolicLink(atPath: item.path)
-                let permitted = name == framework + "/D3DMetal" && target == "Versions/Current/D3DMetal" ||
+                let bridgeLink = (bridges + optionalBridges).contains { name == "wine/x86_64-unix/\($0).so" } &&
+                    target == "../../external/libd3dshared.dylib"
+                let frameworkLink = name == framework + "/D3DMetal" && target == "Versions/Current/D3DMetal" ||
                     name == framework + "/Resources" && target == "Versions/Current/Resources" ||
                     name == framework + "/Versions/Current" && target == "A"
-                guard permitted, item.resolvingSymlinksInPath().path.hasPrefix(root.appendingPathComponent(framework).resolvingSymlinksInPath().path + "/"),
+                let owner = bridgeLink ? root : root.appendingPathComponent(framework)
+                guard bridgeLink || frameworkLink,
+                      item.resolvingSymlinksInPath().path.hasPrefix(owner.resolvingSymlinksInPath().path + "/"),
                       FileManager.default.fileExists(atPath: item.path) else {
-                    throw failure("Only nonescaping conventional framework links are accepted: \(name).")
+                    throw failure("Only nonescaping conventional framework and shared-bridge links are accepted: \(name).")
                 }
                 result.links[name] = target
             } else if type == mode_t(S_IFDIR) {
@@ -257,11 +267,12 @@ enum D3DMetalInstallation {
         if let enumerationError { throw enumerationError }
         for bridge in bridges {
             for path in ["wine/x86_64-windows/\(bridge).dll", "wine/x86_64-unix/\(bridge).so"] {
-                guard result.files[path] != nil else { throw failure("Missing required bridge: \(path).") }
+                guard result.files[path] != nil || result.links[path] != nil else { throw failure("Missing required bridge: \(path).") }
             }
         }
         for bridge in optionalBridges {
-            guard (result.files["wine/x86_64-windows/\(bridge).dll"] != nil) == (result.files["wine/x86_64-unix/\(bridge).so"] != nil) else {
+            guard (result.files["wine/x86_64-windows/\(bridge).dll"] != nil) ==
+                    (result.files["wine/x86_64-unix/\(bridge).so"] != nil || result.links["wine/x86_64-unix/\(bridge).so"] != nil) else {
                 throw failure("Incomplete optional bridge pair: \(bridge).")
             }
         }
@@ -271,23 +282,48 @@ enum D3DMetalInstallation {
                      binary + "/Resources/LICENSE", binary + "/Resources/libmetalirconverter.dylib"] {
             guard result.files[path] != nil else { throw failure("Incomplete framework; missing \(path).") }
         }
+        for bridge in bridges + optionalBridges {
+            let name = "wine/x86_64-unix/\(bridge).so"
+            if let hash = result.files[name], hash != result.files["external/libd3dshared.dylib"] {
+                throw failure("The Unix bridge \(name) differs from libd3dshared.dylib. Import a complete matching shared-bridge distribution.")
+            }
+        }
         if versioned {
-            guard result.links[framework + "/D3DMetal"] != nil, result.links[framework + "/Resources"] != nil,
-                  result.links[framework + "/Versions/Current"] == "A" else { throw failure("Incomplete framework aliases.") }
-        } else if !result.links.isEmpty { throw failure("Unexpected links in a flat framework.") }
-        // Reject empty extra directories and mixed flat/versioned representations.
+            // Some extraction tools materialize framework aliases as ordinary copies.
+            // Accept those only when the complete alias payload matches Versions/A.
+            func matchingDirectory(_ alias: String, _ canonical: String) -> Bool {
+                let actual = Dictionary(uniqueKeysWithValues: result.files.compactMap { name, hash in
+                    name.hasPrefix(alias + "/") ? (String(name.dropFirst(alias.count + 1)), hash) : nil
+                })
+                let expected = Dictionary(uniqueKeysWithValues: result.files.compactMap { name, hash in
+                    name.hasPrefix(canonical + "/") ? (String(name.dropFirst(canonical.count + 1)), hash) : nil
+                })
+                return !expected.isEmpty && actual == expected
+            }
+            guard result.links[framework + "/D3DMetal"] != nil ||
+                    result.files[framework + "/D3DMetal"] == result.files[binary + "/D3DMetal"],
+                  result.links[framework + "/Resources"] != nil ||
+                    matchingDirectory(framework + "/Resources", binary + "/Resources"),
+                  result.links[framework + "/Versions/Current"] == "A" ||
+                    matchingDirectory(framework + "/Versions/Current", binary) else {
+                throw failure("Framework aliases are incomplete or differ from Versions/A.")
+            }
+        } else if result.links.keys.contains(where: { $0.hasPrefix(framework + "/") }) || directories.contains(framework + "/Versions") {
+            throw failure("Unexpected version aliases in a flat framework.")
+        }
+        // Reject empty extra directories.
         for directory in directories {
             guard result.files.keys.contains(where: { $0.hasPrefix(directory + "/") }) ||
                   result.links.keys.contains(where: { $0.hasPrefix(directory + "/") }) else { throw failure("Empty unexpected directory: \(directory).") }
         }
-        if versioned, result.files[framework + "/D3DMetal"] != nil { throw failure("Ambiguous framework layout.") }
         return result
     }
 
     private static func allowedDirectory(_ name: String) -> Bool {
         if ["external", "wine", "wine/x86_64-windows", "wine/x86_64-unix", "Notices", framework,
-            framework + "/Versions", framework + "/Versions/A"].contains(name) { return true }
-        return ["/Resources", "/_CodeSignature", "/Versions/A/Resources", "/Versions/A/_CodeSignature"].contains { name == framework + $0 }
+            framework + "/Versions", framework + "/Versions/A", framework + "/Versions/Current"].contains(name) { return true }
+        return ["/Resources", "/_CodeSignature", "/Versions/A/Resources", "/Versions/A/_CodeSignature",
+                "/Versions/Current/Resources", "/Versions/Current/_CodeSignature"].contains { name == framework + $0 }
     }
 
     private static func allowedFile(_ name: String) -> Bool {
@@ -295,7 +331,7 @@ enum D3DMetalInstallation {
         if (bridges + optionalBridges).contains(where: { name == "wine/x86_64-windows/\($0).dll" || name == "wine/x86_64-unix/\($0).so" }) { return true }
         if !name.contains("/") { return isNotice(name) }
         if name.hasPrefix("Notices/"), name.split(separator: "/").count == 2 { return isNotice(String(name.dropFirst(8))) }
-        for prefix in [framework, framework + "/Versions/A"] {
+        for prefix in [framework, framework + "/Versions/A", framework + "/Versions/Current"] {
             if name == prefix + "/D3DMetal" || name == prefix + "/_CodeSignature/CodeResources" { return true }
             if name.hasPrefix(prefix + "/Resources/") {
                 let leaf = String(name.dropFirst((prefix + "/Resources/").count))

@@ -85,6 +85,45 @@ struct D3DMetalInstallationTests {
         #expect(try D3DMetalInstallation.validate(componentID: first.lastPathComponent, paths: fixture.paths) == first)
     }
 
+    @Test func materializedFrameworkAliasesMustMatchTheirCanonicalVersion() async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        try payload(fixture.source)
+        let framework = fixture.source.appendingPathComponent("external/D3DMetal.framework")
+        for (alias, original) in [("D3DMetal", "Versions/A/D3DMetal"),
+                                  ("Resources", "Versions/A/Resources"), ("Versions/Current", "Versions/A")] {
+            let destination = framework.appendingPathComponent(alias)
+            try FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: framework.appendingPathComponent(original), to: destination)
+        }
+        let component = try await D3DMetalInstallation.install(paths: fixture.paths, source: fixture.source)
+        #expect(try D3DMetalInstallation.validate(componentID: component.lastPathComponent, paths: fixture.paths) == component)
+        try Data("different license".utf8).write(to: framework.appendingPathComponent("Versions/Current/Resources/LICENSE"))
+        await #expect(throws: MagicWineError.self) {
+            _ = try await D3DMetalInstallation.install(paths: fixture.paths, source: fixture.source)
+        }
+    }
+
+    @Test(arguments: [true, false])
+    func sharedBridgeAliasesRemainUsableAfterSourceRemoval(versioned: Bool) async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        try payload(fixture.source, versioned: versioned)
+        for bridge in ["d3d11", "d3d12", "dxgi"] {
+            let url = fixture.source.appendingPathComponent("wine/x86_64-unix/\(bridge).so")
+            try FileManager.default.removeItem(at: url)
+            try FileManager.default.createSymbolicLink(atPath: url.path, withDestinationPath: "../../external/libd3dshared.dylib")
+        }
+        let component = try await D3DMetalInstallation.install(paths: fixture.paths, source: fixture.source)
+        try FileManager.default.removeItem(at: fixture.source)
+        #expect(try D3DMetalInstallation.validate(componentID: component.lastPathComponent, paths: fixture.paths) == component)
+    }
+
+    @Test func rejectsMismatchedSharedBridge() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        try payload(fixture.source)
+        try put(macho(minimum: 15 << 16), at: fixture.source, "wine/x86_64-unix/d3d11.so")
+        #expect(throws: MagicWineError.self) { try D3DMetalInstallation.inspectPayload(fixture.source) }
+    }
+
     @Test func missingBridgeAndWrongArchitecturesAreRejected() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         try payload(fixture.source)
@@ -235,9 +274,12 @@ struct D3DMetalInstallationTests {
             #expect(status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG))
         }
         #expect(!FileManager.default.fileExists(atPath: view.appendingPathComponent("lib/wine/x86_64-windows/nvapi64.dll").path))
+        let child = view.appendingPathComponent("lib/wine/x86_64-unix/wine")
+        let processLauncher = fixture.directory.appendingPathComponent("process-launcher")
+        try FileManager.default.linkItem(at: child, to: processLauncher)
         #expect(try GraphicsRuntimeView.prepare(executable: loader, component: fixture.source,
                                                backend: backend, paths: fixture.paths) == selected)
-        try Data("changed copy".utf8).write(to: selected)
+        try Data("changed copy".utf8).write(to: processLauncher)
         #expect(throws: MagicWineError.self) {
             _ = try GraphicsRuntimeView.prepare(executable: loader, component: fixture.source,
                                                 backend: backend, paths: fixture.paths)

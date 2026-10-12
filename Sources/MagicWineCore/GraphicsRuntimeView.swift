@@ -134,7 +134,12 @@ enum GraphicsRuntimeView {
         for name in substitutions {
             let relative = wineRoot + "/" + name
             directories.insert(wineRoot + "/" + String(name.split(separator: "/")[0]))
-            let source = provider.appendingPathComponent(name)
+            // Apple's Unix modules are aliases of one shared dispatch image. Loading
+            // expanded archive copies separately breaks global state and @loader_path
+            // framework lookup. The importer verifies their identical bytes.
+            let source = backend == .d3dmetal && name.hasPrefix("x86_64-unix/")
+                ? component.appendingPathComponent("external/libd3dshared.dylib")
+                : provider.appendingPathComponent(name)
             try requireFile(source)
             try addLink(source, relative, within: component)
         }
@@ -216,8 +221,10 @@ enum GraphicsRuntimeView {
                 guard target.resolvingSymlinksInPath().path == target.path,
                       Link(target, try inspect(target)) == link else { throw failure("The original runtime/provider changed: \(name).") }
             } else if let expectedHash = receipt.hashes[name] {
-                try requireFile(entry)
-                guard try hash(entry) == expectedHash else { throw failure("A private loader copy changed: \(name).") }
+                // Wine creates hard-linked child launchers while running. Their content
+                // remains pinned; reject changed bytes rather than legitimate new names.
+                try requireFile(entry, allowHardLinks: true)
+                guard try hash(entry, allowHardLinks: true) == expectedHash else { throw failure("A private loader copy changed: \(name).") }
             } else if name != "installation.json" { try requireDirectory(entry) }
         }
         if let enumerationError { throw enumerationError }
