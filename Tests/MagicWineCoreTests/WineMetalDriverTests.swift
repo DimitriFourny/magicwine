@@ -21,6 +21,32 @@ struct WineMetalDriverTests {
         try DXMTInstallation.validateDriverExports(info.exports)
     }
 
+    @Test func addedImageRequiresAbsentDestinationIncludingDanglingLinks() throws {
+        let image = try #require(WineMetalDriver.images.first { $0.originalDigest == nil })
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let destination = root.appendingPathComponent("winhttp.so")
+        try WineMetalDriver.validateOriginal(destination, image: image)
+
+        try Data("unexpected image".utf8).write(to: destination)
+        #expect(throws: MagicWineError.self) {
+            try WineMetalDriver.validateOriginal(destination, image: image)
+        }
+        #expect(try String(contentsOf: destination, encoding: .utf8) == "unexpected image")
+        try FileManager.default.removeItem(at: destination)
+        try FileManager.default.createSymbolicLink(at: destination,
+                                                  withDestinationURL: root.appendingPathComponent("missing"))
+        #expect(throws: MagicWineError.self) {
+            try WineMetalDriver.validateOriginal(destination, image: image)
+        }
+        try FileManager.default.removeItem(at: destination)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+        #expect(throws: MagicWineError.self) {
+            try WineMetalDriver.validateOriginal(destination, image: image)
+        }
+    }
+
     @Test func rejectsLinkedLayoutWithoutMutatingItsTarget() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

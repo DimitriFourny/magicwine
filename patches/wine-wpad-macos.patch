@@ -1,0 +1,220 @@
+From: MagicWine contributors
+Subject: [PATCH] winhttp: Respect macOS host proxy autodiscovery policy
+
+Read SystemConfiguration on every discovery call, before the WPAD cache.
+A disabled or absent host setting returns the normal autodetection-failed
+result; enabled, unreadable, malformed and non-macOS policies retain Wine
+discovery. Explicit PAC evaluation and invalid-argument handling are unchanged.
+The pointer-free Unix-call parameters have identical native/WOW64 layouts.
+
+Based on Wine 11.0. New source is LGPL-2.1-or-later, like WinHTTP.
+
+diff --git a/dlls/winhttp/Makefile.in b/dlls/winhttp/Makefile.in
+--- a/dlls/winhttp/Makefile.in
++++ b/dlls/winhttp/Makefile.in
+@@ -1,8 +1,10 @@
+ EXTRADEFS = -D_WINHTTP_INTERNAL_
+ MODULE    = winhttp.dll
++UNIXLIB   = winhttp.so
+ IMPORTLIB = winhttp
+ IMPORTS   = uuid jsproxy user32 advapi32 ws2_32
+ DELAYIMPORTS = oleaut32 crypt32 secur32 iphlpapi dhcpcsvc
++UNIX_LIBS = $(SYSTEMCONFIGURATION_LIBS) $(COREFOUNDATION_LIBS)
+ 
+ SOURCES = \
+ 	cookie.c \
+@@ -12,5 +14,6 @@
+ 	request.c \
+ 	rsrc.rc \
+ 	session.c \
++	unixlib.c \
+ 	url.c \
+ 	winhttp_tlb.idl
+diff --git a/dlls/winhttp/main.c b/dlls/winhttp/main.c
+--- a/dlls/winhttp/main.c
++++ b/dlls/winhttp/main.c
+@@ -29,6 +29,7 @@
+ 
+ #include "wine/debug.h"
+ #include "winhttp_private.h"
++#include "unixlib.h"
+ 
+ HINSTANCE winhttp_instance;
+ 
+@@ -44,6 +45,8 @@
+     case DLL_PROCESS_ATTACH:
+         winhttp_instance = hInstDLL;
+         DisableThreadLibraryCalls(hInstDLL);
++        if (__wine_init_unix_call())
++            WARN( "Host proxy autodiscovery policy unavailable\n" );
+         break;
+     case DLL_PROCESS_DETACH:
+         if (lpv) break;
+diff --git a/dlls/winhttp/session.c b/dlls/winhttp/session.c
+--- a/dlls/winhttp/session.c
++++ b/dlls/winhttp/session.c
+@@ -35,6 +35,7 @@
+ 
+ #include "wine/debug.h"
+ #include "winhttp_private.h"
++#include "unixlib.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(winhttp);
+ 
+@@ -1672,6 +1673,7 @@
+     static HANDLE notifyaddr_handle = INVALID_HANDLE_VALUE;
+     static OVERLAPPED notifyaddr_ol;
+     DWORD bytes;
++    struct proxy_autodiscovery_params params = { TRUE };
+ 
+     TRACE( "%#lx, %p\n", flags, url );
+ 
+@@ -1681,6 +1683,14 @@
+         return FALSE;
+     }
+     *url = NULL;
++
++    /* Consult the host on every call, before reusing any cached WPAD URL. */
++    if (__wine_unixlib_handle &&
++        !WINE_UNIX_CALL( unix_get_proxy_autodiscovery, &params ) && !params.enabled)
++    {
++        SetLastError( ERROR_WINHTTP_AUTODETECTION_FAILED );
++        return FALSE;
++    }
+ 
+     AcquireSRWLockExclusive( &apc_cache_lock );
+     /* FIXME: use NotifyIpInterfaceChange once that's implemented */
+diff --git a/dlls/winhttp/unixlib.c b/dlls/winhttp/unixlib.c
+new file mode 100644
+--- /dev/null
++++ b/dlls/winhttp/unixlib.c
+@@ -0,0 +1,85 @@
++/*
++ * WinHTTP host proxy autodiscovery policy
++ * Copyright 2026 MagicWine contributors
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#ifdef __APPLE__
++#include <SystemConfiguration/SystemConfiguration.h>
++#endif
++
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winternl.h"
++#include "unixlib.h"
++
++static NTSTATUS get_proxy_autodiscovery( void *args )
++{
++    struct proxy_autodiscovery_params *params = args;
++
++    /* An unavailable or malformed host policy must not disable discovery. */
++    params->enabled = TRUE;
++#ifdef __APPLE__
++    {
++        CFDictionaryRef proxies;
++        CFTypeRef value;
++        int enabled = 0;
++        NTSTATUS status = STATUS_SUCCESS;
++
++        if (!(proxies = SCDynamicStoreCopyProxies( NULL ))) return STATUS_NOT_SUPPORTED;
++        value = CFDictionaryGetValue( proxies, kSCPropNetProxiesProxyAutoDiscoveryEnable );
++        if (!value)
++            params->enabled = FALSE;
++        else if (CFGetTypeID( value ) == CFBooleanGetTypeID())
++            params->enabled = CFBooleanGetValue( value );
++        else if (CFGetTypeID( value ) == CFNumberGetTypeID() &&
++                 CFNumberGetValue( value, kCFNumberIntType, &enabled ) &&
++                 (enabled == 0 || enabled == 1))
++            params->enabled = enabled;
++        else
++            status = STATUS_NOT_SUPPORTED;
++
++        CFRelease( proxies );
++        return status;
++    }
++#else
++    return STATUS_NOT_SUPPORTED;
++#endif
++}
++
++const unixlib_entry_t __wine_unix_call_funcs[] =
++{
++    get_proxy_autodiscovery,
++};
++
++C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
++
++#ifdef _WIN64
++/* The sole parameter is an inline 32-bit BOOL, not a native pointer. */
++const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
++{
++    get_proxy_autodiscovery,
++};
++
++C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
++#endif
+diff --git a/dlls/winhttp/unixlib.h b/dlls/winhttp/unixlib.h
+new file mode 100644
+--- /dev/null
++++ b/dlls/winhttp/unixlib.h
+@@ -0,0 +1,39 @@
++/*
++ * WinHTTP host proxy autodiscovery policy
++ * Copyright 2026 MagicWine contributors
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#ifndef __WINHTTP_UNIXLIB_H
++#define __WINHTTP_UNIXLIB_H
++
++#include "wine/unixlib.h"
++
++/* No pointers: the native and WOW64 Unix-call parameter layouts are identical. */
++struct proxy_autodiscovery_params
++{
++    BOOL enabled;
++};
++
++C_ASSERT( sizeof(struct proxy_autodiscovery_params) == 4 );
++
++enum winhttp_unix_funcs
++{
++    unix_get_proxy_autodiscovery,
++    unix_funcs_count
++};
++
++#endif

@@ -1,6 +1,7 @@
-MagicWine Metal and mouse-pointer Wine support: public Wine 11 native and PE
-winemac/ntdll/win32u/user32/wow64win modules with the public Unix-call entry
-point, native pthread TLS, D3DMetal Nt ABI, and mouse-pointer input support.
+MagicWine Metal, mouse-pointer and macOS WPAD Wine support: public Wine 11 native and PE
+winemac/ntdll/win32u/user32/wow64win/winhttp modules with the public Unix-call entry
+point, native pthread TLS, D3DMetal Nt ABI, mouse-pointer input support,
+and macOS SystemConfiguration proxy autodiscovery policy integration.
 The MagicWine D3DMetal/DXMT client-surface bridge is LGPL-2.1-or-later.
 ABI reference: Whisky-App/wine a92f7f06c4cff7291578e58eb95284b00e322799,
 dlls/winemac.drv/macdrv_main.c and macdrv.h (LGPL-2.1-or-later).

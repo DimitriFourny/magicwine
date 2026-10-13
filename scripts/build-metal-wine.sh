@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild Wine 11's Metal ABI and mouse-pointer native/32/64-bit PE modules.
+# Rebuild Wine 11's Metal ABI, mouse-pointer and macOS WPAD native/PE modules.
 # Requires Apple clang 21.0.0 (clang-2100.3.34.2), macOS SDK 26.5, make,
 # flex, Python 3 and both x86_64/i686-w64-mingw32 GCC toolchains.
 # The shipped corresponding-source archive supports the same command offline.
@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 exec python3 - "$ROOT" <<'PY'
 import gzip, hashlib, json, os, pathlib, shutil, subprocess, sys, tarfile, tempfile, zlib
 root = pathlib.Path(sys.argv[1])
-component = 'winemac-wine11.0-metal.2'
+component = 'winemac-wine11.0-metal.3'
 output = root / 'Sources/MagicWineCore/Resources'
 local = root / '.local'
 local.mkdir(exist_ok=True)
@@ -27,6 +27,8 @@ original_native_win32u_hash = '5686c667977ab6d4ea932ea53a2a7b73e51c936988118707b
 original_user32_hashes = {'x86_64':'8ea5e7d18a3d1fc774f56a30c13c1abe0848a3a0af0c2d007e1b852e716a7496',
                           'i386':'6bc9d98d72f6f2e7a17d0c7f9dc62477f5d39ead0373f788ae60fb137b98e925'}
 original_wow64win_hashes = {'x86_64':'9b87f84fb9320cb100f94b562fa15cbcbc9d84b29a0cf345324fb5f17f12cc39'}
+original_winhttp_hashes = {'x86_64':'297679186e7cb8f82e559c02dbd4f40a6b2457e3ac32460f061d142f25f5a857',
+                          'i386':'e1690fcfa7aff4d5add9645bb6b86c1a0a68debdcac75ea2ae55e7a43b7e32da'}
 original_native_ntdll_hash = 'dfb9d4d4d6e7fd3dc537c1bacd69cb3a6bb46ae98311bb5358df3c4eab470c3f'
 original_hash = '7687c4095ea6dba1761052ac19d46db3409a36f2bc827b79c6e32bf779df59f4'
 original_pe_hashes = {'x86_64':'9c52f24507b692ef0fcc0dc5439b8bee63f869f04ef38494bf52e52ddfbfecf0',
@@ -71,6 +73,9 @@ verify(patch,patch_hash)
 pointer_patch = root / 'patches/wine-mouse-pointer.patch'
 pointer_patch_hash = '309c602a281e65c62f71d9e69b19bb270c0e2fa982af4312b2a4a4ebe65536d9'
 verify(pointer_patch,pointer_patch_hash)
+wpad_patch = root / 'patches/wine-wpad-macos.patch'
+wpad_patch_hash = '4742d98e57e4c61c0fe42dc8f5a3db52efa265c0c14f1b917b7f325ccd1e7a20'
+verify(wpad_patch,wpad_patch_hash)
 inputs = work / 'source-inputs'
 inputs.mkdir()
 offline = root / 'source-inputs'
@@ -114,7 +119,10 @@ else:
             verify(inputs / name,digest)
         stock_modules = {'wine/x86_64-unix/win32u.so':original_native_win32u_hash,
                          **{'wine/' + arch + '-windows/user32.dll':digest for arch,digest in original_user32_hashes.items()},
-                         **{'wine/' + arch + '-windows/wow64win.dll':digest for arch,digest in original_wow64win_hashes.items()}}
+                         **{'wine/' + arch + '-windows/wow64win.dll':digest for arch,digest in original_wow64win_hashes.items()},
+                         **{'wine/' + arch + '-windows/winhttp.dll':digest for arch,digest in original_winhttp_hashes.items()}}
+        if 'Wine Stable.app/Contents/Resources/wine/lib/wine/x86_64-unix/winhttp.so' in tar.getnames():
+            raise SystemExit('Stock runtime unexpectedly contains native winhttp.so')
         for name,digest in stock_modules.items():
             member = tar.getmember('Wine Stable.app/Contents/Resources/wine/lib/' + name)
             if not member.isfile() or hashlib.sha256(tar.extractfile(member).read()).hexdigest() != digest:
@@ -123,6 +131,7 @@ with tarfile.open(source) as tar: tar.extractall(work, filter='data')
 src = work / 'wine-wine-11.0'
 run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(patch)],src)
 run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(pointer_patch)],src)
+run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(wpad_patch)],src)
 build = work / 'build'
 build.mkdir()
 # FreeType is dlopened, not linked into win32u. Keep configure's link checks
@@ -155,7 +164,8 @@ units = sorted(p.stem for p in (src / 'dlls/winemac.drv').iterdir()
 objects = ['dlls/winemac.drv/' + unit + '.o' for unit in units]
 native_ntdll = build / 'dlls/ntdll/ntdll.so'
 native_win32u = build / 'dlls/win32u/win32u.so'
-run(['make','-j4',*objects,'dlls/ntdll/ntdll.so','dlls/win32u/win32u.so'],build)
+native_winhttp = build / 'dlls/winhttp/winhttp.so'
+run(['make','-j4',*objects,'dlls/ntdll/ntdll.so','dlls/win32u/win32u.so','dlls/winhttp/winhttp.so'],build)
 frameworks = ['AppKit','Carbon','CoreVideo','Foundation','IOKit','Metal','OpenGL','QuartzCore','Security']
 link = ['clang','-arch','x86_64','-isysroot',str(sdk),'-mmacosx-version-min=10.15','-dynamiclib',
         '-Wl,-headerpad_max_install_names','-Wl,-install_name,winemac.so','-o','winemac.so',*objects,
@@ -167,8 +177,9 @@ pe_drivers = {arch:build / ('dlls/winemac.drv/' + arch + '-windows/winemac.drv')
 pe_ntdll = {arch:build / ('dlls/ntdll/' + arch + '-windows/ntdll.dll') for arch in ('x86_64','i386')}
 pe_user32 = {arch:build / ('dlls/user32/' + arch + '-windows/user32.dll') for arch in ('x86_64','i386')}
 pe_wow64win = {'x86_64':build / 'dlls/wow64win/x86_64-windows/wow64win.dll'}
+pe_winhttp = {arch:build / ('dlls/winhttp/' + arch + '-windows/winhttp.dll') for arch in ('x86_64','i386')}
 run(['make','-j4',*[str(path.relative_to(build)) for path in
-                  [*pe_drivers.values(), *pe_ntdll.values(), *pe_user32.values(), *pe_wow64win.values()]]],build)
+                  [*pe_drivers.values(), *pe_ntdll.values(), *pe_user32.values(), *pe_wow64win.values(), *pe_winhttp.values()]]],build)
 exports = subprocess.check_output(['nm','-gU',str(driver)],text=True)
 required = ['macdrv_functions','magicwine_metal_bridge_v1',
             '__wine_unix_call_funcs','__wine_unix_call_wow64_funcs']
@@ -188,7 +199,18 @@ if '@rpath/ntdll.so' not in win32u_linkage: raise SystemExit('Wrong native win32
 win32u_architecture = subprocess.check_output(['file',str(native_win32u)],text=True)
 if 'Mach-O 64-bit dynamically linked shared library x86_64' not in win32u_architecture:
     raise SystemExit('Wrong native win32u architecture')
-for module,module_linkage in ((driver,linkage),(native_win32u,win32u_linkage)):
+winhttp_linkage = subprocess.check_output(['otool','-L',str(native_winhttp)],text=True)
+for dependency in ('@rpath/ntdll.so','/System/Library/Frameworks/SystemConfiguration.framework/',
+                   '/System/Library/Frameworks/CoreFoundation.framework/'):
+    if dependency not in winhttp_linkage: raise SystemExit('Missing native winhttp dependency: ' + dependency)
+winhttp_architecture = subprocess.check_output(['file',str(native_winhttp)],text=True)
+if 'Mach-O 64-bit dynamically linked shared library x86_64' not in winhttp_architecture:
+    raise SystemExit('Wrong native winhttp architecture')
+winhttp_exports = subprocess.check_output(['nm','-gU',str(native_winhttp)],text=True)
+for name in ('__wine_unix_call_funcs','__wine_unix_call_wow64_funcs'):
+    if not any(line.endswith(' _'+name) for line in winhttp_exports.splitlines()):
+        raise SystemExit('Missing native winhttp export: ' + name)
+for module,module_linkage in ((driver,linkage),(native_win32u,win32u_linkage),(native_winhttp,winhttp_linkage)):
     for dependency in module_linkage.splitlines()[1:]:
         name = dependency.strip().split(' (',1)[0]
         if not name.startswith(('@rpath/','/usr/lib/','/System/Library/')) and name != 'winemac.so':
@@ -196,17 +218,20 @@ for module,module_linkage in ((driver,linkage),(native_win32u,win32u_linkage)):
 payload = work / (component + '-source')
 payload.mkdir()
 shutil.copytree(inputs,payload / 'source-inputs')
-for name in ('scripts/build-metal-wine.sh','patches/wine-metal-driver.patch','patches/wine-mouse-pointer.patch'):
+for name in ('scripts/build-metal-wine.sh','patches/wine-metal-driver.patch','patches/wine-mouse-pointer.patch',
+             'patches/wine-wpad-macos.patch','Tests/WineProxyTests.c','Tests/WineProxyPolicyTests.c',
+             'scripts/test-wine-proxy.sh'):
     target = payload / name
     target.parent.mkdir(parents=True,exist_ok=True)
     shutil.copyfile(root / name,target)
 shutil.copytree(src / 'dlls/winemac.drv',payload / 'patched-driver')
 shutil.copytree(src / 'dlls/ntdll',payload / 'patched-ntdll')
-for module in ('win32u','user32','wow64win'):
+for module in ('win32u','user32','wow64win','winhttp'):
     shutil.copytree(src / 'dlls' / module,payload / ('patched-' + module))
-license_text = ('MagicWine Metal and mouse-pointer Wine support: public Wine 11 native and PE\n'
-                'winemac/ntdll/win32u/user32/wow64win modules with the public Unix-call entry\n'
-                'point, native pthread TLS, D3DMetal Nt ABI, and mouse-pointer input support.\n'
+license_text = ('MagicWine Metal, mouse-pointer and macOS WPAD Wine support: public Wine 11 native and PE\n'
+                'winemac/ntdll/win32u/user32/wow64win/winhttp modules with the public Unix-call entry\n'
+                'point, native pthread TLS, D3DMetal Nt ABI, mouse-pointer input support,\n'
+                'and macOS SystemConfiguration proxy autodiscovery policy integration.\n'
                 'The MagicWine D3DMetal/DXMT client-surface bridge is LGPL-2.1-or-later.\n'
                 'ABI reference: Whisky-App/wine a92f7f06c4cff7291578e58eb95284b00e322799,\n'
                 'dlls/winemac.drv/macdrv_main.c and macdrv.h (LGPL-2.1-or-later).\n'
@@ -256,14 +281,24 @@ for arch,path in pe_wow64win.items():
     compressed_wow64win[arch] = work / (component + '-' + arch + '.wow64win.deflate')
     compressor = zlib.compressobj(wbits=-15)
     compressed_wow64win[arch].write_bytes(compressor.compress(path.read_bytes()) + compressor.flush())
+compressed_native_winhttp = work / (component + '-winhttp.so.deflate')
+compressor = zlib.compressobj(wbits=-15)
+compressed_native_winhttp.write_bytes(compressor.compress(native_winhttp.read_bytes()) + compressor.flush())
+compressed_winhttp = {}
+for arch,path in pe_winhttp.items():
+    compressed_winhttp[arch] = work / (component + '-' + arch + '.winhttp.deflate')
+    compressor = zlib.compressobj(wbits=-15)
+    compressed_winhttp[arch].write_bytes(compressor.compress(path.read_bytes()) + compressor.flush())
 metadata = {'component':component,'source':{'url':source_url,'sha256':source_hash},
             'stock':{'url':stock_url,'sha256':stock_hash,'original_driver_sha256':original_hash,
                      'original_pe_sha256':original_pe_hashes,'original_ntdll_sha256':original_ntdll_hashes,
                      'original_native_ntdll_sha256':original_native_ntdll_hash,
                      'original_native_win32u_sha256':original_native_win32u_hash,
                      'original_user32_sha256':original_user32_hashes,
-                     'original_wow64win_sha256':original_wow64win_hashes},
+                     'original_wow64win_sha256':original_wow64win_hashes,
+                     'original_winhttp_sha256':original_winhttp_hashes},
             'patch_sha256':patch_hash,'mouse_pointer_patch_sha256':pointer_patch_hash,
+            'wpad_macos_patch_sha256':wpad_patch_hash,
             'link_inputs_sha256':link_hashes,
             'freetype':{'url':freetype_url,'sha256':freetype_hash,'version':'2.13.3',
                         'runtime_soname':'@loader_path/../../libfreetype.6.dylib',
@@ -284,6 +319,11 @@ metadata = {'component':component,'source':{'url':source_url,'sha256':source_has
             'native_win32u_sha256':sha(native_win32u),
             'compressed_native_win32u_sha256':sha(compressed_native_win32u),
             'native_win32u_linkage':win32u_linkage.replace(str(native_win32u),'win32u.so'),
+            'native_winhttp_sha256':sha(native_winhttp),
+            'compressed_native_winhttp_sha256':sha(compressed_native_winhttp),
+            'native_winhttp_linkage':winhttp_linkage.replace(str(native_winhttp),'winhttp.so'),
+            'winhttp_sha256':{arch:sha(path) for arch,path in pe_winhttp.items()},
+            'compressed_winhttp_sha256':{arch:sha(path) for arch,path in compressed_winhttp.items()},
             'compiler':clang_version.strip(),'sdk':'26.5','deployment_target':'10.15',
             'source_date_epoch':epoch,'driver_sha256':sha(driver),
             'native_ntdll_sha256':sha(native_ntdll),
@@ -313,8 +353,10 @@ for path,name in [(archive,archive.name),(payload / 'LICENSE-WINE-METAL.txt','LI
                   (payload / 'provenance.json',component+'-provenance.json'),(compressed_driver,compressed_driver.name),
                   (compressed_native_ntdll,compressed_native_ntdll.name),
                   (compressed_native_win32u,compressed_native_win32u.name),
+                  (compressed_native_winhttp,compressed_native_winhttp.name),
                   *[(path,path.name) for path in [*compressed_pe.values(), *compressed_ntdll.values(),
-                                                  *compressed_user32.values(), *compressed_wow64win.values()]]]:
+                                                  *compressed_user32.values(), *compressed_wow64win.values(),
+                                                  *compressed_winhttp.values()]]]:
     temporary = output / ('.'+name+'.new')
     shutil.copyfile(path,temporary)
     temporary.replace(output / name)
