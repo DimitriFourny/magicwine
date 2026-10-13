@@ -3,7 +3,27 @@ import Foundation
 /// Some BLE gamepads expose battery charge to Bluetooth but not GameController.
 /// Use macOS's report rather than private Bluetooth APIs; call off the input/UI queue.
 enum GamepadBluetoothBattery {
-    static func read() -> [String: Double] {
+    struct Reading: Equatable, Sendable {
+        var batteryLevel: Double?
+    }
+
+    struct RefreshSchedule {
+        private(set) var nextUpdate = 0.0
+        private var discoveryDeadline = 0.0
+
+        mutating func reset(at now: TimeInterval) {
+            nextUpdate = now
+            discoveryDeadline = now + 10
+        }
+
+        mutating func complete(at now: TimeInterval, missingBattery: Bool) {
+            // Bluetooth battery discovery can lag the GameController connection.
+            // Retry briefly, without polling unsupported controllers indefinitely.
+            nextUpdate = now + (missingBattery && now < discoveryDeadline ? 1 : 30)
+        }
+    }
+
+    static func read() -> [String: Reading] {
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
@@ -16,16 +36,16 @@ enum GamepadBluetoothBattery {
             let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             guard process.terminationStatus == 0 else { return [:] }
-            return levels(from: data)
+            return readings(from: data)
         } catch {
             return [:]
         }
     }
 
-    static func levels(from data: Data) -> [String: Double] {
+    static func readings(from data: Data) -> [String: Reading] {
         guard let report = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let adapters = report["SPBluetoothDataType"] as? [[String: Any]] else { return [:] }
-        var levels: [String: Double] = [:]
+        var readings: [String: Reading] = [:]
         var seen = Set<String>()
         for adapter in adapters {
             guard let connected = adapter["device_connected"] as? [[String: [String: Any]]] else { continue }
@@ -34,17 +54,20 @@ enum GamepadBluetoothBattery {
                     // GCController provides a name, not a public Bluetooth address.
                     // Duplicate names cannot safely identify an individual battery.
                     guard seen.insert(name).inserted else {
-                        levels.removeValue(forKey: name)
+                        readings.removeValue(forKey: name)
                         continue
                     }
-                    guard device["device_minorType"] as? String == "Gamepad",
-                          let text = device["device_batteryLevelMain"] as? String,
-                          text.hasSuffix("%"), let percent = Double(text.dropLast()),
-                          percent.isFinite, (0...100).contains(percent) else { continue }
-                    levels[name] = percent / 100
+                    guard device["device_minorType"] as? String == "Gamepad" else { continue }
+                    var reading = Reading()
+                    if let text = device["device_batteryLevelMain"] as? String,
+                       text.hasSuffix("%"), let percent = Double(text.dropLast()),
+                       percent.isFinite, (0...100).contains(percent) {
+                        reading.batteryLevel = percent / 100
+                    }
+                    readings[name] = reading
                 }
             }
         }
-        return levels
+        return readings
     }
 }

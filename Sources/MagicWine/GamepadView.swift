@@ -299,10 +299,20 @@ struct GamepadView: View {
         WineCard(title: "Device Information", icon: "info.circle") {
             informationRow("Controller", value: device?.name ?? "Not connected")
             Divider().overlay(WineTheme.border)
+            informationRow("Connection", value: device.map { $0.isBluetooth ? "Bluetooth" : "Not reported" } ?? "—") {
+                if device?.isBluetooth == true {
+                    BluetoothSymbol()
+                        .stroke(.blue, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                        .frame(width: 9, height: 14)
+                }
+            }
             informationRow("Player", value: device.map {
                 $0.playerIndex.map { "\($0 + 1) of 4" } ?? "No XInput slot"
             } ?? "—")
-            informationRow("Battery", value: batteryDescription)
+            informationRow("Battery", value: batteryDescription) {
+                Image(systemName: batterySymbol)
+                    .foregroundStyle(device?.batteryLevel.map { $0 <= 0.2 ? Color.red : WineTheme.success } ?? WineTheme.muted)
+            }
             informationRow("Haptics", value: device.map { $0.supportsHaptics ? "Supported" : "Unavailable" } ?? "—")
             informationRow("Output", value: "XInput")
             Divider().overlay(WineTheme.border)
@@ -322,11 +332,27 @@ struct GamepadView: View {
         return "\(Int((battery * 100).rounded()))%\(device.batteryCharging ? " · Charging" : "")"
     }
 
-    private func informationRow(_ title: String, value: String) -> some View {
+    private var batterySymbol: String {
+        guard let device, let level = device.batteryLevel else { return "battery.0percent" }
+        if device.batteryCharging { return "battery.100percent.bolt" }
+        switch level {
+        case ..<0.1: return "battery.0percent"
+        case ..<0.35: return "battery.25percent"
+        case ..<0.65: return "battery.50percent"
+        case ..<0.9: return "battery.75percent"
+        default: return "battery.100percent"
+        }
+    }
+
+    private func informationRow(_ title: String, value: String,
+                                @ViewBuilder icon: () -> some View = { EmptyView() }) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title).foregroundStyle(WineTheme.muted)
             Spacer(minLength: 4)
-            Text(value).multilineTextAlignment(.trailing).textSelection(.enabled)
+            HStack(spacing: 6) {
+                icon().accessibilityHidden(true)
+                Text(value).multilineTextAlignment(.trailing).textSelection(.enabled)
+            }
         }
         .font(.system(size: 12))
         .accessibilityElement(children: .combine)
