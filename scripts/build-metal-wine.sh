@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild Wine 11's native and 32/64-bit PE winemac/ntdll Metal ABI modules.
+# Rebuild Wine 11's Metal ABI and mouse-pointer native/32/64-bit PE modules.
 # Requires Apple clang 21.0.0 (clang-2100.3.34.2), macOS SDK 26.5, make,
 # flex, Python 3 and both x86_64/i686-w64-mingw32 GCC toolchains.
 # The shipped corresponding-source archive supports the same command offline.
@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 exec python3 - "$ROOT" <<'PY'
 import gzip, hashlib, json, os, pathlib, shutil, subprocess, sys, tarfile, tempfile, zlib
 root = pathlib.Path(sys.argv[1])
-component = 'winemac-wine11.0-metal.1'
+component = 'winemac-wine11.0-metal.2'
 output = root / 'Sources/MagicWineCore/Resources'
 local = root / '.local'
 local.mkdir(exist_ok=True)
@@ -20,7 +20,13 @@ source_hash = 'f09e8153aa46a581d2b56a5b1363b04832070b9409d9244a68cf482b243ff14a'
 stock_url = 'https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0_1/wine-stable-11.0_1-osx64.tar.xz'
 stock_hash = 'b50dc50ec7f41d58b115a6b685d4d1315ba3c797bd3aa0f49213f2703cb82388'
 patch_hash = '64babc5970dcdc39e0e22120deaffe3de1dffabd6a4c9c5de4cda88b2ae7f59b'
-link_hashes = {'win32u.so': '5686c667977ab6d4ea932ea53a2a7b73e51c936988118707b85c7619db1dfb98'}
+link_hashes = {'libfreetype.6.dylib': 'df39a1b319ea882ca04bc2c800bfb7d225335890eefa48a173df856edf2d7946'}
+freetype_url = 'https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz'
+freetype_hash = '0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289'
+original_native_win32u_hash = '5686c667977ab6d4ea932ea53a2a7b73e51c936988118707b85c7619db1dfb98'
+original_user32_hashes = {'x86_64':'8ea5e7d18a3d1fc774f56a30c13c1abe0848a3a0af0c2d007e1b852e716a7496',
+                          'i386':'6bc9d98d72f6f2e7a17d0c7f9dc62477f5d39ead0373f788ae60fb137b98e925'}
+original_wow64win_hashes = {'x86_64':'9b87f84fb9320cb100f94b562fa15cbcbc9d84b29a0cf345324fb5f17f12cc39'}
 original_native_ntdll_hash = 'dfb9d4d4d6e7fd3dc537c1bacd69cb3a6bb46ae98311bb5358df3c4eab470c3f'
 original_hash = '7687c4095ea6dba1761052ac19d46db3409a36f2bc827b79c6e32bf779df59f4'
 original_pe_hashes = {'x86_64':'9c52f24507b692ef0fcc0dc5439b8bee63f869f04ef38494bf52e52ddfbfecf0',
@@ -30,12 +36,13 @@ original_ntdll_hashes = {'x86_64':'d63d10c77a55105d68bf1935ff10137d2ab5e8a4c6ae3
 epoch = 1768262400
 sdk = pathlib.Path('/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk')
 if not sdk.is_dir(): raise SystemExit('macOS SDK 26.5 is required; no SDK/toolchain is installed by this script')
-for tool in ('clang', 'make', 'bison', 'flex', 'patch', 'nm', 'otool', 'x86_64-w64-mingw32-gcc', 'i686-w64-mingw32-gcc'):
+for tool in ('clang', 'make', 'bison', 'flex', 'patch', 'nm', 'otool', 'file', 'install_name_tool', 'x86_64-w64-mingw32-gcc', 'i686-w64-mingw32-gcc'):
     if not shutil.which(tool): raise SystemExit('Missing prerequisite: ' + tool)
 clang_version = subprocess.check_output(['clang', '--version'], text=True)
 if 'clang-2100.3.34.2' not in clang_version: raise SystemExit('Pinned Apple clang-2100.3.34.2 is required')
 env = os.environ.copy()
-for key in ('CC','CXX','CFLAGS','CXXFLAGS','CPPFLAGS','LDFLAGS','CPATH','C_INCLUDE_PATH','CPLUS_INCLUDE_PATH','LIBRARY_PATH','WINEPREFIX','WINEARCH','SDKROOT','MACOSX_DEPLOYMENT_TARGET'):
+for key in ('CC','CXX','CFLAGS','CXXFLAGS','CPPFLAGS','LDFLAGS','CPATH','C_INCLUDE_PATH','CPLUS_INCLUDE_PATH','LIBRARY_PATH','WINEPREFIX','WINEARCH','SDKROOT','MACOSX_DEPLOYMENT_TARGET',
+            'FREETYPE_CFLAGS','FREETYPE_LIBS','FREETYPE_CONFIG','FREETYPE2_CONFIG','PKG_CONFIG','PKG_CONFIG_PATH','PKG_CONFIG_LIBDIR','CONFIG_SITE'):
     env.pop(key, None)
 env.update(LC_ALL='C', TZ='UTC', COPYFILE_DISABLE='1', SOURCE_DATE_EPOCH=str(epoch))
 def sha(path):
@@ -61,9 +68,20 @@ def run(args, cwd):
         raise SystemExit('Build failed; full log: ' + str(work / 'build.log'))
 patch = root / 'patches/wine-metal-driver.patch'
 verify(patch,patch_hash)
+pointer_patch = root / 'patches/wine-mouse-pointer.patch'
+pointer_patch_hash = '309c602a281e65c62f71d9e69b19bb270c0e2fa982af4312b2a4a4ebe65536d9'
+verify(pointer_patch,pointer_patch_hash)
 inputs = work / 'source-inputs'
 inputs.mkdir()
 offline = root / 'source-inputs'
+# Use architecture-independent headers from a pinned public source release, not
+# whichever Homebrew architecture/version happens to be installed on the host.
+freetype_archive = offline / 'freetype-2.13.3.tar.xz' if offline.is_dir() else fetch(
+    freetype_url,local / 'freetype-2.13.3.tar.xz',freetype_hash)
+verify(freetype_archive,freetype_hash)
+shutil.copyfile(freetype_archive,inputs / freetype_archive.name)
+with tarfile.open(freetype_archive) as tar: tar.extractall(work, filter='data')
+freetype = work / 'freetype-2.13.3'
 # Apple's Bison 2.3 cannot configure Wine. Build the pinned public tool locally;
 # it never replaces or installs any developer tool outside this build directory.
 bison_hash = '06c9e13bdf7eb24d4ceb6b59205a4f67c2c7e7213119644430fe82fbd14a0abb'
@@ -90,41 +108,67 @@ else:
     stock = fetch(stock_url,local / 'wine-stable-11.0_1-osx64.tar.xz',stock_hash)
     with tarfile.open(stock) as tar:
         for name,digest in link_hashes.items():
-            member = tar.getmember('Wine Stable.app/Contents/Resources/wine/lib/wine/x86_64-unix/' + name)
+            member = tar.getmember('Wine Stable.app/Contents/Resources/wine/lib/' + name)
             if not member.isfile(): raise SystemExit('Link input is not a regular file')
             (inputs / name).write_bytes(tar.extractfile(member).read())
             verify(inputs / name,digest)
+        stock_modules = {'wine/x86_64-unix/win32u.so':original_native_win32u_hash,
+                         **{'wine/' + arch + '-windows/user32.dll':digest for arch,digest in original_user32_hashes.items()},
+                         **{'wine/' + arch + '-windows/wow64win.dll':digest for arch,digest in original_wow64win_hashes.items()}}
+        for name,digest in stock_modules.items():
+            member = tar.getmember('Wine Stable.app/Contents/Resources/wine/lib/' + name)
+            if not member.isfile() or hashlib.sha256(tar.extractfile(member).read()).hexdigest() != digest:
+                raise SystemExit('Stock module SHA-256/file-type mismatch: ' + name)
 with tarfile.open(source) as tar: tar.extractall(work, filter='data')
 src = work / 'wine-wine-11.0'
 run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(patch)],src)
+run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(pointer_patch)],src)
 build = work / 'build'
 build.mkdir()
+# FreeType is dlopened, not linked into win32u. Keep configure's link checks
+# architecture-correct, then resolve dlopen relative to lib/wine/x86_64-unix
+# rather than relying on the launching shell's dynamic-library search path.
+font_link = work / 'font-link'
+font_link.mkdir()
+shutil.copyfile(inputs / 'libfreetype.6.dylib',font_link / 'libfreetype.6.dylib')
+(font_link / 'libfreetype.dylib').symlink_to('libfreetype.6.dylib')
 flags = '-O2 -g0 -arch x86_64 -isysroot ' + str(sdk) + ' -mmacosx-version-min=10.15 -ffile-prefix-map=' + str(work) + '=.'
 run([str(src / 'configure'),'--build=x86_64-apple-darwin','--host=x86_64-apple-darwin',
-     '--enable-archs=i386,x86_64','--disable-tests','--without-x','--without-freetype',
+     '--enable-archs=i386,x86_64','--disable-tests','--without-x','--with-freetype','--without-fontconfig','--with-vulkan',
+     'PKG_CONFIG=false','FREETYPE_CFLAGS=-I' + str(freetype / 'include'),
+     'FREETYPE_LIBS=-L' + str(font_link) + ' -lfreetype',
+     'ac_cv_lib_soname_freetype=@loader_path/../../libfreetype.6.dylib',
+     'ac_cv_lib_soname_vulkan=',
+     'ac_cv_lib_soname_MoltenVK=@loader_path/../../libMoltenVK.dylib',
      'CC=clang -arch x86_64', 'CFLAGS=' + flags,
      'x86_64_CFLAGS=-O2 -g0 -ffile-prefix-map=' + str(work) + '=.',
      'i386_CFLAGS=-O2 -g0 -ffile-prefix-map=' + str(work) + '=.',
      'LDFLAGS=-arch x86_64 -isysroot ' + str(sdk) + ' -mmacosx-version-min=10.15'],build)
-# Build the complete Unix driver and matching PE driver/ntdll modules.
-# The native driver and ntdll retain the pinned stock win32u ABI.
+config_header = (build / 'include/config.h').read_text()
+if '#define HAVE_FT2BUILD_H 1' not in config_header or '#define SONAME_LIBFREETYPE "@loader_path/../../libfreetype.6.dylib"' not in config_header:
+    raise SystemExit('Native win32u requires FreeType headers and the stock runtime-local soname')
+if '#define SONAME_LIBVULKAN "@loader_path/../../libMoltenVK.dylib"' not in config_header:
+    raise SystemExit('Native win32u must preserve Vulkan through the stock runtime-local MoltenVK loader')
+# Build the native driver with the matching rebuilt win32u/ntdll modules.
 units = sorted(p.stem for p in (src / 'dlls/winemac.drv').iterdir()
                if p.suffix == '.m' or (p.suffix == '.c' and '#pragma makedep unix' in p.read_text()))
 objects = ['dlls/winemac.drv/' + unit + '.o' for unit in units]
 native_ntdll = build / 'dlls/ntdll/ntdll.so'
-run(['make','-j4',*objects,'dlls/ntdll/ntdll.so'],build)
+native_win32u = build / 'dlls/win32u/win32u.so'
+run(['make','-j4',*objects,'dlls/ntdll/ntdll.so','dlls/win32u/win32u.so'],build)
 frameworks = ['AppKit','Carbon','CoreVideo','Foundation','IOKit','Metal','OpenGL','QuartzCore','Security']
 link = ['clang','-arch','x86_64','-isysroot',str(sdk),'-mmacosx-version-min=10.15','-dynamiclib',
         '-Wl,-headerpad_max_install_names','-Wl,-install_name,winemac.so','-o','winemac.so',*objects,
-        str(native_ntdll),str(inputs / 'win32u.so')]
+        str(native_ntdll),str(native_win32u)]
 for framework in frameworks: link += ['-framework',framework]
 run(link,build)
 driver = build / 'winemac.so'
-# Keep native linkage runtime-local, including the unchanged stock win32u input.
-run(['install_name_tool','-change','win32u.so','@rpath/win32u.so',str(driver)],build)
 pe_drivers = {arch:build / ('dlls/winemac.drv/' + arch + '-windows/winemac.drv') for arch in ('x86_64','i386')}
 pe_ntdll = {arch:build / ('dlls/ntdll/' + arch + '-windows/ntdll.dll') for arch in ('x86_64','i386')}
-run(['make','-j4',*[str(path.relative_to(build)) for path in [*pe_drivers.values(), *pe_ntdll.values()]]],build)
+pe_user32 = {arch:build / ('dlls/user32/' + arch + '-windows/user32.dll') for arch in ('x86_64','i386')}
+pe_wow64win = {'x86_64':build / 'dlls/wow64win/x86_64-windows/wow64win.dll'}
+run(['make','-j4',*[str(path.relative_to(build)) for path in
+                  [*pe_drivers.values(), *pe_ntdll.values(), *pe_user32.values(), *pe_wow64win.values()]]],build)
 exports = subprocess.check_output(['nm','-gU',str(driver)],text=True)
 required = ['macdrv_functions','magicwine_metal_bridge_v1',
             '__wine_unix_call_funcs','__wine_unix_call_wow64_funcs']
@@ -139,17 +183,30 @@ for name in ('__wine_main','magicwine_metal_ntdll_v1','NtCreateThreadEx','NtClos
              'NtReleaseSemaphore','NtCreateEvent','NtSetEvent','NtResetEvent','NtClearEvent','NtPulseEvent'):
     if not any(line.endswith(' _'+name) for line in ntdll_exports.splitlines()):
         raise SystemExit('Missing native ntdll export: '+name)
+win32u_linkage = subprocess.check_output(['otool','-L',str(native_win32u)],text=True)
+if '@rpath/ntdll.so' not in win32u_linkage: raise SystemExit('Wrong native win32u linkage')
+win32u_architecture = subprocess.check_output(['file',str(native_win32u)],text=True)
+if 'Mach-O 64-bit dynamically linked shared library x86_64' not in win32u_architecture:
+    raise SystemExit('Wrong native win32u architecture')
+for module,module_linkage in ((driver,linkage),(native_win32u,win32u_linkage)):
+    for dependency in module_linkage.splitlines()[1:]:
+        name = dependency.strip().split(' (',1)[0]
+        if not name.startswith(('@rpath/','/usr/lib/','/System/Library/')) and name != 'winemac.so':
+            raise SystemExit('Non-runtime-local native dependency in ' + module.name + ': ' + name)
 payload = work / (component + '-source')
 payload.mkdir()
 shutil.copytree(inputs,payload / 'source-inputs')
-for name in ('scripts/build-metal-wine.sh','patches/wine-metal-driver.patch'):
+for name in ('scripts/build-metal-wine.sh','patches/wine-metal-driver.patch','patches/wine-mouse-pointer.patch'):
     target = payload / name
     target.parent.mkdir(parents=True,exist_ok=True)
     shutil.copyfile(root / name,target)
 shutil.copytree(src / 'dlls/winemac.drv',payload / 'patched-driver')
 shutil.copytree(src / 'dlls/ntdll',payload / 'patched-ntdll')
-license_text = ('MagicWine Metal Wine support: public Wine 11 native and PE winemac/ntdll modules\n'
-                'with the public Unix-call entry point, native pthread TLS, and D3DMetal Nt ABI.\n'
+for module in ('win32u','user32','wow64win'):
+    shutil.copytree(src / 'dlls' / module,payload / ('patched-' + module))
+license_text = ('MagicWine Metal and mouse-pointer Wine support: public Wine 11 native and PE\n'
+                'winemac/ntdll/win32u/user32/wow64win modules with the public Unix-call entry\n'
+                'point, native pthread TLS, D3DMetal Nt ABI, and mouse-pointer input support.\n'
                 'The MagicWine D3DMetal/DXMT client-surface bridge is LGPL-2.1-or-later.\n'
                 'ABI reference: Whisky-App/wine a92f7f06c4cff7291578e58eb95284b00e322799,\n'
                 'dlls/winemac.drv/macdrv_main.c and macdrv.h (LGPL-2.1-or-later).\n'
@@ -160,7 +217,11 @@ license_text = ('MagicWine Metal Wine support: public Wine 11 native and PE wine
                 'Original Wine file copyright notices are retained in the corresponding source.\n'
                 'Rebuild offline: extract the adjacent -source.tar.gz and run bash scripts/build-metal-wine.sh.\n'
                 'The source bundle includes the complete original Wine 11 source archive,\n'
-                'patch, recipe, and public pinned native link inputs.\n\n' + (src / 'COPYING.LIB').read_text())
+                'patches, recipe, and public pinned native link inputs. FreeType 2.13.3 source\n'
+                'and its FTL/GPLv2 licenses are included in source-inputs/freetype-2.13.3.tar.xz;\n'
+                'only its headers and a stock configure-link input are used. The rebuilt\n'
+                'win32u loads the existing runtime libfreetype.6.dylib without absolute paths.\n\n' +
+                (src / 'COPYING.LIB').read_text())
 (payload / 'LICENSE-WINE-METAL.txt').write_text(license_text)
 # Package opaque bytes so Swift release resource processing cannot rewrite the
 # Mach-O image (for example by stripping symbols) after its hash is pinned.
@@ -182,11 +243,32 @@ for arch, path in pe_ntdll.items():
     compressed_ntdll[arch] = work / (component + '-' + arch + '.ntdll.deflate')
     compressor = zlib.compressobj(wbits=-15)
     compressed_ntdll[arch].write_bytes(compressor.compress(path.read_bytes()) + compressor.flush())
+compressed_native_win32u = work / (component + '-win32u.so.deflate')
+compressor = zlib.compressobj(wbits=-15)
+compressed_native_win32u.write_bytes(compressor.compress(native_win32u.read_bytes()) + compressor.flush())
+compressed_user32 = {}
+for arch,path in pe_user32.items():
+    compressed_user32[arch] = work / (component + '-' + arch + '.user32.deflate')
+    compressor = zlib.compressobj(wbits=-15)
+    compressed_user32[arch].write_bytes(compressor.compress(path.read_bytes()) + compressor.flush())
+compressed_wow64win = {}
+for arch,path in pe_wow64win.items():
+    compressed_wow64win[arch] = work / (component + '-' + arch + '.wow64win.deflate')
+    compressor = zlib.compressobj(wbits=-15)
+    compressed_wow64win[arch].write_bytes(compressor.compress(path.read_bytes()) + compressor.flush())
 metadata = {'component':component,'source':{'url':source_url,'sha256':source_hash},
             'stock':{'url':stock_url,'sha256':stock_hash,'original_driver_sha256':original_hash,
                      'original_pe_sha256':original_pe_hashes,'original_ntdll_sha256':original_ntdll_hashes,
-                     'original_native_ntdll_sha256':original_native_ntdll_hash},
-            'patch_sha256':patch_hash,'link_inputs_sha256':link_hashes,
+                     'original_native_ntdll_sha256':original_native_ntdll_hash,
+                     'original_native_win32u_sha256':original_native_win32u_hash,
+                     'original_user32_sha256':original_user32_hashes,
+                     'original_wow64win_sha256':original_wow64win_hashes},
+            'patch_sha256':patch_hash,'mouse_pointer_patch_sha256':pointer_patch_hash,
+            'link_inputs_sha256':link_hashes,
+            'freetype':{'url':freetype_url,'sha256':freetype_hash,'version':'2.13.3',
+                        'runtime_soname':'@loader_path/../../libfreetype.6.dylib',
+                        'link_input_stock_member':'Wine Stable.app/Contents/Resources/wine/lib/libfreetype.6.dylib'},
+            'vulkan_runtime_soname':'@loader_path/../../libMoltenVK.dylib',
             'metal_contract':{'url':'https://github.com/Whisky-App/wine/blob/a92f7f06c4cff7291578e58eb95284b00e322799/dlls/winemac.drv/macdrv_main.c',
                               'table_slots':24,'window_data_bytes':120,'client_view_offset':24},
             'dxmt_contract':{'url':'https://github.com/3Shain/dxmt/blob/v0.80/src/winemetal/unix/winemetal_unix.c',
@@ -195,6 +277,13 @@ metadata = {'component':component,'source':{'url':source_url,'sha256':source_has
             'compressed_pe_sha256':{arch:sha(path) for arch,path in compressed_pe.items()},
             'ntdll_sha256':{arch:sha(path) for arch,path in pe_ntdll.items()},
             'compressed_ntdll_sha256':{arch:sha(path) for arch,path in compressed_ntdll.items()},
+            'user32_sha256':{arch:sha(path) for arch,path in pe_user32.items()},
+            'compressed_user32_sha256':{arch:sha(path) for arch,path in compressed_user32.items()},
+            'wow64win_sha256':{arch:sha(path) for arch,path in pe_wow64win.items()},
+            'compressed_wow64win_sha256':{arch:sha(path) for arch,path in compressed_wow64win.items()},
+            'native_win32u_sha256':sha(native_win32u),
+            'compressed_native_win32u_sha256':sha(compressed_native_win32u),
+            'native_win32u_linkage':win32u_linkage.replace(str(native_win32u),'win32u.so'),
             'compiler':clang_version.strip(),'sdk':'26.5','deployment_target':'10.15',
             'source_date_epoch':epoch,'driver_sha256':sha(driver),
             'native_ntdll_sha256':sha(native_ntdll),
@@ -223,7 +312,9 @@ with archive.open('wb') as raw, gzip.GzipFile(filename='',mode='wb',fileobj=raw,
 for path,name in [(archive,archive.name),(payload / 'LICENSE-WINE-METAL.txt','LICENSE-WINE-METAL.txt'),
                   (payload / 'provenance.json',component+'-provenance.json'),(compressed_driver,compressed_driver.name),
                   (compressed_native_ntdll,compressed_native_ntdll.name),
-                  *[(path,path.name) for path in [*compressed_pe.values(), *compressed_ntdll.values()]]]:
+                  (compressed_native_win32u,compressed_native_win32u.name),
+                  *[(path,path.name) for path in [*compressed_pe.values(), *compressed_ntdll.values(),
+                                                  *compressed_user32.values(), *compressed_wow64win.values()]]]:
     temporary = output / ('.'+name+'.new')
     shutil.copyfile(path,temporary)
     temporary.replace(output / name)

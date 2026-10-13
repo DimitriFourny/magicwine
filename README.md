@@ -40,7 +40,7 @@ Removing a program only removes its MagicWine launcher. Trashing a bottle stops 
 
 Managed installation downloads one pinned Wine `11.0_1` archive from the public [Gcenx macOS Wine builds](https://github.com/Gcenx/macOS_Wine_builds) and installs MagicWine's public-source-built Wine 11 macOS driver and matching native/Windows runtime modules. It supports Standard, DXVK, and, on compatible Apple Silicon Macs, DXMT and locally imported D3DMetal. This modified runtime is not an official Wine, Gcenx, CodeWeavers, Apple, or DXMT distribution.
 
-The Wine Metal support modules and DXMT component ship with MagicWine. **The initial Wine archive still downloads; enabling DXMT needs no additional download.** D3DMetal's proprietary libraries are discovered or imported locally, not bundled or downloaded. Original Wine modules, complete corresponding source, LGPL notice, and build provenance are retained in `runtime-compatibility/winemac-wine11.0-metal.1/`.
+The Wine Metal support modules and DXMT component ship with MagicWine. **The initial Wine archive still downloads; enabling DXMT needs no additional download.** D3DMetal's proprietary libraries are discovered or imported locally, not bundled or downloaded. Original Wine modules, complete corresponding source, LGPL notice, and build provenance are retained in `runtime-compatibility/winemac-wine11.0-metal.2/`.
 
 Downloads are staged and checksum-verified without Homebrew or administrator access. The matched native and 32/64-bit Windows modules are installed in a private staging tree before the complete runtime is published. The per-bottle CPU repair described below remains separate.
 
@@ -68,11 +68,27 @@ The original Tropics settings window and browser controls were exercised through
 
 ## Unity / embedded Mono startup
 
-The managed `winemac-wine11.0-metal.1` runtime keeps macOS pthread GS active for native Metal code. Older Windows Mono JITs read dynamic TLS directly from Windows GS offsets, which instead address native pthread storage in this runtime. ULTRAKILL Demo (Unity 2019.4.0f1) consequently faults during Mono initialization; recursive exception handling ends in Wine's `stack overflow` error before graphics-device creation.
+The managed Metal runtime keeps macOS pthread GS active for native Metal code. Older Windows Mono JITs read dynamic TLS directly from Windows GS offsets, which instead address native pthread storage in this runtime. ULTRAKILL Demo (Unity 2019.4.0f1) consequently faults during Mono initialization; recursive exception handling ends in Wine's `stack overflow` error before graphics-device creation.
 
-For launches using the current managed Wine in this library, MagicWine adds `use-fallback-tls` to the process-local `MONO_DEBUG` options. This [Mono-supported mode](https://github.com/Unity-Technologies/mono/blob/d9ad36f4a70e55923604172a47f2223f4f6df5b6/mono/mini/mini-amd64.c#L3429-L3431) uses TLS helpers instead of inline GS access. Existing options are preserved, and the option is not duplicated. It applies independently of the graphics selection; custom and obsolete Wine selections are unchanged. No game DLLs, bottle metadata, Wine binaries, registry settings, or global environment variables are modified. Rebuild and restart MagicWine to apply the launch correction to existing bottles; Wine reinstallation is unnecessary.
+For launches using managed Metal Wine in this library, including older pinned Metal builds, MagicWine adds `use-fallback-tls` to the process-local `MONO_DEBUG` options. This [Mono-supported mode](https://github.com/Unity-Technologies/mono/blob/d9ad36f4a70e55923604172a47f2223f4f6df5b6/mono/mini/mini-amd64.c#L3429-L3431) uses TLS helpers instead of inline GS access. Existing options are preserved, and the option is not duplicated. It applies independently of the graphics selection; custom runtimes and earlier non-Metal managed builds are unchanged. No game DLLs, bottle metadata, Wine binaries, registry settings, or global environment variables are modified by this launch correction. Rebuild and restart MagicWine to apply it to existing bottles; Wine reinstallation is unnecessary for the Mono correction.
 
 Verification covers ULTRAKILL startup with DXVK in an isolated prefix and the rebuilt CLI with D3DMetal in the original bottle: engine/assembly/input initialization, scene loading, and a responsive 960×540 game window. Screen capture was unavailable, so visual correctness and gameplay are not certified. Discord integration still logs an `InternalError`, without preventing this startup. This is a Mono compatibility workaround, not a complete repair of direct Windows GS access for other applications.
+
+## Unity 6 mouse input
+
+House Flipper 2 (Unity 6000.3.7f1) uses Windows mouse-in-pointer input. Stock Wine 11 reports `EnableMouseInPointer ... Call not implemented`; mouse enumeration and raw-input registration can succeed while the game's pointer-based mouse handling remains inactive. This is separate from cursor confinement and affects DXVK, DXMT, and D3DMetal alike. Older Unity input, such as ULTRAKILL Demo's, need not use this API.
+
+Managed runtime `winemac-wine11.0-metal.2` includes a source-level mouse-pointer backport in `patches/wine-mouse-pointer.patch`, based on [Wine's mouse-in-pointer implementation](https://github.com/wine-mirror/wine/commit/71b686ce9fdce65416080c834a9103a743dc095c) and subsequent pointer-info/WoW64 work attributed in the patch. It delivers mouse pointer messages and queryable per-thread frames, including all five buttons, held-button motion, partial releases, and signed wheel input. Classic and raw mouse delivery remain available. Process enablement is immutable after its first choice, and merely peeking at a message does not duplicate pointer delivery.
+
+The fix is runtime-wide: there are no executable-name checks or HF2-specific game patches. Other games using this mouse-in-pointer path receive the same support when launched with the updated runtime.
+
+The installer publishes ten matched native/Windows modules, preserving their stock originals and complete corresponding source. It does not modify existing Wine installations or game DLLs. Install Wine again to obtain this new build; existing bottles remain pinned to their previous runtime unless explicitly migrated. New bottles use the new managed runtime. Do not copy individual `user32`/`win32u` modules from another Wine or CrossOver build into a bottle.
+
+This backport handles mouse input, not complete Windows pen/touch support, pointer history, or implicit pointer capture. Its pointer synthesis follows accepted classic mouse messages; pointer-only message filters and applications suppressing classic input with `RIDEV_NOLEGACY` are not covered.
+
+Run the real 32/64-bit mouse-input regression against a selected Wine runtime with `bash scripts/test-mouse-pointer.sh "/absolute/path/to/wine/bin/wine"`. It uses MinGW compilers and a disposable prefix, exercises input through `SendInput`, and verifies pointer frames, dragging, wheel signs, legacy/raw delivery, process/thread boundaries, and non-removing peeks.
+
+House Flipper 2 was launched through the normal saved-program path in an isolated bottle, and the user confirmed working mouse input. Automated verification additionally covers 32/64-bit font rasterization and Vulkan GPU enumeration, preserving those capabilities of the rebuilt window/input module. Screen capture was unavailable; no independent visual gameplay certification is claimed.
 
 ## Graphics and game testing
 
