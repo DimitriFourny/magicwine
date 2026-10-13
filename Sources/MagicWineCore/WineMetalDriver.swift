@@ -4,19 +4,50 @@ import Foundation
 
 /// Installed only in a fresh, private managed Wine staging tree.
 /// Never modifies a selected, user-provided, or shared runtime.
-enum DXMTWineDriver {
-    static let componentID = "winemac-wine11.0-dxmt.1"
-    static let originalSHA256 = "7687c4095ea6dba1761052ac19d46db3409a36f2bc827b79c6e32bf779df59f4"
-    static let driverSHA256 = "b8d3b7318ea4ab5502ff3b233b997d1e7e3e78535e385870c663e61375548426"
-    static let originalName = "original-winemac.so"
+enum WineMetalDriver {
+    static let componentID = "winemac-wine11.0-metal.1"
     static let sourceName = componentID + "-source.tar.gz"
-    static let licenseName = "LICENSE-WINE-DXMT.txt"
+    static let licenseName = "LICENSE-WINE-METAL.txt"
     static let provenanceName = componentID + "-provenance.json"
     private static let nativeMaximum = 64 * 1_048_576
     private static let sourceMaximum = 256 * 1_048_576
     private static let textMaximum = 1_048_576
+
+    struct Image: Sendable {
+        let relativePath: String
+        let resourceSuffix: String
+        let originalDigest: String
+        let digest: String
+        let compressedDigest: String
+        var backupName: String { "original-" + relativePath.replacingOccurrences(of: "/", with: "-") }
+    }
+    static let images = [
+        Image(relativePath: "x86_64-unix/winemac.so", resourceSuffix: ".so.deflate",
+              originalDigest: "7687c4095ea6dba1761052ac19d46db3409a36f2bc827b79c6e32bf779df59f4",
+              digest: "7928be846565b328c2e993820ae3ffe24f0fc9a06ac851d9d7ab8de026062dc7",
+              compressedDigest: "5510f68d9003253e428a0cb101fa762af649a66d52ec26c53cf6dfe7e8d5394b"),
+        Image(relativePath: "x86_64-windows/winemac.drv", resourceSuffix: "-x86_64.drv.deflate",
+              originalDigest: "9c52f24507b692ef0fcc0dc5439b8bee63f869f04ef38494bf52e52ddfbfecf0",
+              digest: "5519fe75aac10b177003752f93289fd69b4dfaeb6fafba639ec76741265a0e3d",
+              compressedDigest: "427e3f3abe154350605092420202002e4afdfd7acde9bef14000387c7a05866d"),
+        Image(relativePath: "i386-windows/winemac.drv", resourceSuffix: "-i386.drv.deflate",
+              originalDigest: "200a8cd50084d1bd70511681082fbe152a585a8638e84a5aafe8148a8248cda5",
+              digest: "832c4e681b845df2cd25e3215143262677c1bfdb51defbcc2578efbc5fe9fd42",
+              compressedDigest: "b4254cad181023ea4a6b418cbb2485ae43026d2bf53ab96fd6fc1592421f9faa"),
+        Image(relativePath: "x86_64-unix/ntdll.so", resourceSuffix: "-ntdll.so.deflate",
+              originalDigest: "dfb9d4d4d6e7fd3dc537c1bacd69cb3a6bb46ae98311bb5358df3c4eab470c3f",
+              digest: "ee3db713a091bcc6f34e4b9e9b8587c4c12528a78cf4c970a74780a7b526caee",
+              compressedDigest: "92c99a44c743ef31db90ca8886640df4818d9a60dce5e64e6bf7385bf47ec2fd"),
+        Image(relativePath: "x86_64-windows/ntdll.dll", resourceSuffix: "-x86_64.ntdll.deflate",
+              originalDigest: "d63d10c77a55105d68bf1935ff10137d2ab5e8a4c6ae329aee599f17524b2755",
+              digest: "63695dba9ca40e8e75f10470ec5f462a33efe99b717b3551d61a5aeaa1a8effb",
+              compressedDigest: "01413b61c1dbcb0c880ae4e1cae73cc96cc996e359af262b12670218c1c6404a"),
+        Image(relativePath: "i386-windows/ntdll.dll", resourceSuffix: "-i386.ntdll.deflate",
+              originalDigest: "bac6f2d9434860d09a696dcdcd5f85631e19fd4f9409b3a39828841b7a40c089",
+              digest: "a5cc94b8824f34cfc41dffeb59cb5873db6523cffa2633dc5d5016650970c579",
+              compressedDigest: "c906ffa9bb4f56860a7682202bdf09c25cb342118c37af5695c91dc87d4de460")
+    ]
     private static let linkDigests = [
-        "ntdll.so": "dfb9d4d4d6e7fd3dc537c1bacd69cb3a6bb46ae98311bb5358df3c4eab470c3f",
         "win32u.so": "5686c667977ab6d4ea932ea53a2a7b73e51c936988118707b85c7619db1dfb98"
     ]
     private static var manager: FileManager { .default }
@@ -25,28 +56,32 @@ enum DXMTWineDriver {
         let url: URL
         let digest: String
         let maximum: Int
+        let image: Image?
     }
 
     /// Digests are compiled trust roots, never read from writable runtime receipts.
     static func bundledArtifacts() throws -> [Artifact] {
-        let pins: [(String, String, Int)] = [
-            (componentID + ".so.deflate", "47dcc92c92286be713d9f164e9e6111af3799b9c66050197baa6ce6d14d7ba9a", nativeMaximum),
-            (sourceName, "95229a297a47ff30f3602d272af0d80711a87bdf182b96d84ea2a76591a5b64e", sourceMaximum),
-            (licenseName, "66e5a1ad066129a64cd6562c92603b6830553f775aa7abe3a2c11d4a1e44b26e", textMaximum),
-            (provenanceName, "8d403b98abe3da5cc07211e8e5298c73f5dd4a0e1a86667731cab588f85d36ef", textMaximum)
+        var pins: [(String, String, Int, Image?)] = images.map {
+            (componentID + $0.resourceSuffix, $0.compressedDigest, nativeMaximum, $0)
+        }
+        pins += [
+            (sourceName, "d372bf69e449591ec3cbd0d6e73a164eed7a42de32c63db0ba88de0db20b7480", sourceMaximum, nil),
+            (licenseName, "14fdef09d6e31e46597bbb997dd416b34e4b0bf5c94c9ccbdbfe24b7f9c008cd", textMaximum, nil),
+            (provenanceName, "daf6b52fcf3928d9b16e345dabd913ed6e757a39b591fea4b2031d3c22dcd4a6", textMaximum, nil)
         ]
-        return try pins.map { name, digest, maximum in
+        return try pins.map { name, digest, maximum, image in
             guard let url = Bundle.module.url(forResource: name, withExtension: nil) else {
                 throw failure("Bundled driver artifact is missing: \(name). Reinstall MagicWine.")
             }
             try requireDirectory(url.deletingLastPathComponent())
             try verify(url, digest: digest, maximum: maximum)
-            return Artifact(url: url, digest: digest, maximum: maximum)
+            return Artifact(url: url, digest: digest, maximum: maximum, image: image)
         }
     }
 
-    /// Keep Mach-O bytes opaque to release-build resource stripping and signing.
-    static func unpackDriver(_ artifact: Artifact, to destination: URL) throws {
+    /// Keep Mach-O and PE bytes opaque to release-build resource processing.
+    static func unpackImage(_ artifact: Artifact, to destination: URL) throws {
+        guard let image = artifact.image else { throw failure("Expected a compressed driver image.") }
         let compressed = try Data(contentsOf: artifact.url)
         guard compressed.count <= artifact.maximum,
               SHA256.hash(data: compressed).map({ String(format: "%02x", $0) }).joined() == artifact.digest else {
@@ -54,17 +89,18 @@ enum DXMTWineDriver {
         }
         let payload = try (compressed as NSData).decompressed(using: .zlib) as Data
         guard !payload.isEmpty, payload.count <= nativeMaximum,
-              SHA256.hash(data: payload).map({ String(format: "%02x", $0) }).joined() == driverSHA256 else {
-            throw failure("The decompressed driver does not match the pinned native image.")
+              SHA256.hash(data: payload).map({ String(format: "%02x", $0) }).joined() == image.digest else {
+            throw failure("The decompressed driver does not match its pinned image.")
         }
         try payload.write(to: destination, options: .withoutOverwriting)
     }
 
     static func install(at executable: URL) throws {
         let root = try validateLayout(executable)
-        let native = root.appendingPathComponent("lib/wine/x86_64-unix")
-        let driver = native.appendingPathComponent("winemac.so")
-        try verify(driver, digest: originalSHA256, maximum: nativeMaximum)
+        for image in images {
+            try verify(root.appendingPathComponent("lib/wine/" + image.relativePath),
+                       digest: image.originalDigest, maximum: nativeMaximum)
+        }
         let artifacts = try bundledArtifacts()
         let compatibility = root.appendingPathComponent("runtime-compatibility", isDirectory: true)
         let backup = compatibility.appendingPathComponent(componentID, isDirectory: true)
@@ -78,26 +114,35 @@ enum DXMTWineDriver {
         try requireDirectory(compatibility)
         try manager.createDirectory(at: backup, withIntermediateDirectories: false,
                                     attributes: [.posixPermissions: 0o700])
-        // Preserve the exact stock image and LGPL corresponding source before publication.
-        try manager.copyItem(at: driver, to: backup.appendingPathComponent(originalName))
-        for artifact in artifacts.dropFirst() {
+        // Native and PE images form one ABI. The caller publishes the whole runtime
+        // only after this private staging tree has been prepared successfully.
+        for image in images {
+            try manager.copyItem(at: root.appendingPathComponent("lib/wine/" + image.relativePath),
+                                 to: backup.appendingPathComponent(image.backupName))
+        }
+        for artifact in artifacts where artifact.image == nil {
             try manager.copyItem(at: artifact.url, to: backup.appendingPathComponent(artifact.url.lastPathComponent))
         }
         try validateBackup(backup, artifacts: artifacts)
-        let stage = native.appendingPathComponent(".dxmt-driver-\(UUID().uuidString)")
-        defer { try? manager.removeItem(at: stage) }
-        try unpackDriver(artifacts[0], to: stage)
-        try verify(stage, digest: driverSHA256, maximum: nativeMaximum)
-        _ = try validateLayout(executable)
-        try verify(driver, digest: originalSHA256, maximum: nativeMaximum)
-        guard rename(stage.path, driver.path) == 0 else { throw pathError("publish", driver) }
+        for artifact in artifacts {
+            guard let image = artifact.image else { continue }
+            let driver = root.appendingPathComponent("lib/wine/" + image.relativePath)
+            let stage = driver.deletingLastPathComponent().appendingPathComponent(".metal-driver-\(UUID().uuidString)")
+            defer { try? manager.removeItem(at: stage) }
+            try unpackImage(artifact, to: stage)
+            _ = try validateLayout(executable)
+            try verify(driver, digest: image.originalDigest, maximum: nativeMaximum)
+            guard rename(stage.path, driver.path) == 0 else { throw pathError("publish", driver) }
+        }
     }
 
     static func validate(at executable: URL) throws {
         let root = try validateLayout(executable)
         let artifacts = try bundledArtifacts()
-        try verify(root.appendingPathComponent("lib/wine/x86_64-unix/winemac.so"),
-                   digest: driverSHA256, maximum: nativeMaximum)
+        for image in images {
+            try verify(root.appendingPathComponent("lib/wine/" + image.relativePath),
+                       digest: image.digest, maximum: nativeMaximum)
+        }
         let compatibility = root.appendingPathComponent("runtime-compatibility", isDirectory: true)
         try requireDirectory(compatibility)
         try validateBackup(compatibility.appendingPathComponent(componentID, isDirectory: true), artifacts: artifacts)
@@ -110,9 +155,9 @@ enum DXMTWineDriver {
         }
         let bin = executable.deletingLastPathComponent().standardizedFileURL
         let root = bin.deletingLastPathComponent()
-        for directory in [root, bin, root.appendingPathComponent("lib"),
-                          root.appendingPathComponent("lib/wine"),
-                          root.appendingPathComponent("lib/wine/x86_64-unix")] {
+        let directories = [root, bin, root.appendingPathComponent("lib"), root.appendingPathComponent("lib/wine")] +
+            images.map { root.appendingPathComponent("lib/wine/" + $0.relativePath).deletingLastPathComponent() }
+        for directory in directories {
             try requireDirectory(directory)
         }
         // Executable and native link inputs must be ordinary files, not linked aliases.
@@ -126,12 +171,16 @@ enum DXMTWineDriver {
 
     private static func validateBackup(_ backup: URL, artifacts: [Artifact]) throws {
         try requireDirectory(backup)
-        let names = Set([originalName] + artifacts.dropFirst().map { $0.url.lastPathComponent })
+        let notices = artifacts.filter { $0.image == nil }
+        let names = Set(images.map(\.backupName) + notices.map { $0.url.lastPathComponent })
         guard Set(try manager.contentsOfDirectory(atPath: backup.path)) == names else {
             throw failure("The driver original/source/license/provenance set is incomplete or contains unrecognized files.")
         }
-        try verify(backup.appendingPathComponent(originalName), digest: originalSHA256, maximum: nativeMaximum)
-        for artifact in artifacts.dropFirst() {
+        for image in images {
+            try verify(backup.appendingPathComponent(image.backupName),
+                       digest: image.originalDigest, maximum: nativeMaximum)
+        }
+        for artifact in notices {
             try verify(backup.appendingPathComponent(artifact.url.lastPathComponent),
                        digest: artifact.digest, maximum: artifact.maximum)
         }
@@ -195,6 +244,6 @@ enum DXMTWineDriver {
     }
 
     private static func failure(_ message: String) -> MagicWineError {
-        .setup("DXMT Wine driver: " + message)
+        .setup("Wine Metal driver: " + message)
     }
 }

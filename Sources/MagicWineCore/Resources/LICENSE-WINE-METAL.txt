@@ -1,11 +1,16 @@
-MagicWine DXMT Wine driver: complete public Wine 11 winemac driver plus the
-MagicWine LGPL-2.1-or-later DXMT v0.80 client-surface bridge.
-No proprietary CrossOver or D3DMetal code is used.
+MagicWine Metal Wine support: public Wine 11 native and PE winemac/ntdll modules
+with the public Unix-call entry point, native pthread TLS, and D3DMetal Nt ABI.
+The MagicWine D3DMetal/DXMT client-surface bridge is LGPL-2.1-or-later.
+ABI reference: Whisky-App/wine a92f7f06c4cff7291578e58eb95284b00e322799,
+dlls/winemac.drv/macdrv_main.c and macdrv.h (LGPL-2.1-or-later).
+Native ABI source references: CodeWeavers CrossOver 26.1 public source mirror,
+rnowak/wine-crossover-sources b4f3c510a1808e6e32fb99e9bc11fa46ccc207dc;
+Alien4042x/WineForge a342f4aeb23d719339f444b9e94e06ecf0ff1a14 (LGPL-2.1-or-later).
+No proprietary CrossOver or Apple binaries are included.
 Original Wine file copyright notices are retained in the corresponding source.
-Rebuild offline: extract the adjacent -source.tar.gz and run bash scripts/build-dxmt-wine.sh.
+Rebuild offline: extract the adjacent -source.tar.gz and run bash scripts/build-metal-wine.sh.
 The source bundle includes the complete original Wine 11 source archive,
 patch, recipe, and public pinned native link inputs.
-The compatibility table is DXMT-specific, not Apple D3DMetal.
 
 		  GNU LESSER GENERAL PUBLIC LICENSE
 		       Version 2.1, February 1999

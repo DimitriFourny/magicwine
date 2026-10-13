@@ -7,7 +7,7 @@ import Foundation
 /// Apple's download and governing agreement require the user's Apple Account:
 /// https://developer.apple.com/games/game-porting-toolkit/
 enum D3DMetalInstallation {
-    static let notice = "D3DMetal — Experimental uses your locally installed Apple libraries. MagicWine looks beside this bottle's Wine and in installed CrossOver applications before asking for a library folder. You must have the right to use those libraries under the terms accompanying your distribution; MagicWine neither supplies Apple binaries nor accepts or grants license rights. A framework LICENSE may cover only third-party dependencies, not Apple's software. Requires Apple silicon, Rosetta, macOS 14 or newer (or the library's higher minimum), and an x86_64 Wine build with Apple's macdrv_functions graphics bridge ABI; ordinary Wine Stable is not compatible. Only 64-bit Direct3D 11/12 and DXGI are selected. Quarantine and accompanying notices are retained. Content hashes detect later changes, not authenticity, permission to use, or malware. No ray tracing or other optional hardware features are forced."
+    static let notice = "D3DMetal — Experimental uses your locally installed Apple libraries. MagicWine looks beside this bottle's Wine and in installed CrossOver applications before asking for a library folder. You must have the right to use those libraries under the terms accompanying your distribution; MagicWine neither supplies Apple binaries nor accepts or grants license rights. A framework LICENSE may cover only third-party dependencies, not Apple's software. Requires Apple silicon, Rosetta, macOS 14 or newer (or the library's higher minimum), and MagicWine's managed Wine or a compatible custom Wine with the D3DMetal macdrv_functions ABI; unmodified Wine Stable is not compatible. Only 64-bit Direct3D 11/12 and DXGI are selected. Quarantine and accompanying notices are retained. Content hashes detect later changes, not authenticity, permission to use, or malware. No ray tracing or other optional hardware features are forced."
 
     private static let framework = "external/D3DMetal.framework"
     private static let bridges = ["d3d11", "d3d12", "dxgi"]
@@ -192,12 +192,18 @@ enum D3DMetalInstallation {
             let driver = prefix.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: driver.path) {
                 guard (try? machO(driver, requiredExport: "_magicwine_dxmt_bridge_v1")) == nil else {
-                    throw failure("MagicWine's managed Wine implements the DXMT bridge, not Apple's complete D3DMetal driver ABI. Use DXMT with this runtime, or select a compatible GPTK/Whisky/CrossOver native Wine loader for D3DMetal.")
+                    throw failure("This bottle uses the older DXMT-only Wine driver. Install Wine in Downloads or Settings, then create a new bottle with the installed Wine to use D3DMetal. This bottle's pinned runtime and graphics selection are unchanged.")
+                }
+                if (try? machO(driver, requiredExport: "_magicwine_metal_bridge_v1")) != nil {
+                    let ntdll = driver.deletingLastPathComponent().appendingPathComponent("ntdll.so")
+                    guard (try? machO(ntdll, requiredExport: "_magicwine_metal_ntdll_v1")) != nil else {
+                        throw failure("The Wine Metal driver is missing its matching native runtime support. Install Wine and create a new bottle with it; mixing driver files from different runtimes is unsupported.")
+                    }
                 }
                 if (try? machO(driver, requiredExport: "_macdrv_functions")) != nil { return }
             }
         }
-        throw failure("This Wine runtime does not export Apple's macdrv_functions bridge ABI. Select a compatible GPTK/Whisky/CrossOver native Wine loader in Settings, then create a new bottle with it; ordinary Wine Stable cannot load these libraries. No runtime files were modified.")
+        throw failure("This Wine runtime does not export the D3DMetal macdrv_functions bridge ABI. Install Wine in Downloads or Settings, then create a new bottle with it, or choose a compatible custom Wine runtime. Unmodified Wine Stable cannot load these libraries. No runtime files were modified.")
     }
 
     private static func validateRoot(_ root: URL) throws {
