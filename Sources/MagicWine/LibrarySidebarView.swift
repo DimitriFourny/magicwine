@@ -3,6 +3,7 @@ import MagicWineCore
 
 enum LibraryDestination: Equatable {
     case bottles
+    case gamepads
     case downloads
     case settings
     case documentation
@@ -65,7 +66,7 @@ struct LibrarySidebarView: View {
                     }
                     .padding(.horizontal, 12)
                 }
-                .frame(height: min(max(CGFloat(bottles.count) * 52, 104), max(104, geometry.size.height - 430)))
+                .frame(height: min(max(CGFloat(bottles.count) * 52, 104), max(104, geometry.size.height - 478)))
 
                 Rectangle()
                     .fill(WineTheme.border)
@@ -74,6 +75,7 @@ struct LibrarySidebarView: View {
                     .padding(.vertical, 18)
 
                 VStack(spacing: 4) {
+                    navigationRow("Gamepads", icon: "gamecontroller", target: .gamepads)
                     navigationRow("Downloads", icon: "arrow.down.to.line", target: .downloads,
                                   active: model.runtimeActivity != nil)
                     navigationRow("Settings", icon: "gearshape", target: .settings)

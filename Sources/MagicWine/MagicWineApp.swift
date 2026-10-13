@@ -86,6 +86,8 @@ private struct LibraryView: View {
                         } else {
                             WelcomeView(model: model)
                         }
+                    case .gamepads:
+                        GamepadView(paths: model.paths)
                     case .downloads:
                         downloads
                     case .settings:
@@ -201,6 +203,11 @@ private struct LibraryView: View {
                     Text("Changing graphics stops that bottle’s Windows processes.")
                     Text("Compatibility depends on the Windows program, Wine runtime, and graphics backend. DRM and anti-cheat compatibility are not guaranteed.")
                         .foregroundStyle(WineTheme.muted)
+                }
+                WineCard(title: "Gamepads", icon: "gamecontroller") {
+                    Text("Connect a supported controller by USB or pair it in macOS Bluetooth settings, then open Gamepads. Up to four controllers provide XInput to Windows games.")
+                    Text("Edit mappings, calibration, and profiles in the live preview. Save Changes applies the selected profile to all controllers and bottles in this library. Identify requires controller haptics.")
+                    Text("Launch games through MagicWine and keep it running. Restart already-running games after updating the app. DirectInput-only games use Wine’s own support; gyro and controller audio are not emulated.")
                 }
                 WineCard(title: "Your Files & Safety", icon: "lock.shield") {
                     Text("A bottle is not a security sandbox. Only run Windows software you trust.")

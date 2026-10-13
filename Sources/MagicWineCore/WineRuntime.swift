@@ -328,12 +328,22 @@ public actor WineRuntime {
         }
         var processEnvironment = environment(executable: wine, prefix: prefix)
         if !server, current.isInitialized {
+            let gamepadEnvironment = try await GamepadService.shared.prepare(paths: paths)
+            // Main-actor discovery suspends this actor. Honor Stop before changing
+            // prefix DLLs or spawning a process after that handoff.
+            try Task.checkCancellation()
+            if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
             let directory = prefix.deletingLastPathComponent()
             let repaired = try GraphicsPrefix.withLock(bottleDirectory: directory) {
                 try RosettaCPUCompatibility.prepare(runtime: current.runtime, prefix: prefix,
                                                      bottleDirectory: directory)
             }
             if repaired { processEnvironment["WINEDLLOVERRIDES", default: ""] += ";wow64cpu=n" }
+            let gamepadOverrides = try GraphicsPrefix.withLock(bottleDirectory: directory) {
+                try GamepadBridge.prepare(prefix: prefix, bottleDirectory: directory)
+            }
+            processEnvironment["WINEDLLOVERRIDES", default: ""] += ";" + gamepadOverrides
+            processEnvironment.merge(gamepadEnvironment) { _, gamepadValue in gamepadValue }
         }
         if !server, current.graphics.backend != .standard {
             let graphics = try prepareGraphicsLaunch(for: current, prefix: prefix, base: processEnvironment)
@@ -381,7 +391,8 @@ public actor WineRuntime {
         // Avoid accidental architecture/prefix/loader configuration from a launching shell.
         for key in Array(environment.keys) where key.hasPrefix("WINE") || key.hasPrefix("DYLD_") ||
             key.hasPrefix("DXVK_") || key.hasPrefix("DXMT_") || key.hasPrefix("D3DM_") ||
-            key.hasPrefix("MTL_") || key == "CX_APPLEGPTK_LIBD3DSHARED_PATH" {
+            key.hasPrefix("MTL_") || key.hasPrefix("MAGICWINE_GAMEPAD_") ||
+            key == "CX_APPLEGPTK_LIBD3DSHARED_PATH" {
             environment.removeValue(forKey: key)
         }
         environment["PATH"] = executable.deletingLastPathComponent().path + ":" +
