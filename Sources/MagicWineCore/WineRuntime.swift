@@ -389,6 +389,16 @@ public actor WineRuntime {
         if let prefix { environment["WINEPREFIX"] = prefix.path }
         // Prefer application-local browser interop assemblies over Wine's namesake DLL.
         environment["WINEDLLOVERRIDES"] = "shdocvw=n,b"
+        // Managed Metal Wine keeps native pthread GS active. Mono's inline
+        // GS-relative dynamic TLS reads bypass the real Windows TEB; its API
+        // TLS mode works across Standard, DXVK, DXMT and D3DMetal launches.
+        if prefix != nil, executable.resolvingSymlinksInPath().standardizedFileURL == managedExecutableURL {
+            let option = "use-fallback-tls"
+            let existing = environment["MONO_DEBUG"] ?? ""
+            if !existing.split(separator: ",").contains(Substring(option)) {
+                environment["MONO_DEBUG"] = existing.isEmpty ? option : existing + "," + option
+            }
+        }
         return environment
     }
 

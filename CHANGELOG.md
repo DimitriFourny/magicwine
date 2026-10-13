@@ -57,6 +57,7 @@
 - Verify all six runtime modules against compiled SHA-256 pins, preserve originals and complete LGPL corresponding source, and publish the runtime only after private staging succeeds. Retain automatic local Apple-library discovery, consent, and immutable imports; no proprietary libraries are bundled or downloaded.
 - Exercise hardware D3D11/D3D12 triangle rendering, GPU readback, resize, and same-window swapchain recreation through the managed modules; verify 32/64-bit dynamic PE TLS growth and thread isolation/teardown.
 - Verify fresh packaged installation, initialization, and cached reuse; native DXMT → D3DMetal → DXMT selection with automatic CrossOver-library discovery and unchanged Wine; complete native/WoW64 ABI callbacks; 32/64-bit DXMT/DXVK D3D11 rendering; and restored Standard D3D9 rendering. All 118 release regressions pass; rebuild and sign the app/CLI.
+- Fix ULTRAKILL Demo's pre-graphics Mono stack overflow by selecting Mono's API-based TLS mode for current managed-Wine launches. Preserve existing `MONO_DEBUG` options without duplication; leave custom runtimes, game files, Wine binaries, and bottle metadata unchanged. Verify DXVK startup in an isolated prefix and rebuilt-CLI D3DMetal startup with a responsive game window; compositor capture was unavailable and gameplay remains unverified. All 118 release tests pass; rebuild and sign the app/CLI.
 
 ## 0.1.0 — 2026-10-11
 

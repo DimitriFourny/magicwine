@@ -66,6 +66,14 @@ Rebuild with `brew install mingw-w64 python` and `bash scripts/build-wow64cpu.sh
 
 The original Tropics settings window and browser controls were exercised through the packaged saved shortcut. Its **Run** button has a separate `forms.settings` scripting failure reproduced in both MagicWine and the isolated CrossOver reference; it is intentionally unchanged, as are the game's files. Use the working DirectX demo shortcuts to start the game.
 
+## Unity / embedded Mono startup
+
+The managed `winemac-wine11.0-metal.1` runtime keeps macOS pthread GS active for native Metal code. Older Windows Mono JITs read dynamic TLS directly from Windows GS offsets, which instead address native pthread storage in this runtime. ULTRAKILL Demo (Unity 2019.4.0f1) consequently faults during Mono initialization; recursive exception handling ends in Wine's `stack overflow` error before graphics-device creation.
+
+For launches using the current managed Wine in this library, MagicWine adds `use-fallback-tls` to the process-local `MONO_DEBUG` options. This [Mono-supported mode](https://github.com/Unity-Technologies/mono/blob/d9ad36f4a70e55923604172a47f2223f4f6df5b6/mono/mini/mini-amd64.c#L3429-L3431) uses TLS helpers instead of inline GS access. Existing options are preserved, and the option is not duplicated. It applies independently of the graphics selection; custom and obsolete Wine selections are unchanged. No game DLLs, bottle metadata, Wine binaries, registry settings, or global environment variables are modified. Rebuild and restart MagicWine to apply the launch correction to existing bottles; Wine reinstallation is unnecessary.
+
+Verification covers ULTRAKILL startup with DXVK in an isolated prefix and the rebuilt CLI with D3DMetal in the original bottle: engine/assembly/input initialization, scene loading, and a responsive 960×540 game window. Screen capture was unavailable, so visual correctness and gameplay are not certified. Discord integration still logs an `InternalError`, without preventing this startup. This is a Mono compatibility workaround, not a complete repair of direct Windows GS access for other applications.
+
 ## Graphics and game testing
 
 Every new bottle defaults to **Standard**. Enable another backend explicitly in its Graphics controls.
