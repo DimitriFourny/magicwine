@@ -17,7 +17,7 @@ The script builds the native app for your Mac, creates an ad-hoc-signed developm
 
 ## Native interface
 
-The dark wine-themed library has a searchable bottle sidebar and dedicated **Downloads**, **Settings**, and **Documentation** pages. Search filters bottle names, not installed programs. Select a bottle to open its dashboard: pinned runtime and status, installed-program launchers, installer and shortcut actions, graphics controls, logs, and confirmed Trash. Dashboard cards switch from two columns to one in narrower windows.
+The dark wine-themed library has a searchable bottle sidebar and dedicated **Gamepads**, **Downloads**, **Settings**, and **Documentation** pages. Search filters bottle names, not installed programs. Select a bottle to open its dashboard: pinned runtime and status, installed-program launchers, installer and shortcut actions, graphics controls, logs, and confirmed Trash. Dashboard cards switch from two columns to one in narrower windows.
 
 **Downloads** manages Wine installation and displays installed runtimes. **Settings** chooses the default for new bottles or an existing Wine executable; existing bottles retain their pinned runtime. The sidebar **+** button and **Command-N** open bottle creation. Native file pickers, installer URL handling, Wine trust confirmation, and bottle-specific busy/stop guards remain in place.
 
@@ -89,6 +89,24 @@ This backport handles mouse input, not complete Windows pen/touch support, point
 Run the real 32/64-bit mouse-input regression against a selected Wine runtime with `bash scripts/test-mouse-pointer.sh "/absolute/path/to/wine/bin/wine"`. It uses MinGW compilers and a disposable prefix, exercises input through `SendInput`, and verifies pointer frames, dragging, wheel signs, legacy/raw delivery, process/thread boundaries, and non-removing peeks.
 
 House Flipper 2 was launched through the normal saved-program path in an isolated bottle, and the user confirmed working mouse input. Automated verification additionally covers 32/64-bit font rasterization and Vulkan GPU enumeration, preserving those capabilities of the rebuilt window/input module. Screen capture was unavailable; no independent visual gameplay certification is claimed.
+
+## Gamepads
+
+Open **Gamepads** in the sidebar. Pair a controller in macOS Bluetooth settings or connect it by USB. MagicWine discovers controllers supported by Apple's GameController framework with an extended gamepad layout, including supported Xbox and PlayStation controllers. Up to four controllers receive stable XInput player slots; additional devices can be inspected without pretending they have a game slot.
+
+- **Controller Overview** shows physical input; **Live Input Test** previews the selected draft profile's mapped output, with stick plots, triggers, and button indicators.
+- Remap individual buttons, stick clicks, triggers, and D-pad directions, or choose **Unmapped**. Stick movement stays analog.
+- Adjust radial stick dead zones, response curves, trigger sensitivity, and vibration strength. **Calibrate** measures the current resting position: release both sticks before **Capture Center**.
+- **Identify** sends a short physical vibration when the controller exposes haptics. Game rumble uses separate handle motors where available, or the controller's default haptic output otherwise.
+- Select, duplicate, rename, delete, import, or export JSON profiles. **Save Changes** persists the selected profile and applies it to all bridged controllers, including running games. Draft edits only affect the preview until saved. Corrupt profiles surface an error instead of silently resetting.
+
+**Keep MagicWine running while playing**, or keep the launching CLI process alive. Launch the game through the updated app/CLI; already-running games need a restart to load the bridge. The saved global profile is shared by bottles in the same MagicWine library. The bridge works independently of Standard, DXVK, DXMT, or D3DMetal graphics selection.
+
+Before launching an initialized bottle, MagicWine installs its original, SHA-pinned 32/64-bit XInput bridge for `xinput1_1`, `xinput1_2`, `xinput1_3`, `xinput1_4`, and `xinput9_1_0`. It retains Wine's original system DLLs, links, and absent paths under `runtime-compatibility/magicwine-xinput-v1/`, alongside source and the GPL license. Custom system XInput replacements and damaged backups are rejected, not overwritten. Shared Wine and game-local DLLs are unchanged; application-local controller middleware retains native-first precedence. The bridge uses the prefix's normal `Z:` host drive to reach a private, process-specific controller mapping. Do not remove that drive while using this bridge.
+
+Controller input and rumble cross a bounded shared-memory mapping with heartbeat and sequence checks. Disconnecting or losing the host clears input; abandoned vibration expires within two seconds. Unknown battery information stays unknown. XInput has no gyroscope channel: gyro, controller audio/headsets, power-off, and vendor-specific controls are not emulated. DirectInput-only games still use Wine's own input support; these profiles do not remap DirectInput.
+
+Rebuild the bundled DLLs with `bash scripts/build-gamepad-bridge.sh` (MinGW-w64 and Python required), then update the independent hashes in `GamepadBridge.swift`. Run `bash scripts/test-gamepads.sh "/absolute/path/to/wine/bin/wine"` for real 32/64-bit XInput API checks in a disposable prefix, including sustained rumble and competing writers. Verification also exercises processed Swift input through Wine and return vibration, background CLI heartbeat, and native UI rendering. No physical controller was connected during development verification; USB/Bluetooth gameplay, physical haptics, and The Witcher 3 remain hardware/game checks, not certified compatibility.
 
 ## Graphics and game testing
 
@@ -182,12 +200,14 @@ Data lives in `~/Library/Application Support/MagicWine/`:
 - `Bottles/<UUID>/bottle.json`: atomically saved metadata and launchers.
 - `Bottles/<UUID>/prefix/`: Wine prefix and Windows filesystem.
 - `Bottles/<UUID>/graphics/`: original-DLL backups, interrupted-change recovery, retained custom replacements, and per-bottle DXVK/DXMT shader caches.
-- `Bottles/<UUID>/runtime-compatibility/`: verified original Wine CPU DLL, corresponding repair source, and LGPL notice.
+- `Bottles/<UUID>/runtime-compatibility/`: verified original Wine CPU and XInput DLLs, corresponding source, and license notices.
 - `Bottles/.graphics-locks/`: storage and launch/lifetime locks shared by the app and CLI.
 - `Runtimes/`: immutable, version/checksum-specific managed Wine installations with provenance receipts; `.graphics-views/` contains verified private Metal loader views.
 - `Components/`: immutable pinned DXVK/DXMT packages and user-imported D3DMetal components, verified receipts, and retained licenses/notices.
 - `Logs/`: file-backed process and installation logs; no output-buffer growth while Windows apps run.
 - `settings.json`: default and custom Wine selections.
+- `Gamepads/profiles.json`: validated gamepad profiles and the active global profile.
+- `Gamepads/Sessions/`: private, process-specific live input/rumble mappings; stale sessions report disconnected.
 
 `Sources/MagicWineCore` owns persistence, subprocess lifecycle, runtime discovery, and managed installation. `Sources/MagicWine` owns native UI state and views. `Sources/MagicWineCLI` is the command-line client. Subprocesses wait asynchronously; each bottle has separate UI activity, so another bottle remains usable.
 

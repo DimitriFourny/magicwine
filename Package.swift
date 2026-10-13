@@ -11,6 +11,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "MagicWineCore", resources: [
+            .copy("Resources/magicwine-xinput-v1-x86_64.dll"),
+            .copy("Resources/magicwine-xinput-v1-i686.dll"),
+            .copy("Resources/magicwine-xinput-v1-source.tar.gz"),
+            .copy("Resources/LICENSE-MAGICWINE-GAMEPAD.txt"),
             .copy("Resources/dxvk-macos-1.10.3-magicwine.2.tar.gz"),
             .copy("Resources/LICENSE-DXVK-DEPENDENCIES.txt"),
             .copy("Resources/dxmt-v0.80-builtin.tar.gz"),

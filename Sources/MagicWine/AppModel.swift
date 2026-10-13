@@ -65,6 +65,7 @@ final class AppModel: ObservableObject {
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
+        GamepadService.shared.start()
         do {
             settings = try await store.settings()
         } catch {
