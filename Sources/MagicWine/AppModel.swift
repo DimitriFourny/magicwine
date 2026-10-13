@@ -23,6 +23,7 @@ struct AppNotice: Identifiable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var bottles: [Bottle] = []
+    @Published private(set) var programIconRevision = UUID()
     @Published private(set) var runtimes: [RuntimeDescriptor] = []
     @Published private(set) var settings = AppSettings()
     @Published private(set) var activities: [UUID: BottleActivity] = [:]
@@ -99,6 +100,7 @@ final class AppModel: ObservableObject {
     private func loadBottles() async {
         do {
             bottles = try await store.list()
+            programIconRevision = UUID()
             if !bottles.contains(where: { $0.id == selectedBottleID }) {
                 selectedBottleID = bottles.first?.id
             }
@@ -499,7 +501,10 @@ final class AppModel: ObservableObject {
     }
 
     private func replace(_ bottle: Bottle) {
-        if let index = bottles.firstIndex(where: { $0.id == bottle.id }) { bottles[index] = bottle }
+        if let index = bottles.firstIndex(where: { $0.id == bottle.id }) {
+            bottles[index] = bottle
+            programIconRevision = UUID()
+        }
     }
 
     private func recordLog(_ url: URL, for id: UUID) {
