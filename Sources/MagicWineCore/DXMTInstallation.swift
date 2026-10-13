@@ -11,7 +11,7 @@ enum DXMTInstallation {
     static let archiveName = "dxmt-v0.80-builtin"
     static let archiveSHA256 = "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d"
     static let source = "https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz"
-    static let notice = "DXMT — Experimental translates Direct3D 10/11 to Metal, not Direct3D 9/12. This pinned, unmodified MIT-licensed v0.80 package requires macOS 15 or later, an Apple Silicon Metal GPU, Rosetta and a compatible custom Wine runtime exposing the Metal-view interface. Stock managed Wine 11 lacks that interface: select a compatible custom Wine runtime in Settings before creating a new bottle. An isolated process-local loader view prevents runtime WineD3D or winemetal from shadowing DXMT; the shared runtime is never modified. No CrossOver or Apple proprietary binaries are bundled. Quarantine and the original release archive are preserved. Restore Standard before updating a component."
+    static let notice = "DXMT — Experimental translates Direct3D 10/11 to Metal, not Direct3D 9/12. This pinned, unmodified MIT-licensed v0.80 package requires macOS 15 or later, an Apple Silicon Metal GPU, Rosetta and compatible Wine. Use Install Wine in Downloads or Settings for MagicWine's managed runtime with the required Metal-view interface. The DXMT package and driver are bundled; no additional DXMT download is needed. Standard graphics remains the default; select DXMT in the bottle's Graphics settings to enable it. A compatible custom Wine runtime may also be used. An isolated process-local loader view prevents runtime WineD3D or winemetal from shadowing DXMT; the shared runtime is never modified by graphics selection. No CrossOver or Apple proprietary binaries are bundled. Quarantine and the original release archive are preserved. Restore Standard before updating a component."
     private static let directories: Set<String> = ["i386-windows", "x86_64-windows", "x86_64-unix"]
     private static let licenseSHA256 = "0acf1ce81dc7bbc0165f2f95ea359f37dc6bbe6546ef9f5feefa33496a942624"
     // Independent pins: a rewritten receipt cannot bless different extracted files.
@@ -29,6 +29,8 @@ enum DXMTInstallation {
         "x86_64-windows/nvngx.dll": "18d5847ee524ba6eeb2eee656817ddc00a45c46759a753854335a765e997e5fe",
         "x86_64-windows/winemetal.dll": "514245d533c750599614311a792c45ed600aef52948571d98c0fc70fd3df16e0",
     ]
+    // This versioned component metadata is immutable. Its original notice is
+    // separate from live onboarding text so UI changes cannot invalidate receipts.
     private static let provenance = """
     MagicWine DXMT component: \(componentID)
     Upstream: https://github.com/3Shain/dxmt/tree/589adb780354b461645b29999cefaf533594ee99
@@ -53,7 +55,7 @@ enum DXMTInstallation {
     resolves @rpath/ntdll.so and @rpath/winemac.so in the selected runtime view.
     No shared Wine files, DLL registry overrides, or dyld globals are changed.
     Optional nvapi64/nvngx remain archived and verified, but are not enabled.
-    \(notice)
+    DXMT — Experimental translates Direct3D 10/11 to Metal, not Direct3D 9/12. This pinned, unmodified MIT-licensed v0.80 package requires macOS 15 or later, an Apple Silicon Metal GPU, Rosetta and a compatible custom Wine runtime exposing the Metal-view interface. Stock managed Wine 11 lacks that interface: select a compatible custom Wine runtime in Settings before creating a new bottle. An isolated process-local loader view prevents runtime WineD3D or winemetal from shadowing DXMT; the shared runtime is never modified. No CrossOver or Apple proprietary binaries are bundled. Quarantine and the original release archive are preserved. Restore Standard before updating a component.
 
     """
     private struct Receipt: Codable, Equatable {
@@ -208,6 +210,10 @@ enum DXMTInstallation {
     static func validateRuntime(_ executable: URL) throws {
         try validateHost(macOSMajor: ProcessInfo.processInfo.operatingSystemVersion.majorVersion,
                          supportsAppleGPU: MTLCopyAllDevices().contains { $0.supportsFamily(.apple7) })
+        try validateNativeRuntime(executable)
+    }
+
+    static func validateNativeRuntime(_ executable: URL) throws {
         guard executable.isFileURL, ["wine", "wine64", "wineloader"].contains(executable.lastPathComponent) else {
             throw MagicWineError.setup("DXMT requires a compatible Wine executable, not a wrapper script.")
         }
@@ -244,7 +250,7 @@ enum DXMTInstallation {
         let individual: Set<String> = ["_get_win_data", "_release_win_data", "_macdrv_view_create_metal_view",
                                        "_macdrv_view_get_metal_layer", "_macdrv_view_release_metal_view"]
         guard exports.contains("_macdrv_functions") || individual.isSubset(of: exports) else {
-            throw MagicWineError.setup("This Wine macOS driver lacks DXMT's compatible Metal-view exports (macdrv_functions or get_win_data/release_win_data and macdrv_view_*). Select a compatible custom Wine runtime in Settings before creating a new bottle; DXMT was not enabled and WineD3D is not substituted.")
+            throw MagicWineError.setup("This bottle's Wine does not provide DXMT's Metal-view interface. Use Install Wine in Downloads or Settings, then create a new bottle with the installed Wine. Installing Wine does not change this bottle's pinned runtime. A compatible custom Wine runtime can also be selected for a new bottle. DXMT was not enabled; this bottle's graphics selection is unchanged.")
         }
     }
 

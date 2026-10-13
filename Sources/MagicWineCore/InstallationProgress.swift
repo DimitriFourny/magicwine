@@ -17,7 +17,6 @@ public struct WineDownloadProgress: Sendable {
 }
 
 public enum WineInstallationProgress: Sendable {
-    case fetchingMetadata
     case downloading(WineDownloadProgress)
     case verifying
     case extracting

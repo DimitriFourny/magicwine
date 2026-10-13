@@ -15,6 +15,10 @@ let package = Package(
             .copy("Resources/LICENSE-DXVK-DEPENDENCIES.txt"),
             .copy("Resources/dxmt-v0.80-builtin.tar.gz"),
             .copy("Resources/LICENSE-DXMT.txt"),
+            .copy("Resources/winemac-wine11.0-dxmt.1.so.deflate"),
+            .copy("Resources/winemac-wine11.0-dxmt.1-source.tar.gz"),
+            .copy("Resources/winemac-wine11.0-dxmt.1-provenance.json"),
+            .copy("Resources/LICENSE-WINE-DXMT.txt"),
             .copy("Resources/wow64cpu-wine11.0-magicwine.1.dll"),
             .copy("Resources/wow64cpu-wine11.0-magicwine.1-source.tar.gz"),
             .copy("Resources/LICENSE-WINE-WOW64CPU.txt")

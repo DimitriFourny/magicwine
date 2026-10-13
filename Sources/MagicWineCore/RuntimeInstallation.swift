@@ -3,15 +3,12 @@ import CryptoKit
 import Darwin
 
 struct RuntimeInstallation {
-    private struct Metadata: Decodable {
-        let url: String
-        let sha256: String
-        let version: String
-        let disabled: Bool?
-        let disable_reason: String?
-    }
+    static let notice = "MagicWine downloads pinned Gcenx Wine 11.0_1 and includes its source-built, open-source macOS driver with DXMT Metal-view support. This is not a notarized MagicWine runtime. By confirming installation, you authorize use of unsigned Wine and its bundled driver, and removal of com.apple.quarantine only inside the MagicWine-managed Wine Stable.app. MagicWine does not disable Gatekeeper or change system-wide security settings. SHA-256 checksums verify pinned contents, not malware safety. Standard graphics remains the default; DXMT is an optional backend requiring a supported host. Wine's optional Windows multimedia support requires the upstream universal GStreamer runtime (1.28.2 or newer) in /Library/Frameworks/GStreamer.framework; missing multimedia support is not a failure of basic Wine setup."
 
-    static let notice = "MagicWine downloads original Gcenx public Wine builds, not a notarized MagicWine runtime. By confirming installation, you authorize use of unsigned Wine and removal of com.apple.quarantine only inside MagicWine's managed Wine Stable.app. MagicWine does not disable Gatekeeper or change system-wide security settings. The SHA-256 checksum verifies the archive matches the published checksum; it is not malware verification. Homebrew currently flags this distribution for Gatekeeper checks. Wine's optional Windows multimedia support requires the upstream universal GStreamer runtime (1.28.2 or newer) in /Library/Frameworks/GStreamer.framework; missing multimedia support is not a failure of basic Wine setup."
+    static let source = URL(string: "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0_1/wine-stable-11.0_1-osx64.tar.xz")!
+    static let archiveSHA256 = "b50dc50ec7f41d58b115a6b685d4d1315ba3c797bd3aa0f49213f2703cb82388"
+    static let version = "11.0_1"
+    static let relativeExecutable = "Wine Stable.app/Contents/Resources/wine/bin/wine"
 
     static func install(paths: ApplicationPaths,
                         progress: (@Sendable (WineInstallationProgress) -> Void)? = nil) async throws -> URL {
@@ -26,49 +23,16 @@ struct RuntimeInstallation {
                                                 attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: stage) }
         do {
-            progress?(.fetchingMetadata)
-            let metadataURL = URL(string: "https://formulae.brew.sh/api/cask/wine-stable.json")!
-            var request = URLRequest(url: metadataURL)
-            request.timeoutInterval = 30
-            let (data, response) = try await URLSession.shared.data(for: request)
-            try checkHTTP(response)
-            guard data.count <= 1_048_576 else { throw MagicWineError.setup("Wine metadata is unexpectedly large.") }
-            let metadata = try JSONDecoder().decode(Metadata.self, from: data)
-            guard let source = URL(string: metadata.url), source.scheme == "https",
-                  source.host?.lowercased() == "github.com", source.user == nil, source.password == nil,
-                  source.port == nil, source.query == nil, source.fragment == nil,
-                  source.path.hasPrefix("/Gcenx/macOS_Wine_builds/releases/download/"),
-                  source.path.hasSuffix(".tar.xz"),
-                  !source.pathComponents.contains(".."),
-                  metadata.sha256.count == 64,
-                  metadata.sha256.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
-                  !metadata.version.isEmpty,
-                  metadata.version.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || [45, 46, 95].contains($0) }) else {
-                throw MagicWineError.setup("The maintained wine-stable metadata has an invalid publisher URL, version, or SHA-256 checksum.")
-            }
-            try append("Source: \(source.absoluteString)\nVersion: \(metadata.version)\nSHA-256: \(metadata.sha256)\nHomebrew disabled: \(metadata.disabled == true), reason: \(metadata.disable_reason ?? "none")\n", to: logURL)
-            let destination = paths.runtimesDirectory.appendingPathComponent("wine-stable-\(metadata.version)-\(metadata.sha256.prefix(12))", isDirectory: true)
-            let relativeExecutable = "Wine Stable.app/Contents/Resources/wine/bin/wine"
+            progress?(.preparing)
+            try append("Source: \(source.absoluteString)\nVersion: \(version)\nSHA-256: \(archiveSHA256)\nDriver: \(DXMTWineDriver.componentID)\n", to: logURL)
+            let destination = destination(paths: paths)
             if FileManager.default.fileExists(atPath: destination.path) {
                 progress?(.reusing)
-                try validateManagedDirectory(destination, paths: paths)
-                let receiptURL = destination.appendingPathComponent("installation.json")
-                guard try fileType(at: receiptURL) == mode_t(S_IFREG) else {
-                    throw MagicWineError.setup("The cached Wine installation receipt is not an ordinary file.")
-                }
-                let receipt = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: receiptURL))
-                guard receipt["source"] == source.absoluteString,
-                      receipt["sha256"]?.lowercased() == metadata.sha256.lowercased(),
-                      receipt["version"] == metadata.version else {
-                    throw MagicWineError.setup("The cached Wine installation receipt does not match the current publisher metadata.")
-                }
-                progress?(.preparing)
-                let removed = try removeQuarantine(from: destination, paths: paths)
+                let removed = try reuseCachedRuntime(at: destination, paths: paths)
                 try append("Quarantine removal after user consent: \(destination.appendingPathComponent("Wine Stable.app").path); removed \(removed) com.apple.quarantine attributes.\n", to: logURL)
-                try writeReceipt(receipt, at: destination)
                 return destination.appendingPathComponent(relativeExecutable)
             }
-            request = URLRequest(url: source)
+            var request = URLRequest(url: source)
             request.timeoutInterval = 600
             let (download, archiveResponse) = try await RuntimeDownload.download(for: request, progress: progress.map { callback in
                 { @Sendable update in callback(.downloading(update)) }
@@ -80,7 +44,7 @@ struct RuntimeInstallation {
             try Task.checkCancellation()
             progress?(.verifying)
             let checksum = try await hash(archive)
-            guard checksum == metadata.sha256.lowercased() else {
+            guard checksum == archiveSHA256 else {
                 throw MagicWineError.setup("Wine archive SHA-256 mismatch. No runtime was installed.")
             }
             progress?(.extracting)
@@ -100,10 +64,15 @@ struct RuntimeInstallation {
                     "--no-same-owner", "--no-same-permissions"], paths: paths, name: "archive-extract", timeout: 180)
             try Task.checkCancellation()
             progress?(.preparing)
+            // Validate containment before the driver installer writes into the fresh stage.
+            try validateManagedDirectory(extraction, paths: paths)
+            _ = try validateLayout(at: extraction)
+            let executable = extraction.appendingPathComponent(relativeExecutable)
+            try DXMTWineDriver.install(at: executable)
+            try DXMTInstallation.validateNativeRuntime(executable)
             let removed = try removeQuarantine(from: extraction, paths: paths)
             try append("Quarantine removal after user consent: \(extraction.appendingPathComponent("Wine Stable.app").path); removed \(removed) com.apple.quarantine attributes.\n", to: logURL)
-            try writeReceipt(["source": source.absoluteString, "sha256": checksum,
-                              "version": metadata.version], at: extraction)
+            try writeReceipt(provenance, at: extraction)
             try Task.checkCancellation()
             try FileManager.default.moveItem(at: extraction, to: destination)
             try append("Published: \(destination.path)\n", to: logURL)
@@ -119,6 +88,40 @@ struct RuntimeInstallation {
             try? append("Failure: \(error.localizedDescription)\n", to: logURL)
             throw MagicWineError.setup("Wine installation failed: \(error.localizedDescription)\nInstallation log: \(logURL.path)")
         }
+    }
+
+    static func destination(paths: ApplicationPaths) -> URL {
+        let name = "wine-\(version)-\(archiveSHA256.prefix(12))-\(DXMTWineDriver.componentID)"
+        return paths.runtimesDirectory.appendingPathComponent(name, isDirectory: true)
+    }
+
+    static let provenance = [
+        "source": source.absoluteString, "sha256": archiveSHA256,
+        "version": version, "driverComponentID": DXMTWineDriver.componentID
+    ]
+
+    static func reuseCachedRuntime(at destination: URL, paths: ApplicationPaths) throws -> Int {
+        guard destination.standardizedFileURL == self.destination(paths: paths).standardizedFileURL else {
+            throw MagicWineError.setup("The cached Wine installation path does not match the pinned runtime.")
+        }
+        try validateManagedDirectory(destination, paths: paths)
+        let receiptURL = destination.appendingPathComponent("installation.json")
+        guard try fileType(at: receiptURL) == mode_t(S_IFREG) else {
+            throw MagicWineError.setup("The cached Wine installation receipt is not an ordinary file.")
+        }
+        let receipt = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: receiptURL))
+        guard receipt["source"] == source.absoluteString,
+              receipt["sha256"] == archiveSHA256,
+              receipt["version"] == version,
+              receipt["driverComponentID"] == DXMTWineDriver.componentID else {
+            throw MagicWineError.setup("The cached Wine installation receipt does not match the pinned archive and driver.")
+        }
+        let executable = destination.appendingPathComponent(relativeExecutable)
+        try DXMTWineDriver.validate(at: executable)
+        try DXMTInstallation.validateNativeRuntime(executable)
+        let removed = try removeQuarantine(from: destination, paths: paths)
+        try writeReceipt(receipt, at: destination)
+        return removed
     }
 
     static func tool(_ path: String, arguments: [String], paths: ApplicationPaths,

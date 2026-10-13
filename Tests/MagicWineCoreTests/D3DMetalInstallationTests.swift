@@ -73,6 +73,44 @@ struct D3DMetalInstallationTests {
         }
     }
 
+    @Test(arguments: ["bin/wineloader", "lib64/wine/x86_64-unix/wine"])
+    func discoveryPrefersPinnedRuntimeIncludingLinkedLoader(loader: String) throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let prefix = fixture.directory.appendingPathComponent("SelectedWine")
+        let libraries = prefix.appendingPathComponent("lib64/apple_gptk")
+        try payload(libraries)
+        try put(Data(), at: prefix, loader)
+        let applications = fixture.directory.appendingPathComponent("Applications")
+        try payload(applications.appendingPathComponent("CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gptk"))
+        let executable = prefix.appendingPathComponent(loader)
+        #expect(D3DMetalInstallation.discoverSource(executable: executable,
+                                                   applicationDirectories: [applications])?.path == libraries.path)
+        let linked = fixture.directory.appendingPathComponent("wine")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: executable)
+        #expect(D3DMetalInstallation.discoverSource(executable: linked,
+                                                   applicationDirectories: [applications])?.path == libraries.path)
+    }
+
+    @Test func discoveryFallsBackToInstalledCrossOverButRequiresBothBridgeArchitectures() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let applications = fixture.directory.appendingPathComponent("Applications")
+        let libraries = applications.appendingPathComponent("CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gptk")
+        let executable = fixture.directory.appendingPathComponent("UnrelatedWine/bin/wine")
+        #expect(D3DMetalInstallation.discoverSource(executable: executable,
+                                                   applicationDirectories: [applications]) == nil)
+        try payload(libraries)
+        #expect(D3DMetalInstallation.discoverSource(executable: executable,
+                                                   applicationDirectories: [applications])?.path == libraries.path)
+        let bridge = libraries.appendingPathComponent("wine/x86_64-unix/d3d12.so")
+        try FileManager.default.removeItem(at: bridge)
+        #expect(D3DMetalInstallation.discoverSource(executable: executable,
+                                                   applicationDirectories: [applications]) == nil)
+        try macho().write(to: bridge)
+        try FileManager.default.removeItem(at: libraries.appendingPathComponent("wine/x86_64-windows/d3d11.dll"))
+        #expect(D3DMetalInstallation.discoverSource(executable: executable,
+                                                   applicationDirectories: [applications]) == nil)
+    }
+
     @Test(arguments: [true, false])
     func importIsContentAddressedAndReusableWithoutOriginalSource(versioned: Bool) async throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
@@ -243,6 +281,9 @@ struct D3DMetalInstallationTests {
         try put(Data("#!/bin/sh\nexit 1\n".utf8), at: runtime, "bin/wine")
         try put(macho(), at: runtime, "bin/wineserver")
         try put(macho(), at: runtime, "lib/wine/x86_64-unix/ntdll.so")
+        for name in ["winemac.so", "win32u.so", "opengl32.so"] {
+            try put(macho(), at: runtime, "lib/wine/x86_64-unix/" + name)
+        }
         // Real Wine packages can hard-link their child loader. Read-only inputs are
         // safe to copy; the managed view must still contain independent regular files.
         try FileManager.default.linkItem(at: loader, to: runtime.appendingPathComponent("lib/wine/x86_64-unix/wine"))
@@ -268,7 +309,8 @@ struct D3DMetalInstallationTests {
         #expect(try Data(contentsOf: runtime.appendingPathComponent("lib/wine/x86_64-windows/d3d11.dll")) == original)
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: view.appendingPathComponent("lib/wine/x86_64-windows/d3d11.dll").path) ==
                 provider.appendingPathComponent("x86_64-windows/d3d11.dll").path)
-        for relative in ["bin/wine", "bin/wine64", "lib/wine/x86_64-unix/wine", "lib/wine/x86_64-unix/ntdll.so"] {
+        for relative in ["bin/wine", "bin/wine64", "lib/wine/x86_64-unix/wine", "lib/wine/x86_64-unix/ntdll.so",
+                         "lib/wine/x86_64-unix/winemac.so", "lib/wine/x86_64-unix/win32u.so", "lib/wine/x86_64-unix/opengl32.so"] {
             var status = stat()
             #expect(view.appendingPathComponent(relative).path.withCString { lstat($0, &status) } == 0)
             #expect(status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG))
@@ -279,6 +321,22 @@ struct D3DMetalInstallationTests {
         try FileManager.default.linkItem(at: child, to: processLauncher)
         #expect(try GraphicsRuntimeView.prepare(executable: loader, component: fixture.source,
                                                backend: backend, paths: fixture.paths) == selected)
+        if backend == .dxmt {
+            let source = provider.appendingPathComponent("x86_64-unix/winemetal.so")
+            let native = view.appendingPathComponent("lib/wine/x86_64-unix/winemetal.so")
+            let originalBridge = try Data(contentsOf: source)
+            // The native bridge must own its loader-relative path, not resolve into
+            // the component directory where this runtime's winemac.so is absent.
+            #expect(native.resolvingSymlinksInPath().deletingLastPathComponent() ==
+                    view.appendingPathComponent("lib/wine/x86_64-unix").resolvingSymlinksInPath())
+            try Data("changed native bridge".utf8).write(to: native)
+            #expect(try Data(contentsOf: source) == originalBridge)
+            #expect(throws: MagicWineError.self) {
+                _ = try GraphicsRuntimeView.prepare(executable: loader, component: fixture.source,
+                                                    backend: backend, paths: fixture.paths)
+            }
+            try originalBridge.write(to: native)
+        }
         try Data("changed copy".utf8).write(to: processLauncher)
         #expect(throws: MagicWineError.self) {
             _ = try GraphicsRuntimeView.prepare(executable: loader, component: fixture.source,

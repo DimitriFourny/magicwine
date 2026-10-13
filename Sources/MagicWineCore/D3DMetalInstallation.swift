@@ -7,7 +7,7 @@ import Foundation
 /// Apple's download and governing agreement require the user's Apple Account:
 /// https://developer.apple.com/games/game-porting-toolkit/
 enum D3DMetalInstallation {
-    static let notice = "D3DMetal — Experimental imports your own Apple Game Porting Toolkit evaluation libraries. Obtain them from Apple and accept the agreement accompanying your version yourself; MagicWine neither supplies Apple binaries nor accepts or grants Apple license rights. A framework LICENSE may cover only third-party dependencies, not Apple's software. Requires Apple silicon, Rosetta, macOS 14 or newer (or the imported library's higher minimum), and an x86_64 Wine build with Apple's macdrv_functions graphics bridge ABI; ordinary Wine Stable is not compatible. Only 64-bit Direct3D 11/12 and DXGI are selected. Quarantine and accompanying notices are retained. Content hashes detect later changes, not authenticity, permission to use, or malware. No ray tracing or other optional hardware features are forced."
+    static let notice = "D3DMetal — Experimental uses your locally installed Apple libraries. MagicWine looks beside this bottle's Wine and in installed CrossOver applications before asking for a library folder. You must have the right to use those libraries under the terms accompanying your distribution; MagicWine neither supplies Apple binaries nor accepts or grants license rights. A framework LICENSE may cover only third-party dependencies, not Apple's software. Requires Apple silicon, Rosetta, macOS 14 or newer (or the library's higher minimum), and an x86_64 Wine build with Apple's macdrv_functions graphics bridge ABI; ordinary Wine Stable is not compatible. Only 64-bit Direct3D 11/12 and DXGI are selected. Quarantine and accompanying notices are retained. Content hashes detect later changes, not authenticity, permission to use, or malware. No ray tracing or other optional hardware features are forced."
 
     private static let framework = "external/D3DMetal.framework"
     private static let bridges = ["d3d11", "d3d12", "dxgi"]
@@ -32,6 +32,38 @@ enum D3DMetalInstallation {
     static func supports(componentID: String) -> Bool {
         componentID.hasPrefix("d3dmetal-") && componentID.utf8.count == 73 &&
             componentID.dropFirst(9).utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    /// Find local libraries only; installation still validates every file before use.
+    /// Prefer the bottle's Wine distribution over an unrelated installed CrossOver.
+    static func discoverSource(executable: URL, applicationDirectories: [URL] = [
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
+        URL(fileURLWithPath: "/Applications", isDirectory: true)
+    ]) -> URL? {
+        var candidates: [URL] = []
+        for loader in [executable, executable.resolvingSymlinksInPath()] where loader.isFileURL {
+            let directory = loader.deletingLastPathComponent()
+            let prefix: URL
+            if directory.lastPathComponent == "bin" {
+                prefix = directory.deletingLastPathComponent()
+            } else if directory.lastPathComponent == "x86_64-unix" {
+                prefix = directory.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            } else {
+                continue
+            }
+            for relative in ["lib64/apple_gptk", "lib/apple_gptk", "lib"] {
+                candidates.append(prefix.appendingPathComponent(relative, isDirectory: true))
+            }
+        }
+        for directory in applicationDirectories {
+            candidates.append(directory.appendingPathComponent(
+                "CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gptk", isDirectory: true))
+        }
+        let required = ["external/libd3dshared.dylib", framework + "/D3DMetal"] +
+            bridges.flatMap { ["wine/x86_64-windows/\($0).dll", "wine/x86_64-unix/\($0).so"] }
+        return candidates.first { root in
+            required.allSatisfy { FileManager.default.fileExists(atPath: root.appendingPathComponent($0).path) }
+        }
     }
 
     static func install(paths: ApplicationPaths, source: URL,
@@ -158,8 +190,12 @@ enum D3DMetalInstallation {
         let candidates = ["lib/wine/x86_64-unix/winemac.so", "lib64/wine/x86_64-unix/winemac.so"]
         for name in candidates {
             let driver = prefix.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: driver.path),
-               (try? machO(driver, requiredExport: "_macdrv_functions")) != nil { return }
+            if FileManager.default.fileExists(atPath: driver.path) {
+                guard (try? machO(driver, requiredExport: "_magicwine_dxmt_bridge_v1")) == nil else {
+                    throw failure("MagicWine's managed Wine implements the DXMT bridge, not Apple's complete D3DMetal driver ABI. Use DXMT with this runtime, or select a compatible GPTK/Whisky/CrossOver native Wine loader for D3DMetal.")
+                }
+                if (try? machO(driver, requiredExport: "_macdrv_functions")) != nil { return }
+            }
         }
         throw failure("This Wine runtime does not export Apple's macdrv_functions bridge ABI. Select a compatible GPTK/Whisky/CrossOver native Wine loader in Settings, then create a new bottle with it; ordinary Wine Stable cannot load these libraries. No runtime files were modified.")
     }

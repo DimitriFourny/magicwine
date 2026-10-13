@@ -106,7 +106,44 @@ struct RuntimeInstallationTests {
         }
     }
 
-    @Test(arguments: ["wine-stable-test", ".install-test/payload"])
+    private func descriptor(at executable: URL) -> RuntimeDescriptor {
+        RuntimeDescriptor(executableURL: executable.resolvingSymlinksInPath().standardizedFileURL,
+                          version: "wine-11.0")
+    }
+
+    @Test(arguments: [false, true])
+    func obsoleteManagedPreferenceRequiresCurrentWine(currentInstalled: Bool) throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let runtime = WineRuntime(paths: fixture.paths)
+        let current = descriptor(at: RuntimeInstallation.destination(paths: fixture.paths)
+            .appendingPathComponent(RuntimeInstallation.relativeExecutable))
+        let obsolete = descriptor(at: fixture.paths.runtimesDirectory
+            .appendingPathComponent("wine-stable-11.0_1-b50dc50ec7f4")
+            .appendingPathComponent(RuntimeInstallation.relativeExecutable))
+        let external = descriptor(at: fixture.directory.appendingPathComponent("CustomWine/bin/wine"))
+        let available = [external, obsolete] + (currentInstalled ? [current] : [])
+        let expected = currentInstalled ? current : nil
+
+        #expect(runtime.preferredRuntime(in: available, preferredPath: obsolete.id) == expected)
+        #expect(runtime.preferredRuntime(in: available, preferredPath: nil) == expected)
+    }
+
+    @Test(arguments: [false, true])
+    func explicitCustomPreferenceDoesNotSilentlySwitchWine(customAvailable: Bool) throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let runtime = WineRuntime(paths: fixture.paths)
+        let current = descriptor(at: RuntimeInstallation.destination(paths: fixture.paths)
+            .appendingPathComponent(RuntimeInstallation.relativeExecutable))
+        // A sibling with the same prefix is not a managed installation.
+        let custom = descriptor(at: fixture.paths.root.appendingPathComponent("Runtimes-custom/bin/wine"))
+        let available = [current] + (customAvailable ? [custom] : [])
+
+        #expect(runtime.preferredRuntime(in: available, preferredPath: custom.id) == (customAvailable ? custom : nil))
+    }
+
+    @Test(arguments: ["wine-test", ".install-test/payload"])
     func removesOnlyManagedBundleQuarantineIncludingHiddenDescendants(runtimePath: String) throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
@@ -118,7 +155,7 @@ struct RuntimeInstallationTests {
             try setAttribute(preservedName, value: preservedValue, on: entry)
         }
 
-        let sibling = try makeLayout(in: fixture.paths.runtimesDirectory.appendingPathComponent("wine-stable-other"))
+        let sibling = try makeLayout(in: fixture.paths.runtimesDirectory.appendingPathComponent("wine-other"))
         let custom = try makeLayout(in: fixture.directory.appendingPathComponent("CustomWine"))
         let receipt = runtimeDirectory.appendingPathComponent("installation.json")
         let bottleFile = fixture.paths.bottlesDirectory.appendingPathComponent("bottle-file.dat")
@@ -172,11 +209,11 @@ struct RuntimeInstallationTests {
         defer { fixture.cleanUp() }
         try FileManager.default.createDirectory(at: fixture.paths.root, withIntermediateDirectories: false)
         let externalRuntimes = fixture.directory.appendingPathComponent("ExternalRuntimes", isDirectory: true)
-        let externalRuntime = externalRuntimes.appendingPathComponent("wine-stable-test", isDirectory: true)
+        let externalRuntime = externalRuntimes.appendingPathComponent("wine-test", isDirectory: true)
         let external = try makeLayout(in: externalRuntime)
         try quarantine(external.entries)
         try FileManager.default.createSymbolicLink(at: fixture.paths.runtimesDirectory, withDestinationURL: externalRuntimes)
-        let candidate = fixture.paths.runtimesDirectory.appendingPathComponent("wine-stable-test", isDirectory: true)
+        let candidate = fixture.paths.runtimesDirectory.appendingPathComponent("wine-test", isDirectory: true)
 
         #expect(throws: MagicWineError.self) {
             try RuntimeInstallation.removeQuarantine(from: candidate, paths: fixture.paths)
@@ -188,7 +225,7 @@ struct RuntimeInstallationTests {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         try fixture.paths.prepare()
-        let runtimeDirectory = fixture.paths.runtimesDirectory.appendingPathComponent("wine-stable-test", isDirectory: true)
+        let runtimeDirectory = fixture.paths.runtimesDirectory.appendingPathComponent("wine-test", isDirectory: true)
         try FileManager.default.createDirectory(at: runtimeDirectory, withIntermediateDirectories: false)
         let external = try makeLayout(in: fixture.directory.appendingPathComponent("ExternalWine"))
         try quarantine(external.entries)
@@ -206,7 +243,7 @@ struct RuntimeInstallationTests {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         try fixture.paths.prepare()
-        let runtimeDirectory = fixture.paths.runtimesDirectory.appendingPathComponent("wine-stable-test", isDirectory: true)
+        let runtimeDirectory = fixture.paths.runtimesDirectory.appendingPathComponent("wine-test", isDirectory: true)
         let layout = try makeLayout(in: runtimeDirectory)
         try quarantine(layout.entries)
         let externalDirectory = fixture.directory.appendingPathComponent("External", isDirectory: true)
@@ -227,7 +264,7 @@ struct RuntimeInstallationTests {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         try fixture.paths.prepare()
-        let runtimeDirectory = fixture.paths.runtimesDirectory.appendingPathComponent("wine-stable-test", isDirectory: true)
+        let runtimeDirectory = fixture.paths.runtimesDirectory.appendingPathComponent("wine-test", isDirectory: true)
         let layout = try makeLayout(in: runtimeDirectory)
         try quarantine(layout.entries)
         let siblingFile = runtimeDirectory.appendingPathComponent("sibling.dat")
@@ -252,7 +289,7 @@ struct RuntimeInstallationTests {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         try fixture.paths.prepare()
-        let runtimeDirectory = fixture.paths.runtimesDirectory.appendingPathComponent("wine-stable-test", isDirectory: true)
+        let runtimeDirectory = fixture.paths.runtimesDirectory.appendingPathComponent("wine-test", isDirectory: true)
         let layout = try makeLayout(in: runtimeDirectory)
         try quarantine(layout.entries)
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: layout.wineserver.path)
@@ -269,7 +306,7 @@ struct RuntimeInstallationTests {
         let runtime = WineRuntime(paths: fixture.paths)
 
         await #expect(throws: MagicWineError.self) {
-            try await runtime.installLatest(acceptUnsigned: false)
+            try await runtime.installRuntime(acceptUnsigned: false)
         }
         #expect(!FileManager.default.fileExists(atPath: fixture.paths.root.path))
     }
@@ -278,23 +315,85 @@ struct RuntimeInstallationTests {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         try fixture.paths.prepare()
-        let runtimeDirectory = fixture.paths.runtimesDirectory.appendingPathComponent("wine-stable-test", isDirectory: true)
-        let layout = try makeLayout(in: runtimeDirectory)
-        try quarantine(layout.entries)
-        for entry in layout.entries {
+        let layout = try makeLayout(in: RuntimeInstallation.destination(paths: fixture.paths))
+        let entries = layout.entries
+        try quarantine(entries)
+        for entry in entries {
             try setAttribute(preservedName, value: preservedValue, on: entry)
         }
         let runtime = WineRuntime(paths: fixture.paths)
         let directoriesBefore = try FileManager.default.contentsOfDirectory(atPath: fixture.paths.runtimesDirectory.path)
 
         await #expect(throws: MagicWineError.self) {
-            try await runtime.installLatest(acceptUnsigned: false)
+            try await runtime.installRuntime(acceptUnsigned: false)
         }
-        try expectQuarantineUnchanged(layout.entries)
-        for entry in layout.entries {
+        try expectQuarantineUnchanged(entries)
+        for entry in entries {
             #expect(try attribute(preservedName, on: entry) == preservedValue)
         }
         #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.paths.runtimesDirectory.path) == directoriesBefore)
         #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.paths.logsDirectory.path).isEmpty)
+    }
+
+
+    @Test(arguments: ["source", "sha256", "version", "driverComponentID"], [false, true])
+    func rejectsMismatchedCachedReceiptBeforeChangingQuarantine(field: String, missing: Bool) throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        try fixture.paths.prepare()
+        let destination = RuntimeInstallation.destination(paths: fixture.paths)
+        let layout = try makeLayout(in: destination)
+        try quarantine(layout.entries)
+        var receipt = RuntimeInstallation.provenance
+        receipt[field] = missing ? nil : "stale-or-corrupt"
+        let receiptURL = destination.appendingPathComponent("installation.json")
+        let original = try JSONEncoder().encode(receipt)
+        try original.write(to: receiptURL)
+
+        #expect(throws: MagicWineError.self) {
+            try RuntimeInstallation.reuseCachedRuntime(at: destination, paths: fixture.paths)
+        }
+        try expectQuarantineUnchanged(layout.entries)
+        #expect(try Data(contentsOf: receiptURL) == original)
+    }
+
+    @Test func rejectsUnexpectedCachedPathWithoutChangingQuarantine() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        try fixture.paths.prepare()
+        let unexpected = fixture.paths.runtimesDirectory.appendingPathComponent("wine-unexpected")
+        let layout = try makeLayout(in: unexpected)
+        let receiptURL = unexpected.appendingPathComponent("installation.json")
+        try JSONEncoder().encode(RuntimeInstallation.provenance).write(to: receiptURL)
+        try quarantine(layout.entries + [receiptURL])
+
+        #expect(throws: MagicWineError.self) {
+            try RuntimeInstallation.reuseCachedRuntime(at: unexpected, paths: fixture.paths)
+        }
+        try expectQuarantineUnchanged(layout.entries + [receiptURL])
+    }
+
+    @Test func rejectsCorruptDriverWithoutReplacingItOrRemovingQuarantine() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        try fixture.paths.prepare()
+        let destination = RuntimeInstallation.destination(paths: fixture.paths)
+        let layout = try makeLayout(in: destination)
+        let driver = layout.app.appendingPathComponent("Contents/Resources/wine/lib/wine/x86_64-unix/winemac.so")
+        try FileManager.default.createDirectory(at: driver.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let corrupt = Data("not the pinned DXMT Wine driver".utf8)
+        try corrupt.write(to: driver)
+        let receipt = RuntimeInstallation.provenance
+        let receiptURL = destination.appendingPathComponent("installation.json")
+        let receiptData = try JSONEncoder().encode(receipt)
+        try receiptData.write(to: receiptURL)
+        try quarantine(layout.entries + [driver, receiptURL])
+
+        #expect(throws: MagicWineError.self) {
+            try RuntimeInstallation.reuseCachedRuntime(at: destination, paths: fixture.paths)
+        }
+        #expect(try Data(contentsOf: driver) == corrupt)
+        #expect(try Data(contentsOf: receiptURL) == receiptData)
+        try expectQuarantineUnchanged(layout.entries + [driver, receiptURL])
     }
 }

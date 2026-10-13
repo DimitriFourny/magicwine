@@ -54,7 +54,7 @@ final class AppModel: ObservableObject {
     }
 
     var preferredRuntime: RuntimeDescriptor? {
-        runtimes.first { $0.executableURL.path == settings.preferredRuntimePath } ?? runtimes.first
+        wine.preferredRuntime(in: runtimes, preferredPath: settings.preferredRuntimePath)
     }
 
     func activity(for bottle: Bottle) -> BottleActivity {
@@ -119,6 +119,16 @@ final class AppModel: ObservableObject {
             }
         }
         runtimes = found
+        if let preferred = preferredRuntime, preferred.executableURL.path != settings.preferredRuntimePath {
+            do {
+                var updated = settings
+                updated.preferredRuntimePath = preferred.executableURL.path
+                try await store.saveSettings(updated)
+                settings = updated
+            } catch {
+                runtimeError = "Could not save the Wine preference. \(error.localizedDescription)"
+            }
+        }
         runtimeActivity = nil
     }
 
@@ -133,7 +143,7 @@ final class AppModel: ObservableObject {
         guard runtimeActivity == nil else { return }
         let installationID = UUID()
         self.installationID = installationID
-        updateInstallationProgress(.fetchingMetadata)
+        updateInstallationProgress(.preparing)
         runtimeError = nil
         Task { [self] in
             defer {
@@ -142,7 +152,7 @@ final class AppModel: ObservableObject {
                 runtimeActivity = nil
             }
             do {
-                let installed = try await wine.installLatest(acceptUnsigned: true) { [weak self] progress in
+                let installed = try await wine.installRuntime(acceptUnsigned: true) { [weak self] progress in
                     DispatchQueue.main.async { [weak self] in
                         guard let self, self.installationID == installationID else { return }
                         self.updateInstallationProgress(progress)
@@ -162,8 +172,6 @@ final class AppModel: ObservableObject {
     private func updateInstallationProgress(_ progress: WineInstallationProgress) {
         installationProgress = progress
         switch progress {
-        case .fetchingMetadata:
-            runtimeActivity = "Fetching Wine release…"
         case .downloading:
             runtimeActivity = "Downloading Wine…"
         case .verifying:
@@ -353,17 +361,22 @@ final class AppModel: ObservableObject {
         state.graphicsProgress = .stopping
         activities[bottle.id] = state
         perform(in: bottle, title: "Stopping Windows processes…") { [self] in
-            let updated = try await self.wine.configureGraphics(
-                backend, in: bottle, showHUD: showHUD, acceptExperimental: backend != .standard,
-                componentSource: componentSource
-            ) { [weak self] progress in
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.activities[bottle.id]?.graphicsSetupID == setupID else { return }
-                    self.updateGraphicsProgress(progress, for: bottle.id)
+            do {
+                let updated = try await self.wine.configureGraphics(
+                    backend, in: bottle, showHUD: showHUD, acceptExperimental: backend != .standard,
+                    componentSource: componentSource
+                ) { [weak self] progress in
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.activities[bottle.id]?.graphicsSetupID == setupID else { return }
+                        self.updateGraphicsProgress(progress, for: bottle.id)
+                    }
                 }
+                self.replace(updated)
+                return nil
+            } catch {
+                self.report(error, title: "Could Not Change Graphics")
+                throw error
             }
-            self.replace(updated)
-            return nil
         }
     }
 
@@ -384,9 +397,16 @@ final class AppModel: ObservableObject {
     }
 
     func importD3DMetal(in bottle: Bottle) {
+        guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
+              bottle.isInitialized, activity(for: bottle).title == nil,
+              !activity(for: bottle).isStopping else { return }
+        if let source = WineRuntime.discoverD3DMetalSource(executable: bottle.runtime.executableURL) {
+            setGraphics(.d3dmetal, in: bottle, showHUD: bottle.graphics.showHUD, componentSource: source)
+            return
+        }
         let panel = NSOpenPanel()
         panel.title = "Import D3DMetal Libraries"
-        panel.message = "Choose the library folder from your legally obtained Apple evaluation toolkit. MagicWine does not download these libraries or accept Apple's terms for you."
+        panel.message = "No D3DMetal libraries were found beside this bottle’s Wine or in an installed CrossOver. Choose your legally obtained library folder. MagicWine does not download these libraries or accept their terms for you."
         panel.prompt = "Import"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -395,7 +415,7 @@ final class AppModel: ObservableObject {
         panel.begin { [weak self] response in
             Task { @MainActor in
                 if response == .OK, let url = panel.url {
-                    self?.setGraphics(.d3dmetal, in: bottle, componentSource: url)
+                    self?.setGraphics(.d3dmetal, in: bottle, showHUD: bottle.graphics.showHUD, componentSource: url)
                 }
             }
         }
