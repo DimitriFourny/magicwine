@@ -1,0 +1,190 @@
+--- a/dlls/winemac.drv/Makefile.in
++++ b/dlls/winemac.drv/Makefile.in
+@@ -27,6 +27,7 @@
+ 	cocoa_window.m \
+ 	display.c \
+ 	dllmain.c \
++	dxmt.c \
+ 	event.c \
+ 	gdi.c \
+ 	image.c \
+--- a/dlls/winemac.drv/macdrv.h
++++ b/dlls/winemac.drv/macdrv.h
+@@ -206,8 +206,8 @@
+ 
+ extern struct macdrv_client_surface *macdrv_client_surface_create(HWND hwnd);
+ 
+-extern struct macdrv_win_data *get_win_data(HWND hwnd);
+-extern void release_win_data(struct macdrv_win_data *data);
++extern __attribute__((visibility("default"))) struct macdrv_win_data *get_win_data(HWND hwnd);
++extern __attribute__((visibility("default"))) void release_win_data(struct macdrv_win_data *data);
+ extern void init_win_context(void);
+ extern macdrv_window macdrv_get_cocoa_window(HWND hwnd, BOOL require_on_screen);
+ extern RGNDATA *get_region_data(HRGN hrgn, HDC hdc_lptodp);
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -524,9 +524,9 @@
+ extern void macdrv_remove_view_opengl_context(macdrv_view v, macdrv_opengl_context c);
+ extern macdrv_metal_device macdrv_create_metal_device(void);
+ extern void macdrv_release_metal_device(macdrv_metal_device d);
+-extern macdrv_metal_view macdrv_view_create_metal_view(macdrv_view v, macdrv_metal_device d);
+-extern macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v);
+-extern void macdrv_view_release_metal_view(macdrv_metal_view v);
++extern __attribute__((visibility("default"))) macdrv_metal_view macdrv_view_create_metal_view(macdrv_view v, macdrv_metal_device d);
++extern __attribute__((visibility("default"))) macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v);
++extern __attribute__((visibility("default"))) void macdrv_view_release_metal_view(macdrv_metal_view v);
+ extern bool macdrv_get_view_backing_size(macdrv_view v, int backing_size[2]);
+ extern void macdrv_set_view_backing_size(macdrv_view v, const int backing_size[2]);
+ extern uint32_t macdrv_window_background_color(void);
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -3938,6 +3938,12 @@
+ }
+ }
+ 
++/* Public DXMT bridge: dispatch blocks retain their native Cocoa ABI. */
++void macdrv_dxmt_on_main_thread(void *block)
++{
++    OnMainThread((dispatch_block_t)block);
++}
++
+ macdrv_metal_view macdrv_view_create_metal_view(macdrv_view v, macdrv_metal_device d)
+ {
+     id<MTLDevice> device = (id<MTLDevice>)d;
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -1155,6 +1155,7 @@
+     NtUserMapWindowPoints(hwnd, toplevel, (POINT *)&rect, 2, NtUserGetWinMonitorDpi(toplevel, MDT_RAW_DPI));
+ 
+     surface = client_surface_create(sizeof(*surface), &macdrv_client_surface_funcs, hwnd);
++    if (!surface) return NULL;
+     surface->cocoa_view = macdrv_create_view(cgrect_from_rect(rect));
+     macdrv_set_view_hidden(surface->cocoa_view, TRUE);
+ 
+--- /dev/null
++++ b/dlls/winemac.drv/dxmt.c
+@@ -0,0 +1,124 @@
++/*
++ * DXMT v0.80 compatibility bridge for Wine 11 client surfaces.
++ * Copyright 2026 MagicWine contributors
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ * This library is distributed WITHOUT ANY WARRANTY; without even the
++ * implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++ * See COPYING.LIB for the full license.
++ *
++ * Contract: 3Shain/dxmt v0.80 src/winemetal/unix/winemetal_unix.c.
++ * Its fourth pointer is client_cocoa_view, not Wine 11's third pointer.
++ * Never expose native macdrv_win_data through this compatibility table.
++ */
++#if 0
++#pragma makedep unix
++#endif
++#include "config.h"
++#include <pthread.h>
++#include <stdlib.h>
++#include "macdrv.h"
++#include "wine/list.h"
++
++struct dxmt_win_data
++{
++    HWND hwnd;
++    macdrv_window cocoa_window;
++    macdrv_view cocoa_view;
++    macdrv_view client_cocoa_view;
++    struct macdrv_client_surface *surface;
++    struct list entry;
++};
++
++static pthread_mutex_t dxmt_mutex = PTHREAD_MUTEX_INITIALIZER;
++static struct list dxmt_surfaces = LIST_INIT(dxmt_surfaces);
++
++static struct dxmt_win_data *dxmt_get_win_data(HWND hwnd)
++{
++    struct dxmt_win_data *data;
++    if (!(data = calloc(1, sizeof(*data)))) return NULL;
++    if (!(data->surface = macdrv_client_surface_create(hwnd)))
++    {
++        free(data);
++        return NULL;
++    }
++    data->hwnd = hwnd;
++    data->cocoa_window = macdrv_get_cocoa_window(NtUserGetAncestor(hwnd, GA_ROOT), FALSE);
++    data->cocoa_view = data->client_cocoa_view = data->surface->cocoa_view;
++    pthread_mutex_lock(&dxmt_mutex);
++    list_add_tail(&dxmt_surfaces, &data->entry);
++    pthread_mutex_unlock(&dxmt_mutex);
++    return data;
++}
++
++/* The client surface stays alive for exactly the returned Metal view's lifetime.
++ * win32u handles resize/reparent/window destruction through its surface callbacks.
++ * Do not hold our mutex while calling Cocoa or client_surface_release. */
++static macdrv_metal_view dxmt_create_metal_view(macdrv_view view, macdrv_metal_device device)
++{
++    struct dxmt_win_data *data, *found = NULL;
++    pthread_mutex_lock(&dxmt_mutex);
++    LIST_FOR_EACH_ENTRY(data, &dxmt_surfaces, struct dxmt_win_data, entry)
++        if (data->client_cocoa_view == view) { found = data; break; }
++    pthread_mutex_unlock(&dxmt_mutex);
++    if (!found) return NULL;
++    found->surface->metal_view = macdrv_view_create_metal_view(view, device);
++    return found->surface->metal_view;
++}
++
++static void dxmt_release_win_data(struct dxmt_win_data *data)
++{
++    if (!data || data->surface->metal_view) return;
++    pthread_mutex_lock(&dxmt_mutex);
++    list_remove(&data->entry);
++    pthread_mutex_unlock(&dxmt_mutex);
++    client_surface_release(&data->surface->client);
++    free(data);
++}
++
++static void dxmt_release_metal_view(macdrv_metal_view view)
++{
++    struct dxmt_win_data *data, *found = NULL;
++    pthread_mutex_lock(&dxmt_mutex);
++    LIST_FOR_EACH_ENTRY(data, &dxmt_surfaces, struct dxmt_win_data, entry)
++        if (data->surface->metal_view == view)
++        {
++            list_remove(&data->entry);
++            found = data;
++            break;
++        }
++    pthread_mutex_unlock(&dxmt_mutex);
++    if (!found) return;
++    /* The existing native surface destructor releases the Metal view. */
++    client_surface_release(&found->surface->client);
++    free(found);
++}
++
++extern void macdrv_dxmt_on_main_thread(void *block);
++
++/* Exact ten-slot public DXMT table; the unused legacy display initializer has
++ * no Wine 11 equivalent and is explicitly unsupported, not a fake success.
++ * This is NOT Apple's D3DMetal table. The marker lets consumers distinguish it. */
++__attribute__((visibility("default"))) const unsigned int magicwine_dxmt_bridge_v1 = 1;
++__attribute__((visibility("default"))) const struct
++{
++    void (*legacy_init_display_devices)(BOOL);
++    struct dxmt_win_data *(*get_win_data)(HWND);
++    void (*release_win_data)(struct dxmt_win_data *);
++    macdrv_window (*get_cocoa_window)(HWND, BOOL);
++    macdrv_metal_device (*create_metal_device)(void);
++    void (*release_metal_device)(macdrv_metal_device);
++    macdrv_metal_view (*create_metal_view)(macdrv_view, macdrv_metal_device);
++    macdrv_metal_layer (*get_metal_layer)(macdrv_metal_view);
++    void (*release_metal_view)(macdrv_metal_view);
++    void (*on_main_thread)(void *);
++} macdrv_functions =
++{
++    NULL, dxmt_get_win_data, dxmt_release_win_data, macdrv_get_cocoa_window,
++    macdrv_create_metal_device, macdrv_release_metal_device,
++    dxmt_create_metal_view, macdrv_view_get_metal_layer, dxmt_release_metal_view,
++    macdrv_dxmt_on_main_thread
++};

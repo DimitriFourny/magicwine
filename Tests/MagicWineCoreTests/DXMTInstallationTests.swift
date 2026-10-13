@@ -141,7 +141,7 @@ struct DXMTInstallationTests {
         for index in 0..<4 { data[offset + index] = UInt8(truncatingIfNeeded: value >> (8 * index)) }
     }
 
-    private func nativeImage(symbolType: UInt8 = 0x0f) -> Data {
+    private func nativeImage(symbolType: UInt8 = 0x0f, symbolName: String = "_macdrv_functions") -> Data {
         var data = Data(repeating: 0, count: 160)
         put32(0xfeedfacf, at: 0, into: &data)
         put32(0x01000007, at: 4, into: &data)
@@ -160,9 +160,68 @@ struct DXMTInstallationTests {
         put32(64, at: 76, into: &data)
         put32(1, at: 80, into: &data)
         data[84] = symbolType
-        let name = Data("_macdrv_functions\0".utf8)
+        let name = Data((symbolName + "\0").utf8)
         data.replaceSubrange(97..<(97 + name.count), with: name)
         return data
+    }
+
+    // Structural fixtures only: parsed without loading or executing native code.
+    private func linkedNativeImage(symbol: String, dependency: Bool) -> Data {
+        var data = nativeImage(symbolName: symbol)
+        let symbols = data.subdata(in: 80..<160)
+        data.replaceSubrange(80..<160, with: Data(repeating: 0, count: 48))
+        data.append(symbols)
+        put32(3, at: 16, into: &data)
+        put32(96, at: 20, into: &data)
+        put32(128, at: 64, into: &data)
+        put32(144, at: 72, into: &data)
+        put32(dependency ? 0x0c : 0x8000001c, at: 80, into: &data)
+        put32(48, at: 84, into: &data)
+        let nameOffset = dependency ? 24 : 12
+        put32(UInt32(nameOffset), at: 88, into: &data)
+        let name = Data((dependency ? "@rpath/ntdll.so\0" : "@loader_path/\0").utf8)
+        data.replaceSubrange((80 + nameOffset)..<(80 + nameOffset + name.count), with: name)
+        return data
+    }
+
+    @Test func nativeRuntimeValidationDoesNotRequireDXMTHostEligibility() throws {
+        let fixture = Fixture()
+        defer { fixture.cleanUp() }
+        let bin = fixture.directory.appendingPathComponent("bin")
+        let library = fixture.directory.appendingPathComponent("lib/wine")
+        let native = library.appendingPathComponent("x86_64-unix")
+        for directory in [bin, native] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let executable = bin.appendingPathComponent("wine")
+        var loader = nativeImage()
+        put32(2, at: 12, into: &loader)
+        try loader.write(to: executable)
+        try linkedNativeImage(symbol: "_macdrv_functions", dependency: true)
+            .write(to: native.appendingPathComponent("winemac.so"))
+        try linkedNativeImage(symbol: "_NtSetEvent", dependency: false)
+            .write(to: native.appendingPathComponent("ntdll.so"))
+        for (architecture, machine) in [("i386-windows", UInt16(0x014c)), ("x86_64-windows", UInt16(0x8664))] {
+            let directory = library.appendingPathComponent(architecture)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var pe = Data(repeating: 0, count: 256)
+            pe[0] = 0x4d; pe[1] = 0x5a; pe[60] = 128
+            pe[128] = 0x50; pe[129] = 0x45
+            pe[132] = UInt8(truncatingIfNeeded: machine)
+            pe[133] = UInt8(truncatingIfNeeded: machine >> 8)
+            pe[148] = 0x60; pe[151] = 0x20; pe[152] = 0x0b
+            pe[153] = machine == 0x014c ? 0x01 : 0x02
+            try pe.write(to: directory.appendingPathComponent("winemac.drv"))
+        }
+
+        #expect(throws: MagicWineError.self) {
+            try DXMTInstallation.validateHost(macOSMajor: 14, supportsAppleGPU: false)
+        }
+        try DXMTInstallation.validateNativeRuntime(executable)
+        try nativeImage().write(to: native.appendingPathComponent("ntdll.so"))
+        #expect(throws: MagicWineError.self) {
+            try DXMTInstallation.validateNativeRuntime(executable)
+        }
     }
 
     @Test func nativeInspectionDistinguishesExportsFromImportsAndHiddenSymbols() throws {

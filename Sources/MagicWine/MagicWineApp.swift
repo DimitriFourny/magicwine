@@ -188,17 +188,17 @@ private struct LibraryView: View {
                 Text("Everything you need to get started.")
                     .foregroundStyle(WineTheme.muted)
                 WineCard(title: "Your First Windows Program", icon: "book") {
-                    Text("1. Install Wine in Downloads, or choose an existing Wine executable in Settings.")
+                    Text("1. Install Wine in Downloads. Custom Wine executables are available in Settings under Advanced.")
                     Text("2. Create a bottle with the + button. Each bottle keeps its own runtime and Windows files.")
                     Text("3. Install an EXE/MSI, complete the Windows installer, and launch a discovered shortcut.")
                     Text("4. Use Add Program for an existing EXE/LNK, or Refresh Shortcuts after installation.")
                 }
                 WineCard(title: "Graphics & Compatibility", icon: "gamecontroller") {
                     Text("Standard uses Wine’s built-in graphics. Bundled DXVK translates Direct3D 9/10/11 through Vulkan/MoltenVK; bundled DXMT translates Direct3D 10/11 through Metal. Imported D3DMetal supports 64-bit Direct3D 11/12.")
-                    Text("Metal backends require Apple Silicon and a compatible Wine Metal driver. DXMT needs macOS 15+; D3DMetal needs macOS 14+ or its library’s higher minimum. Stock managed Wine lacks the driver interface. Choose a compatible custom Wine executable in Settings before creating a Metal bottle; existing bottles are not migrated.")
-                    Text("D3DMetal is not bundled or downloaded. Obtain the libraries from Apple under its terms, then select the library folder when enabling D3DMetal. Experimental-backend consent does not accept Apple’s license.")
+                    Text("Wine includes MagicWine’s pinned, source-built Metal driver bridge and bundled DXMT. Standard is the default; optionally enable DXMT in a bottle’s graphics settings on Apple Silicon with macOS 15 or newer, without another download. D3DMetal requires a compatible custom Wine runtime.")
+                    Text("D3DMetal is not bundled or downloaded. MagicWine finds local libraries beside the bottle’s Wine or in CrossOver under Applications, and asks for a folder only when none are found. You remain responsible for the terms accompanying your libraries; experimental-backend consent does not accept their license.")
                     Text("Components cannot be upgraded in place. Switch to Standard to restore the original files, then enable a backend again. Direct backend switches preserve the same originals.")
-                    Text("Changing graphics stops that bottle’s Windows processes. Existing bottles keep their pinned Wine runtime when you install a Wine update.")
+                    Text("Changing graphics stops that bottle’s Windows processes.")
                     Text("Compatibility depends on the Windows program, Wine runtime, and graphics backend. DRM and anti-cheat compatibility are not guaranteed.")
                         .foregroundStyle(WineTheme.muted)
                 }
@@ -237,9 +237,9 @@ private struct WelcomeView: View {
                     .foregroundStyle(WineTheme.muted)
                 if model.isLoading {
                     ProgressView("Loading your library…")
-                } else if model.runtimes.isEmpty {
+                } else if model.preferredRuntime == nil {
                     WineCard(title: "Set Up Wine", icon: "wineglass") {
-                        Text("Install a separately maintained Wine runtime or choose a Wine executable already on your Mac. Then create your first bottle.")
+                        Text("Install Wine, then create your first bottle.")
                             .foregroundStyle(WineTheme.muted)
                         RuntimeSetupView(model: model)
                     }
@@ -274,27 +274,29 @@ private struct NewBottleView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("New Bottle").font(.title2)
-            if model.runtimes.isEmpty {
-                Text("Choose or install Wine before creating a bottle.")
+            if runtime == nil {
+                Text("Install Wine before creating a bottle.")
                 RuntimeSetupView(model: model)
-            } else {
+            }
+            if !model.runtimes.isEmpty {
                 TextField("Bottle name", text: $name).textFieldStyle(.roundedBorder)
                     .onSubmit { create() }
                     .disabled(model.isCreating)
-                Picker("Wine runtime", selection: Binding(
-                    get: { runtime?.id ?? "" },
-                    set: { runtimeID = $0 }
-                )) {
-                    ForEach(model.runtimes) { runtime in
-                        Text("\(runtime.version) — \(runtime.executableURL.deletingLastPathComponent().path)")
-                            .tag(runtime.id)
+                DisclosureGroup("Advanced") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Wine runtime", selection: $runtimeID) {
+                            Text("Use preferred Wine").tag("")
+                            ForEach(model.runtimes) { runtime in
+                                Text("\(runtime.version) — \(runtime.executableURL.deletingLastPathComponent().path)")
+                                    .tag(runtime.id)
+                            }
+                        }
+                        .disabled(model.isCreating || model.runtimeActivity != nil)
+                        if let runtime {
+                            Text(runtime.executableURL.path).font(.caption).textSelection(.enabled)
+                        }
                     }
-                }
-                .disabled(model.isCreating || model.runtimeActivity != nil)
-                Text("The bottle keeps the selected runtime, even if you later choose a different default.")
-                    .font(.callout).foregroundStyle(.secondary)
-                if let runtime {
-                    Text(runtime.executableURL.path).font(.caption).textSelection(.enabled)
+                    .padding(.top, 8)
                 }
                 if model.isCreating { ProgressView("Creating bottle…") }
             }
@@ -329,33 +331,37 @@ private struct WineSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Wine Runtime").font(.title2)
-                Text("Choose the default runtime for new bottles. Existing bottles keep their own runtime.")
-                    .foregroundStyle(.secondary)
-                if !model.runtimes.isEmpty {
-                    Picker("New-bottle default", selection: Binding(
-                        get: { model.preferredRuntime?.id ?? "" },
-                        set: { model.preferRuntime(id: $0) }
-                    )) {
-                        ForEach(model.runtimes) { runtime in
-                            Text("\(runtime.version) — \(runtime.executableURL.path)").tag(runtime.id)
-                        }
-                    }
-                    .disabled(model.runtimeActivity != nil)
-                    if let runtime = model.preferredRuntime {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(runtime.version).font(.headline)
-                            Text(runtime.executableURL.path).font(.caption).textSelection(.enabled)
-                        }
-                    }
-                }
-                if let path = model.settings.customWinePath {
-                    Text("Saved custom executable: \(path)").font(.caption).textSelection(.enabled)
-                }
                 RuntimeSetupView(model: model)
-                HStack {
-                    Button("Find Installed Wine") { model.refreshRuntimes() }
-                        .disabled(model.runtimeActivity != nil)
-                    Button("Reveal Logs") { model.revealLogs() }
+                DisclosureGroup("Advanced") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if !model.runtimes.isEmpty {
+                            Picker("Preferred Wine", selection: Binding(
+                                get: { model.preferredRuntime?.id ?? "" },
+                                set: { model.preferRuntime(id: $0) }
+                            )) {
+                                if model.preferredRuntime == nil {
+                                    Text("No preferred Wine — install or choose one").tag("")
+                                }
+                                ForEach(model.runtimes) { runtime in
+                                    Text("\(runtime.version) — \(runtime.executableURL.path)").tag(runtime.id)
+                                }
+                            }
+                            .disabled(model.runtimeActivity != nil)
+                        }
+                        Button("Choose Wine Executable…") { model.chooseWineExecutable() }
+                            .disabled(model.runtimeActivity != nil)
+                        Text("Use a custom runtime for compatibility needs, including D3DMetal. New bottles use your preferred Wine unless you override it.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        if let path = model.settings.customWinePath {
+                            Text("Saved custom executable: \(path)").font(.caption).textSelection(.enabled)
+                        }
+                        HStack {
+                            Button("Find Installed Wine") { model.refreshRuntimes() }
+                                .disabled(model.runtimeActivity != nil)
+                            Button("Reveal Logs") { model.revealLogs() }
+                        }
+                    }
+                    .padding(.top, 8)
                 }
             }
         }
@@ -364,18 +370,19 @@ private struct WineSettingsView: View {
 
 private struct RuntimeSetupView: View {
     @ObservedObject var model: AppModel
-    @State private var confirmInstall = false
+    @State private var showsTrustConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Button("Install / Update Wine…") { confirmInstall = true }
-                    .buttonStyle(.borderedProminent)
-                Button("Choose Wine Executable…") { model.chooseWineExecutable() }
+            Button("Install Wine…") {
+                showsTrustConfirmation = true
             }
+            .buttonStyle(.borderedProminent)
             .disabled(model.runtimeActivity != nil)
-            Text("Managed downloads come from Gcenx/macOS_Wine_builds, a separately maintained third-party Wine distribution. Installing an update changes the default for new bottles, not existing bottles.")
+            Text("Downloads Wine from Gcenx/macOS_Wine_builds with MagicWine’s bundled, pinned source-built Metal driver bridge. DXMT is also bundled—no additional download is needed to enable it.")
                 .font(.callout).foregroundStyle(.secondary)
+            Text("Standard graphics is the default. DXMT is optional on Apple Silicon with macOS 15 or newer. D3DMetal requires a compatible custom Wine runtime.")
+                .font(.caption).foregroundStyle(.secondary)
             DisclosureGroup("Windows Multimedia") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Windows multimedia may require GStreamer 1.28.2 or newer (Universal runtime), installed separately in /Library/Frameworks/GStreamer.framework.")
@@ -413,11 +420,11 @@ private struct RuntimeSetupView: View {
             }
             #endif
         }
-        .confirmationDialog("Trust Third-Party Wine?", isPresented: $confirmInstall, titleVisibility: .visible) {
+        .confirmationDialog("Trust Wine?", isPresented: $showsTrustConfirmation, titleVisibility: .visible) {
             Button("Trust and Install Wine") { model.installWine() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This Wine build is not notarized by Apple. MagicWine checks its download checksum and removes this bundle’s quarantine to let it run. This is not a malware check; system-wide security settings are unchanged.")
+            Text("This Wine build is unsigned and not notarized by Apple. MagicWine checks the Gcenx download’s checksum, installs its bundled source-built DXMT driver bridge, and removes only this managed Wine bundle’s quarantine to let it run. DXMT is included and needs no additional download. This is not a malware check; system-wide security settings are unchanged.")
         }
     }
 }

@@ -5,8 +5,12 @@ struct GraphicsSettingsView: View {
     @ObservedObject var model: AppModel
     let bottle: Bottle
     let busy: Bool
-    @State private var confirmsBackend = false
-    @State private var pendingBackend: GraphicsBackend = .dxvk
+    private struct Selection {
+        let backend: GraphicsBackend
+        let bottle: Bottle
+    }
+
+    @State private var pendingSelection: Selection?
 
     private var currentBottle: Bottle {
         model.bottles.first { $0.id == bottle.id } ?? bottle
@@ -17,8 +21,8 @@ struct GraphicsSettingsView: View {
         busy || model.isLoading || state.title != nil || state.isStopping || !currentBottle.isInitialized
     }
 
-    private var backendNotice: String {
-        switch pendingBackend {
+    private func backendNotice(_ backend: GraphicsBackend) -> String {
+        switch backend {
         case .standard: ""
         case .dxvk: WineRuntime.dxvkNotice
         case .dxmt: WineRuntime.dxmtNotice
@@ -43,8 +47,7 @@ struct GraphicsSettingsView: View {
                     guard !unavailable else { return }
                     guard backend != currentBottle.graphics.backend else { return }
                     if backend != .standard {
-                        pendingBackend = backend
-                        confirmsBackend = true
+                        pendingSelection = Selection(backend: backend, bottle: currentBottle)
                     } else {
                         model.setGraphics(.standard, in: currentBottle)
                     }
@@ -95,18 +98,23 @@ struct GraphicsSettingsView: View {
                     .controlSize(.small)
             }
         }
-        .alert("Enable \(pendingBackend.displayName) — Experimental?", isPresented: $confirmsBackend) {
-            Button(pendingBackend == .d3dmetal ? "Choose Libraries…" : "Enable \(pendingBackend.displayName)") {
-                if pendingBackend == .d3dmetal {
-                    model.importD3DMetal(in: currentBottle)
+        .alert("Enable \(pendingSelection?.backend.displayName ?? "") — Experimental?",
+               isPresented: Binding(
+                   get: { pendingSelection != nil },
+                   set: { if !$0 { pendingSelection = nil } }
+               ), presenting: pendingSelection) { selection in
+            Button("Enable \(selection.backend.displayName)") {
+                if selection.backend == .d3dmetal {
+                    model.importD3DMetal(in: selection.bottle)
                 } else {
-                    model.setGraphics(pendingBackend, in: currentBottle, showHUD: currentBottle.graphics.showHUD)
+                    model.setGraphics(selection.backend, in: selection.bottle,
+                                      showHUD: selection.bottle.graphics.showHUD)
                 }
             }
             .disabled(unavailable)
             Button("Cancel", role: .cancel) { }
-        } message: {
-            Text(backendNotice + "\n\nChanging graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files. In-place component updates are not supported.")
+        } message: { selection in
+            Text(backendNotice(selection.backend) + "\n\nChanging graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files. In-place component updates are not supported.")
         }
     }
 }

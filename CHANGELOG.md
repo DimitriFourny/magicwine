@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 2026-10-12
+## Unreleased — 2026-10-13
 
 - Remove only `com.apple.quarantine` from managed Wine bundles after consent, using native no-follow filesystem APIs; preserve other attributes and reject escaping paths.
 - Reuse the existing installation confirmation for unsigned-runtime trust instead of adding a second prompt; the CLI requires `--accept-unsigned`, and the core API explicitly requires consent.
@@ -41,6 +41,17 @@
 - Reject stock managed Wine's incompatible Metal ABI before mutation; retain each bottle's pinned runtime and require explicit selection of a compatible native custom Wine loader.
 - Verify real DXMT D3D10/11 rendering/readback in both architectures and D3DMetal D3D11/12 in 64-bit, repeated packaged launches, HUD-only preservation, direct Metal switches, missing-import rollback, unchanged original runtime hashes, and managed-Wine DXVK rendering. All 107 Swift regressions pass; rebuild and sign the app/CLI.
 - Exercise the native four-backend picker, DXMT/D3DMetal consent, folder-only library import presentation, and cancellation back to the unchanged Standard selection; document compositor-capture limitations.
+- Bind graphics consent to the selected backend and bottle rather than a separate DXVK-default state; preserve the selected backend through confirmation and show setup failures in a visible alert.
+- Discover local D3DMetal libraries beside the bottle's selected Wine, then in user/system Applications CrossOver installations. Share discovery between app and CLI/core, retain explicit imports, and open the app's folder picker only when no source is found. Preserve existing library validation, license consent, quarantine, and pinned-Wine compatibility requirements.
+- Verify native DXMT confirmation/persistence, cancellation, automatic D3DMetal import without a file panel, Standard rollback, and a visible compatibility error on unmodified upstream Wine without changing its DXVK selection. Exercise CLI import discovery and Windows execution, validate installed CrossOver libraries, pass all 109 regressions, and rebuild/sign the app and CLI.
+- Replace the prerelease dual-runtime choice with one pinned Wine 11 installation containing MagicWine's source-built DXMT bridge. Remove the managed-distribution API and CLI flag; use preferred Wine automatically for bottle creation, with optional custom-runtime controls under Advanced.
+- Stage the SHA-pinned driver with its real DXMT client-surface bridge, original-driver backup, LGPL license, complete corresponding source, and pinned-source build recipe. Keep its native image compressed during packaging; verify archive, driver, and source provenance before cached reuse. The base Wine archive downloads once; the driver bridge and DXMT require no additional download.
+- Keep native Wine modules and DXMT's Unix bridge physically inside private graphics views so loader-relative dependencies cannot load a second original `ntdll`. Preserve Apple's canonical shared-library aliases and all original runtime bytes.
+- Keep Standard graphics as the default and check host/GPU eligibility when enabling DXMT, not when installing Wine. Identify the managed DXMT-only ABI explicitly and reject D3DMetal without mutation; direct DXMT users to the single managed install.
+- Keep the bundled DXMT component's immutable provenance independent of live onboarding text.
+- Verify the single packaged Wine install, trust cancellation, cached reuse, automatic runtime selection, Standard-by-default bottle creation, and native DXMT confirmation. DXMT and DXVK both pass 32/64-bit D3D11 shader presentation/readback; restored Standard passes D3D9 triangle presentation/readback and Windows execution. Reject D3DMetal's incompatible ABI without metadata changes and reject the removed CLI flag. Retain custom-Wine DXMT/D3DMetal rendering and automatic import. All 117 regressions pass, including release resources; rebuild/sign app and CLI.
+- Exclude obsolete managed Wine folders from discovery and remove the arbitrary first-runtime fallback. Resolve stale managed preferences to the current installed build, or show Wine setup before bottle creation when it is missing. Persist the resolved preference, preserve explicit external choices, and keep missing custom Wine from silently selecting another runtime. Clarify that the DXMT recovery path requires a new bottle after installing compatible Wine. All 119 release regressions pass.
+- Exercise obsolete-preference recovery in the packaged app with current Wine both absent and already installed: native installation, preference persistence, new-bottle initialization, and DXMT confirmation succeed. Verify CLI discovery excludes old managed installs and that Windows execution succeeds with the corrected runtime; leave old driver bytes unchanged.
 
 ## 0.1.0 — 2026-10-11
 

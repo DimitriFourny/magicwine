@@ -18,15 +18,33 @@ public actor WineRuntime {
         store = BottleStore(paths: paths)
     }
 
-    public func discover() async -> [RuntimeDescriptor] {
-        var candidates: [URL] = []
-        let manager = FileManager.default
-        if let managed = try? manager.contentsOfDirectory(at: paths.runtimesDirectory,
-                includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
-            for folder in managed {
-                candidates.append(folder.appendingPathComponent("Wine Stable.app/Contents/Resources/wine/bin/wine"))
+    /// Locates user-owned libraries without downloading or changing the bottle's Wine.
+    public nonisolated static func discoverD3DMetalSource(executable: URL) -> URL? {
+        D3DMetalInstallation.discoverSource(executable: executable)
+    }
+
+    private nonisolated var managedExecutableURL: URL {
+        RuntimeInstallation.destination(paths: paths)
+            .appendingPathComponent(RuntimeInstallation.relativeExecutable)
+            .resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    /// Only current managed Wine is an automatic default; external Wine requires an explicit preference.
+    public nonisolated func preferredRuntime(in runtimes: [RuntimeDescriptor], preferredPath: String?) -> RuntimeDescriptor? {
+        let managed = managedExecutableURL
+        if let preferredPath {
+            let preferred = URL(fileURLWithPath: preferredPath).resolvingSymlinksInPath().standardizedFileURL
+            let managedRoot = paths.runtimesDirectory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+            if !preferred.path.hasPrefix(managedRoot) || preferred == managed {
+                return runtimes.first { $0.executableURL == preferred }
             }
         }
+        return runtimes.first { $0.executableURL == managed }
+    }
+
+    public func discover() async -> [RuntimeDescriptor] {
+        var candidates = [managedExecutableURL]
+        let manager = FileManager.default
         for name in ["Wine Stable", "Wine Devel", "Wine Staging"] {
             candidates.append(URL(fileURLWithPath: "/Applications/\(name).app/Contents/Resources/wine/bin/wine"))
             candidates.append(manager.homeDirectoryForCurrentUser.appendingPathComponent("Applications/\(name).app/Contents/Resources/wine/bin/wine"))
@@ -80,8 +98,8 @@ public actor WineRuntime {
         return RuntimeDescriptor(executableURL: executable, version: version)
     }
 
-    public func installLatest(acceptUnsigned: Bool,
-                              progress: (@Sendable (WineInstallationProgress) -> Void)? = nil) async throws -> RuntimeDescriptor {
+    public func installRuntime(acceptUnsigned: Bool,
+                               progress: (@Sendable (WineInstallationProgress) -> Void)? = nil) async throws -> RuntimeDescriptor {
         guard acceptUnsigned else {
             throw MagicWineError.setup("Installing managed Wine requires consent to run unsigned third-party code and remove its download quarantine.")
         }
@@ -216,12 +234,16 @@ public actor WineRuntime {
             throw MagicWineError.setup("In-place \(backend.displayName) component updates are not supported. Choose Standard to restore this bottle's original graphics files, then enable the backend again.")
         }
         let retainingComponent = backend != .standard && current.graphics.backend == backend
+        var source = componentSource
         if backend == .d3dmetal {
-            guard retainingComponent || componentSource != nil else {
-                throw MagicWineError.setup("D3DMetal requires a local library folder obtained under Apple's terms. Select that folder or pass --import <folder>; MagicWine does not download or license it for you.")
-            }
             guard !retainingComponent || componentSource == nil else {
                 throw MagicWineError.setup("Choose Standard before importing a different D3DMetal component.")
+            }
+            if !retainingComponent && source == nil {
+                source = Self.discoverD3DMetalSource(executable: current.runtime.executableURL)
+            }
+            guard retainingComponent || source != nil else {
+                throw MagicWineError.setup("No local D3DMetal libraries were found beside this bottle's Wine or in an installed CrossOver. Select a library folder or pass --import <folder>; MagicWine does not download or license Apple libraries for you.")
             }
         }
         try validateGraphicsRuntime(backend, executable: current.runtime.executableURL)
@@ -244,8 +266,8 @@ public actor WineRuntime {
             case .dxvk: componentRoot = try await DXVKInstallation.install(paths: paths, progress: progress)
             case .dxmt: componentRoot = try await DXMTInstallation.install(paths: paths, progress: progress)
             case .d3dmetal:
-                guard let componentSource else { throw MagicWineError.setup("Select a D3DMetal library folder.") }
-                componentRoot = try await D3DMetalInstallation.install(paths: paths, source: componentSource, progress: progress)
+                guard let source else { throw MagicWineError.setup("Select a D3DMetal library folder.") }
+                componentRoot = try await D3DMetalInstallation.install(paths: paths, source: source, progress: progress)
             }
         }
         if let componentRoot, backend == .dxmt || backend == .d3dmetal {

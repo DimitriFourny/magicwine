@@ -31,10 +31,13 @@ struct MagicWineCLI {
         case "runtimes":
             for candidate in await runtime.discover() { print("\(candidate.version)\t\(candidate.executableURL.path)") }
         case "install-wine":
-            guard values == ["--accept-unsigned"] else {
-                throw MagicWineError.setup("Public Wine builds are third-party and unsigned. To verify the download and remove only the managed Wine bundle's quarantine, use install-wine --accept-unsigned. This permits unsigned code to run; a checksum is not a malware assessment. System-wide security settings are unchanged.")
+            guard !values.isEmpty else {
+                throw MagicWineError.setup("Wine is unsigned and not notarized by Apple. Use install-wine --accept-unsigned to download the Gcenx Wine build with MagicWine’s bundled, pinned source-built DXMT driver bridge. DXMT is also bundled, so enabling it needs no additional download. MagicWine verifies the download checksum and removes only the managed Wine bundle's quarantine. A checksum is not a malware assessment; system-wide security settings are unchanged.")
             }
-            let installed = try await runtime.installLatest(acceptUnsigned: true)
+            guard values == ["--accept-unsigned"] else {
+                throw argumentError("install-wine --accept-unsigned")
+            }
+            let installed = try await runtime.installRuntime(acceptUnsigned: true)
             print("\(installed.version)\t\(installed.executableURL.path)")
         case "list":
             for bottle in try await store.list() {
@@ -141,7 +144,9 @@ struct MagicWineCLI {
 
     magicwine [--root <data-directory>] <command>
       runtimes                                 Find installed Wine
-      install-wine --accept-unsigned            Install/reuse Wine and remove its quarantine
+      install-wine --accept-unsigned
+        Install/reuse Wine from Gcenx with the bundled source-built DXMT bridge
+        DXMT is included; enabling it requires no additional download
       list                                     List bottles and their UUIDs
       create <name> <wine-executable>           Create and initialize a bottle
       initialize <bottle-UUID>                  Retry setup
@@ -154,7 +159,7 @@ struct MagicWineCLI {
       configure <bottle-UUID>                   Open Wine configuration
       graphics <bottle-UUID> [standard|dxvk|dxmt|d3dmetal]
         Third-party backends require --accept-experimental; optional --hud or --no-hud
-        D3DMetal first selection requires --import <library-folder> obtained under Apple's terms
+        D3DMetal finds local Wine/CrossOver libraries; --import <library-folder> overrides discovery
       exec <bottle-UUID> <wine-arguments…>       Run Wine with isolated prefix
     """
 }

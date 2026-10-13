@@ -130,7 +130,7 @@ struct BottleDashboardView: View {
             .font(.caption)
             .foregroundStyle(WineTheme.muted)
             .lineLimit(2)
-            .help("Pinned Wine runtime: \(currentBottle.runtime.executableURL.path)")
+            .help("Wine executable: \(currentBottle.runtime.executableURL.path)")
     }
 
     @ViewBuilder
@@ -402,7 +402,7 @@ struct BottleDashboardView: View {
                         .font(.callout).foregroundStyle(WineTheme.muted)
                     Spacer(minLength: 0)
                     Text(currentBottle.runtime.version).font(.callout)
-                        .help("Pinned to this bottle: \(currentBottle.runtime.executableURL.path). Changing the default only affects new bottles.")
+                        .help(currentBottle.runtime.executableURL.path)
                     Button("Configure") { model.configure(currentBottle) }
                         .buttonStyle(WineButtonStyle())
                         .disabled(operationUnavailable)

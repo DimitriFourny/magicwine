@@ -4,9 +4,9 @@ import Foundation
 
 /// Wine always searches the DLL directory derived from the *real path of ntdll.so*
 /// before WINEDLLPATH. Copying just PE files into a prefix therefore cannot select
-/// Unix-backed graphics builtins. This private view copies the unchanged loader
-/// and ntdll, overlays only the selected graphics modules, and links other files
-/// to the user's original runtime. Nothing in that runtime is written.
+/// Unix-backed graphics builtins. This private view copies unchanged loaders
+/// and native Wine modules, overlays selected graphics, and links other files
+/// to the original runtime. Native @loader_path dependencies stay inside the view.
 /// Reference: wine-11.0 dlls/ntdll/unix/loader.c, init_paths/set_dll_path.
 enum GraphicsRuntimeView {
     private struct Link: Codable, Equatable {
@@ -81,9 +81,9 @@ enum GraphicsRuntimeView {
         let replacementNames = Set(substitutions.map { wineRoot + "/" + $0 })
         let loaderNames = Set(["wine", "wine64", "wineloader", executable.lastPathComponent])
         var sourceHashes: [String: String] = [:]
-        func addCopy(_ source: URL, _ name: String) throws {
+        func addCopy(_ source: URL, _ name: String, within root: URL) throws {
             let resolved = source.resolvingSymlinksInPath()
-            guard resolved.path.hasPrefix(runtime.path + "/") else { throw failure("A loader or ntdll escapes its runtime.") }
+            guard resolved.path.hasPrefix(root.resolvingSymlinksInPath().path + "/") else { throw failure("A private runtime copy escapes its owning directory.") }
             try requireFile(resolved, allowHardLinks: true)
             copies[name] = resolved.path
             if sourceHashes[resolved.path] == nil { sourceHashes[resolved.path] = try hash(resolved, allowHardLinks: true) }
@@ -116,20 +116,21 @@ enum GraphicsRuntimeView {
                 } else if relative == "bin", loaderNames.contains(leaf) {
                     // Never retain a distribution's shell/Perl wine wrapper: children must
                     // remain in this exact view, without wrapper environment rewriting.
-                    try addCopy(originalLoader, name)
-                } else if relative.hasPrefix(wineRoot + "/"), leaf == "ntdll.so" || leaf == "wine" || leaf == "wine64" {
-                    try addCopy(entry, name)
+                    try addCopy(originalLoader, name, within: runtime)
+                } else if (relative == wineRoot + "/x86_64-unix" && leaf.hasSuffix(".so")) ||
+                            (relative.hasPrefix(wineRoot + "/") && (leaf == "ntdll.so" || leaf == "wine" || leaf == "wine64")) {
+                    try addCopy(entry, name, within: runtime)
                 } else {
                     try addLink(entry, name, within: runtime)
                 }
             }
         }
         try walk(runtime, "")
-        for alias in loaderNames { try addCopy(originalLoader, "bin/" + alias) }
+        for alias in loaderNames { try addCopy(originalLoader, "bin/" + alias, within: runtime) }
         // New Wine obtains its child loader from ntdll_dir/wine. A symlink to the
         // original would silently escape the view on the next CreateProcess.
         if copies[wineRoot + "/x86_64-unix/wine"] == nil {
-            try addCopy(originalLoader, wineRoot + "/x86_64-unix/wine")
+            try addCopy(originalLoader, wineRoot + "/x86_64-unix/wine", within: runtime)
         }
         for name in substitutions {
             let relative = wineRoot + "/" + name
@@ -141,7 +142,13 @@ enum GraphicsRuntimeView {
                 ? component.appendingPathComponent("external/libd3dshared.dylib")
                 : provider.appendingPathComponent(name)
             try requireFile(source)
-            try addLink(source, relative, within: component)
+            if backend == .dxmt && name == "x86_64-unix/winemetal.so" {
+                // dyld resolves @loader_path from the real image path. A provider
+                // symlink cannot find this runtime's @rpath/winemac.so dependency.
+                try addCopy(source, relative, within: component)
+            } else {
+                try addLink(source, relative, within: component)
+            }
         }
         let receipt = Receipt(schema: 1, runtime: runtime.path, component: component.path, backend: backend,
                               loader: loaderName, directories: directories.sorted(), copies: copies, hashes: hashes, links: links)
