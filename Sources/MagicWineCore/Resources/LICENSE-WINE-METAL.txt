@@ -1,10 +1,12 @@
 MagicWine Metal, mouse-pointer and macOS WPAD Wine support: public Wine 11 native and PE
 winemac/ntdll/win32u/user32/wow64win/winhttp modules with the public Unix-call entry
 point, native pthread TLS, D3DMetal Nt ABI, mouse-pointer input support,
-and macOS SystemConfiguration proxy autodiscovery policy integration.
+remote root/child Metal layer hosting, and macOS proxy autodiscovery policy.
 The MagicWine D3DMetal/DXMT client-surface bridge is LGPL-2.1-or-later.
 ABI reference: Whisky-App/wine a92f7f06c4cff7291578e58eb95284b00e322799,
 dlls/winemac.drv/macdrv_main.c and macdrv.h (LGPL-2.1-or-later).
+Remote Metal transport: Wine commit 1a63b0d7c431f1ebbaba9afd2daa312690eb8020,
+Marc-Aurel Zent / CodeWeavers (LGPL-2.1-or-later), adapted to Wine 11 and child HWNDs.
 Native ABI source references: CodeWeavers CrossOver 26.1 public source mirror,
 rnowak/wine-crossover-sources b4f3c510a1808e6e32fb99e9bc11fa46ccc207dc;
 Alien4042x/WineForge a342f4aeb23d719339f444b9e94e06ecf0ff1a14 (LGPL-2.1-or-later).

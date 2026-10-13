@@ -21,8 +21,9 @@ struct DXMTInstallationTests {
     @Test func acceptsExactArchiveAndRejectsDuplicatesMissingFilesAndTraversal() throws {
         let members = archiveMembers()
         try DXMTInstallation.validateArchiveMembers(members.entries, types: members.types)
-        for malicious in ["../escape", "/etc/passwd", "v0.80/x86_64-windows/../outside", "v0.80/x86_64-windows/d3d12.dll",
-                          "v0.80/x86_64-unix/winemetal.so/", "./v0.80/x86_64-unix/winemetal.so"] {
+        let root = DXMTInstallation.archiveRoot
+        for malicious in ["../escape", "/etc/passwd", "\(root)/x86_64-windows/../outside", "\(root)/x86_64-windows/d3d12.dll",
+                          "\(root)/x86_64-unix/winemetal.so/", "./\(root)/x86_64-unix/winemetal.so"] {
             var entries = members.entries
             entries[4] = malicious
             #expect(throws: MagicWineError.self) { try DXMTInstallation.validateArchiveMembers(entries, types: members.types) }
@@ -49,7 +50,8 @@ struct DXMTInstallationTests {
         defer { fixture.cleanUp() }
         let component = try await DXMTInstallation.install(paths: fixture.paths)
         // Same-size modifications invalidate inode/mtime/ctime cache evidence.
-        for name in ["x86_64-windows/d3d11.dll", "i386-windows/d3d11.dll", "x86_64-unix/winemetal.so", "LICENSE-DXMT.txt"] {
+        for name in ["x86_64-windows/d3d11.dll", "i386-windows/d3d11.dll", "x86_64-unix/winemetal.so", "LICENSE-DXMT.txt",
+                     DXMTInstallation.provenanceName] {
             let target = component.appendingPathComponent(name)
             let original = try Data(contentsOf: target)
             var changed = original
@@ -84,6 +86,36 @@ struct DXMTInstallationTests {
         #expect(throws: MagicWineError.self) {
             try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
         }
+    }
+
+    @Test func correspondingSourceCannotBeRemovedOrReplacedByForgingReceipt() async throws {
+        let fixture = Fixture()
+        defer { fixture.cleanUp() }
+        let component = try await DXMTInstallation.install(paths: fixture.paths)
+        let source = component.appendingPathComponent(DXMTInstallation.sourceArchiveName)
+        let saved = fixture.directory.appendingPathComponent("source.tar.gz")
+        try FileManager.default.moveItem(at: source, to: saved)
+        #expect(throws: MagicWineError.self) {
+            try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
+        }
+        let replacement = Data([0x1f, 0x8b, 0, 0])
+        try replacement.write(to: source)
+        let receiptURL = component.appendingPathComponent("installation.json")
+        var receipt = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: receiptURL)) as? [String: Any])
+        var files = try #require(receipt["files"] as? [String: String])
+        files[DXMTInstallation.sourceArchiveName] = SHA256.hash(data: replacement).map { String(format: "%02x", $0) }.joined()
+        receipt["files"] = files
+        try JSONSerialization.data(withJSONObject: receipt).write(to: receiptURL, options: .atomic)
+        #expect(throws: MagicWineError.self) {
+            try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
+        }
+        try DXMTInstallation.writeReceipt(at: component)
+        #expect(throws: MagicWineError.self) {
+            try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
+        }
+        try FileManager.default.removeItem(at: source)
+        try FileManager.default.moveItem(at: saved, to: source)
+        _ = try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
     }
 
     @Test func unsafeFilesAreRejectedAndExistingCorruptPublicationIsNeverReplaced() async throws {

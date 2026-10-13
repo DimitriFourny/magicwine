@@ -1,0 +1,1394 @@
+MagicWine remote Metal presentation for Wine 11.0
+
+Apply after wine-metal-driver.patch, wine-mouse-pointer.patch, and
+wine-wpad-macos.patch. Rebuild winemac.so and BOTH winemac.drv PE ABIs.
+
+CAContext/CALayerHost transport backported and adapted from Wine commit
+1a63b0d7c431f1ebbaba9afd2daa312690eb8020 by Marc-Aurel Zent (CodeWeavers).
+Wine and these modifications are LGPL-2.1-or-later; see Wine COPYING.LIB.
+Child geometry/lifetime design informed by the public Neutron 89084b1 report
+and DXMT issue 141; no MIT patch implementation is incorporated here.
+
+The historical 120-byte window record and 24-entry bridge table are unchanged.
+Remote create returns a genuine detached producer-local NSView hosting the
+exported layer; only HWNDs and CAContext IDs cross scalar driver messages.
+Geometry enters Cocoa in raw pixels. Metadata acquisition pins the native
+handoff until release_win_data, including D3DMetal's direct NSView frame reads.
+A lazy Wine PE service serializes native state and owns WinEvent/process waits.
+One context per live target HWND is reused across D3DMetal swapchain recreation;
+DXMT explicit release, target destruction, and process death retire resources.
+The optional magicwine_metal_remote_copy_layer(view) export returns an owned
+CAMetalLayer for either local or remote views, or NULL. Call once per acquired
+view, then release the layer after queued work drains and release the view
+through table slot 8. Historical table layer access remains borrowed. Owned
+handoffs keep retired NSView identities alive until explicit release, while
+presentation contexts and process watches are detached promptly.
+Visible-region masks integrate remote layers with GDI/GL/Metal sibling occlusion.
+Cocoa Retina transitions update detached producer layers and hosted masks.
+No retirement timer, fixed-size registry, HWND-owner spoof, or server change.
+
+diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
+--- a/dlls/winemac.drv/Makefile.in
++++ b/dlls/winemac.drv/Makefile.in
+@@ -34,6 +34,8 @@
+ 	macdrv_main.c \
+ 	metal.c \
+ 	metal_pe.c \
++	metal_remote.c \
++	metal_remote_pe.c \
+ 	mouse.c \
+ 	opengl.c \
+ 	surface.c \
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -2148,6 +2148,7 @@
+             if ([window isKindOfClass:[WineWindow class]])
+                 [window setRetinaMode:mode];
+         }
++        macdrv_remote_set_retina_mode(mode);
+     }
+ 
+ 
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -42,7 +42,24 @@
+  * NSWindowStyleMaskNonactivatingPanel.
+  * Available since at least macOS 10.6. */
+ - (void)_setPreventsActivation:(BOOL)flag;
++
++@end
++
++/* Backported from Wine 1a63b0d7c431f1ebbaba9afd2daa312690eb8020,
++ * Marc-Aurel Zent for CodeWeavers. The private Apple transport carries only a
++ * context ID between Wine processes; NSViews and Metal devices remain local. */
++typedef uint32_t CGSConnectionID;
++typedef uint32_t CAContextID;
++extern CGSConnectionID CGSMainConnectionID(void);
++
++@interface CAContext : NSObject
+++ (id) contextWithCGSConnection:(CGSConnectionID)connection options:(NSDictionary*)options;
++@property(readonly) CAContextID contextId;
++@property(retain) CALayer* layer;
++@end
+ 
++@interface CALayerHost : CALayer
++- (void) setContextId:(CAContextID)contextId;
+ @end
+ 
+ 
+@@ -3999,7 +4016,16 @@
+     OnMainThread(^{
+         layer = (CAMetalLayer*)view.layer;
+     });
++
++    return (macdrv_metal_layer)layer;
++}
+ 
++macdrv_metal_layer macdrv_view_copy_metal_layer(macdrv_metal_view v)
++{
++    __block CAMetalLayer *layer;
++    OnMainThread(^{
++        layer = [(CAMetalLayer *)[(WineMetalView *)v layer] retain];
++    });
+     return (macdrv_metal_layer)layer;
+ }
+ 
+@@ -4135,3 +4161,272 @@
+             [[window contentView] clearMarkedText];
+     });
+ }
++
++/* These sets are main-thread-only and own only live context/host resources. */
++static NSMutableSet *remote_context_views, *remote_host_layers;
++
++/* A live HWND reuses its exported layer. This is also the lifetime boundary
++ * for D3DMetal, whose historical ABI omits the release-view notification.
++ * Recreating a swapchain therefore does not accumulate contexts or require a
++ * guessed first-frame timeout. DXMT can still relinquish it explicitly. */
++@interface WineRemoteMetalLayer : CAMetalLayer
++@end
++
++@implementation WineRemoteMetalLayer
++- (void) setDrawableSize:(CGSize)size
++{
++    dispatch_block_t update = ^{
++        CGFloat scale = self.contentsScale ?: 1.0;
++        [CATransaction begin];
++        [CATransaction setDisableActions:YES];
++        [super setDrawableSize:size];
++        self.bounds = CGRectMake(0, 0, size.width / scale, size.height / scale);
++        [CATransaction commit];
++    };
++    if ([NSThread isMainThread]) update();
++    else OnMainThread(update);
++}
++@end
++
++/* The historical Metal bridge returns an actual NSView. D3DMetal sends
++ * -frame directly, in addition to using the driver get-layer callback.
++ * This detached, layer-hosting view owns the exported tree; it has no
++ * NSWindow and does not pretend to own the destination HWND. */
++@interface WineRemoteMetalView : WineBaseView
++{
++    CAContext *_remoteContext;
++}
++@property(retain) CAContext *remoteContext;
++@end
++
++@implementation WineRemoteMetalView
++@synthesize remoteContext = _remoteContext;
++- (void) dealloc
++{
++    _remoteContext.layer = nil;
++    [_remoteContext release];
++    [super dealloc];
++}
++@end
++
++void *macdrv_remote_create_context(macdrv_metal_device device, CGRect bounds, unsigned int *context_id)
++{
++    __block WineRemoteMetalView *view = nil;
++    *context_id = 0;
++    if (!device) return NULL;
++    OnMainThread(^{
++        Class contextClass = NSClassFromString(@"CAContext");
++        if (![contextClass respondsToSelector:@selector(contextWithCGSConnection:options:)]) return;
++        if (!remote_context_views && !(remote_context_views = [[NSMutableSet alloc] init])) return;
++        WineRemoteMetalLayer *layer = [[WineRemoteMetalLayer alloc] init];
++        if (!layer) return;
++        layer.device = (id<MTLDevice>)device;
++        layer.framebufferOnly = YES;
++        layer.magnificationFilter = kCAFilterNearest;
++        layer.contentsScale = retina_on ? 2.0 : 1.0;
++        /* bounds enters in raw pixels. Convert exactly once, not at callers. */
++        layer.bounds = cgrect_mac_from_win(bounds);
++        layer.anchorPoint = CGPointZero;
++        layer.drawableSize = bounds.size;
++        CAContext *context = [[contextClass contextWithCGSConnection:CGSMainConnectionID()
++                                                           options:[NSDictionary dictionary]] retain];
++        if (![context respondsToSelector:@selector(setLayer:)] ||
++            ![context respondsToSelector:@selector(contextId)] || !context.contextId)
++        {
++            [layer release];
++            [context release];
++            return;
++        }
++        if ((view = [[WineRemoteMetalView alloc] initWithFrame:cgrect_mac_from_win(bounds)]))
++        {
++            view.layer = layer;
++            view.wantsLayer = YES;
++            layer.contentsScale = retina_on ? 2.0 : 1.0;
++            view.remoteContext = context;
++            context.layer = layer;
++            [remote_context_views addObject:view];
++            *context_id = context.contextId;
++        }
++        [context release];
++        [layer release];
++    });
++    return view;
++}
++
++macdrv_metal_layer macdrv_remote_context_layer(void *opaque, macdrv_metal_device device, bool retain)
++{
++    __block CAMetalLayer *layer = nil;
++    OnMainThread(^{
++        layer = (CAMetalLayer *)[(WineRemoteMetalView *)opaque layer];
++        if (device) layer.device = (id<MTLDevice>)device;
++        if (retain) [layer retain];
++    });
++    return (macdrv_metal_layer)layer;
++}
++
++void macdrv_remote_update_context(void *opaque, CGRect bounds)
++{
++    OnMainThread(^{
++        WineRemoteMetalView *view = opaque;
++        CAMetalLayer *layer = (CAMetalLayer *)view.layer;
++        CGSize pixels = layer.drawableSize;
++        view.frame = cgrect_mac_from_win(bounds);
++        layer.contentsScale = retina_on ? 2.0 : 1.0;
++        layer.bounds = CGRectMake(0, 0, pixels.width / layer.contentsScale, pixels.height / layer.contentsScale);
++    });
++}
++
++void macdrv_remote_invalidate_context(void *opaque)
++{
++    if (!opaque) return;
++    OnMainThread(^{
++        WineRemoteMetalView *view = opaque;
++        [remote_context_views removeObject:view];
++        view.remoteContext.layer = nil;
++        view.remoteContext = nil;
++        view.layer = nil;
++    });
++}
++
++void macdrv_remote_destroy_context(void *opaque)
++{
++    macdrv_remote_invalidate_context(opaque);
++    if (opaque) OnMainThread(^{ [(WineRemoteMetalView *)opaque release]; });
++}
++
++void *macdrv_remote_create_host(unsigned int context_id)
++{
++    __block CALayer *clip = nil;
++    OnMainThread(^{
++        Class hostClass = NSClassFromString(@"CALayerHost");
++        if (![hostClass instancesRespondToSelector:@selector(setContextId:)]) return;
++        if (!remote_host_layers && !(remote_host_layers = [[NSMutableSet alloc] init])) return;
++        CALayerHost *host = [[hostClass alloc] init];
++        if (!host) return;
++        clip = [[CALayer alloc] init];
++        CAShapeLayer *mask = [[CAShapeLayer alloc] init];
++        if (!mask) { [clip release]; clip = nil; }
++        if (clip)
++        {
++            [host setContextId:context_id];
++            host.magnificationFilter = kCAFilterNearest;
++            host.contentsScale = retina_on ? 2.0 : 1.0;
++            host.anchorPoint = CGPointZero;
++            host.masksToBounds = YES;
++            clip.masksToBounds = YES;
++            clip.geometryFlipped = YES;
++            clip.hidden = YES;
++            clip.contentsScale = retina_on ? 2.0 : 1.0;
++            clip.mask = mask;
++            [remote_host_layers addObject:clip];
++            [clip addSublayer:host];
++        }
++        [host release];
++        [mask release];
++    });
++    return clip;
++}
++
++bool macdrv_remote_update_host(void *opaque, macdrv_window w, CGRect frame, CGRect clipped,
++                               const CGRect *visible_rects, unsigned int count, double z, bool visible)
++{
++    __block bool result = true;
++    OnMainThread(^{
++        CALayer *clip = opaque;
++        CALayerHost *host = (CALayerHost *)clip.sublayers.firstObject;
++        WineWindow *window = (WineWindow *)w;
++        NSView *view = window.contentView;
++        CGMutablePathRef path;
++        if (!clip || !host || (view && ![view isKindOfClass:[WineContentView class]]))
++        {
++            result = false;
++            [window release];
++            return;
++        }
++        if (!(path = CGPathCreateMutable()))
++        {
++            result = false;
++            [window release];
++            return;
++        }
++        for (unsigned int i = 0; i < count; ++i)
++            CGPathAddRect(path, NULL, cgrect_mac_from_win(visible_rects[i]));
++        [CATransaction begin];
++        [CATransaction setDisableActions:YES];
++        ((CAShapeLayer *)clip.mask).path = path;
++        CGPathRelease(path);
++        if (!view)
++        {
++            /* A real allocated host can be pending before native realization. */
++            [clip removeFromSuperlayer];
++            clip.hidden = YES;
++        }
++        else
++        {
++            CGRect f = cgrect_mac_from_win(frame), c = cgrect_mac_from_win(clipped);
++            CGPoint offset = CGPointMake(f.origin.x - c.origin.x, f.origin.y - c.origin.y);
++            if (!view.layer.geometryFlipped)
++                c.origin.y = view.layer.bounds.size.height - c.origin.y - c.size.height;
++            if (clip.superlayer != view.layer) [view.layer addSublayer:clip];
++            clip.frame = c;
++            clip.mask.frame = clip.bounds;
++            clip.zPosition = z;
++            clip.hidden = !visible || !count || CGRectIsEmpty(c);
++            host.contentsScale = retina_on ? 2.0 : 1.0;
++            clip.contentsScale = host.contentsScale;
++            host.frame = (CGRect){offset, f.size};
++            [(WineWindow *)view.window windowDidDrawContent];
++        }
++        [CATransaction commit];
++        /* Consume the retain taken under win_data_mutex, on the Cocoa thread. */
++        [window release];
++    });
++    return result;
++}
++
++void macdrv_remote_destroy_host(void *opaque)
++{
++    if (!opaque) return;
++    OnMainThread(^{
++        CALayer *clip = opaque;
++        [clip removeFromSuperlayer];
++        [remote_host_layers removeObject:clip];
++        [clip release];
++    });
++}
++
++void macdrv_remote_set_retina_mode(bool mode)
++{
++    CGFloat scale = mode ? 2.0 : 1.0;
++    /* Called inline after the native windows have changed coordinate units.
++     * Detached contexts are not visited by WineBaseView's descendant walk. */
++    [CATransaction begin];
++    [CATransaction setDisableActions:YES];
++    for (WineRemoteMetalView *view in remote_context_views)
++    {
++        CAMetalLayer *layer = (CAMetalLayer *)view.layer;
++        CGSize pixels = layer.drawableSize;
++        CGFloat ratio = layer.contentsScale / scale;
++        view.frame = CGRectApplyAffineTransform(view.frame, CGAffineTransformMakeScale(ratio, ratio));
++        layer.contentsScale = scale;
++        layer.bounds = CGRectMake(0, 0, pixels.width / scale, pixels.height / scale);
++    }
++    for (CALayer *clip in remote_host_layers)
++    {
++        CALayerHost *host = (CALayerHost *)clip.sublayers.firstObject;
++        CAShapeLayer *mask = (CAShapeLayer *)clip.mask;
++        CGFloat ratio = clip.contentsScale / scale;
++        CGAffineTransform units = CGAffineTransformMakeScale(ratio, ratio);
++        clip.frame = CGRectApplyAffineTransform(clip.frame, units);
++        mask.frame = clip.bounds;
++        host.frame = CGRectApplyAffineTransform(host.frame, units);
++        if (mask.path)
++        {
++            CGPathRef path = CGPathCreateCopyByTransformingPath(mask.path, &units);
++            mask.path = path;
++            CGPathRelease(path);
++        }
++        clip.contentsScale = host.contentsScale = scale;
++    }
++    [CATransaction commit];
++}
+--- a/dlls/winemac.drv/macdrv.h
++++ b/dlls/winemac.drv/macdrv.h
+@@ -97,6 +97,10 @@
+ {
+     WM_MACDRV_SET_WIN_REGION = WM_WINE_FIRST_DRIVER_MSG,
+     WM_MACDRV_ACTIVATE_ON_FOLLOWING_FOCUS,
++    WM_MACDRV_CREATE_REMOTE_LAYER,
++    WM_MACDRV_RELEASE_REMOTE_LAYER,
++    WM_MACDRV_QUERY_REMOTE_LAYER,
++    WM_MACDRV_UPDATE_REMOTE_LAYERS,
+ };
+ 
+ struct macdrv_thread_data
+@@ -207,6 +211,10 @@
+ extern struct macdrv_client_surface *macdrv_client_surface_create(HWND hwnd);
+ extern void macdrv_metal_destroy_window(HWND hwnd);
+ extern void macdrv_metal_present_view(macdrv_view view);
++extern UINT64 macdrv_metal_remote_call(UINT command, UINT64 a, UINT64 b, UINT64 c);
++extern UINT64 macdrv_metal_win32_call(UINT slot, const UINT64 *args, UINT count);
++extern NTSTATUS macdrv_metal_remote(void *args);
++extern void macdrv_metal_remote_update(HWND hwnd);
+ 
+ extern struct macdrv_win_data *get_win_data(HWND hwnd);
+ extern void release_win_data(struct macdrv_win_data *data);
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -530,6 +530,19 @@
+ extern macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v);
+ extern void macdrv_view_release_metal_view(macdrv_metal_view v);
+ extern void macdrv_metal_watch_view(macdrv_metal_view v);
++extern macdrv_metal_layer macdrv_view_copy_metal_layer(macdrv_metal_view view);
++/* Remote presentation APIs take Wine raw pixels. Only Cocoa converts to points. */
++extern void *macdrv_remote_create_context(macdrv_metal_device device, CGRect bounds, unsigned int *context_id);
++extern macdrv_metal_layer macdrv_remote_context_layer(void *context, macdrv_metal_device device, bool retain);
++extern void macdrv_remote_update_context(void *context, CGRect bounds);
++extern void macdrv_remote_invalidate_context(void *context);
++extern void macdrv_remote_destroy_context(void *context);
++extern void *macdrv_remote_create_host(unsigned int context_id);
++extern bool macdrv_remote_update_host(void *host, macdrv_window window, CGRect frame, CGRect clip,
++                                      const CGRect *visible_rects, unsigned int count, double z, bool visible);
++extern void macdrv_remote_destroy_host(void *host);
++/* Called only by Cocoa's main-thread Retina transition. */
++extern void macdrv_remote_set_retina_mode(bool mode);
+ extern bool macdrv_get_view_backing_size(macdrv_view v, int backing_size[2]);
+ extern void macdrv_set_view_backing_size(macdrv_view v, const int backing_size[2]);
+ extern uint32_t macdrv_window_background_color(void);
+--- a/dlls/winemac.drv/macdrv_main.c
++++ b/dlls/winemac.drv/macdrv_main.c
+@@ -612,6 +612,7 @@
+     macdrv_quit_result,
+     macdrv_metal_init,
+     macdrv_metal_enum,
++    macdrv_metal_remote,
+ };
+ 
+ C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
+@@ -640,6 +641,7 @@
+     macdrv_quit_result,
+     macdrv_metal_init,
+     macdrv_metal_enum,
++    macdrv_metal_remote,
+ };
+ 
+ C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
+--- a/dlls/winemac.drv/metal.c
++++ b/dlls/winemac.drv/metal.c
+@@ -71,7 +71,28 @@
+     struct metal_win_data *copy;
+     struct metal_surface *owned;
+     struct macdrv_win_data *data;
++    DWORD pid = 0, root_pid = 0;
++    HWND root = NtUserGetAncestor(hwnd, GA_ROOT);
++    NtUserGetWindowThread(hwnd, &pid);
++    NtUserGetWindowThread(root, &root_pid);
++    if (!pid || !root_pid) return NULL;
+     if (!(copy = calloc(1, sizeof(*copy)))) return NULL;
++    if (pid != GetCurrentProcessId() || root_pid != GetCurrentProcessId())
++    {
++        copy->hwnd = hwnd;
++        copy->client_cocoa_view = (macdrv_view)(UINT_PTR)
++            macdrv_metal_remote_call(METAL_REMOTE_ACQUIRE, (UINT_PTR)hwnd, 0, 0);
++        if (!copy->client_cocoa_view) { free(copy); return NULL; }
++        NtUserGetWindowRect(hwnd, &copy->window_rect, NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI));
++        NtUserGetClientRect(hwnd, &copy->client_rect, NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI));
++        NtUserMapWindowPoints(hwnd, NULL, (POINT *)&copy->client_rect, 2,
++                              NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI));
++        copy->whole_rect = copy->window_rect;
++        copy->color_key = CLR_INVALID;
++        copy->on_screen = NtUserIsWindowVisible(hwnd);
++        copy->minimized = !!(NtUserGetWindowLongW(root, GWL_STYLE) & WS_MINIMIZE);
++        return copy;
++    }
+     if (!(owned = calloc(1, sizeof(*owned)))) { free(copy); return NULL; }
+     /* Surface creation enters win32u; do it before taking the window lock. */
+     if (!(owned->surface = macdrv_client_surface_create(hwnd))) goto failed;
+@@ -112,6 +133,9 @@
+     struct metal_surface *owned;
+     struct macdrv_client_surface *surface = NULL;
+     macdrv_metal_view result;
++    if ((UINT_PTR)view & 1)
++        return (macdrv_metal_view)(UINT_PTR)macdrv_metal_remote_call(
++            METAL_REMOTE_CREATE, (UINT_PTR)view, (UINT_PTR)device, 0);
+     pthread_mutex_lock(&metal_mutex);
+     LIST_FOR_EACH_ENTRY(owned, &metal_surfaces, struct metal_surface, entry)
+         if (owned->surface->cocoa_view == view)
+@@ -129,14 +153,62 @@
+     return result;
+ }
+ 
++static struct macdrv_client_surface *metal_find_surface(macdrv_metal_view view)
++{
++    struct metal_surface *owned;
++    struct macdrv_client_surface *surface = NULL;
++    pthread_mutex_lock(&metal_mutex);
++    LIST_FOR_EACH_ENTRY(owned, &metal_surfaces, struct metal_surface, entry)
++        if (owned->surface->metal_view == view)
++        {
++            surface = owned->surface;
++            client_surface_add_ref(&surface->client);
++            break;
++        }
++    pthread_mutex_unlock(&metal_mutex);
++    return surface;
++}
++
++static macdrv_metal_layer metal_get_layer(macdrv_metal_view view)
++{
++    struct macdrv_client_surface *surface;
++    macdrv_metal_layer layer;
++    if (!view) return NULL;
++    if (!(surface = metal_find_surface(view)))
++        return (macdrv_metal_layer)(UINT_PTR)macdrv_metal_remote_call(
++            METAL_REMOTE_LAYER, (UINT_PTR)view, 0, 0);
++    layer = macdrv_view_get_metal_layer(view);
++    client_surface_release(&surface->client);
++    return layer;
++}
++
++/* Optional owned handoff, called once per acquired view and paired with slot 8.
++ * The layer is retained before dropping the producer/surface pin. */
++__attribute__((visibility("default")))
++macdrv_metal_layer magicwine_metal_remote_copy_layer(macdrv_metal_view view)
++{
++    struct macdrv_client_surface *surface;
++    macdrv_metal_layer layer;
++    if (!view) return NULL;
++    if (!(surface = metal_find_surface(view)))
++        return (macdrv_metal_layer)(UINT_PTR)macdrv_metal_remote_call(
++            METAL_REMOTE_COPY_LAYER, (UINT_PTR)view, 0, 0);
++    layer = macdrv_view_copy_metal_layer(view);
++    client_surface_release(&surface->client);
++    return layer;
++}
++
+ static void metal_release_win_data(struct metal_win_data *data)
+ {
++    if (data && ((UINT_PTR)data->client_cocoa_view & 1))
++        macdrv_metal_remote_call(METAL_REMOTE_END_HANDOFF, (UINT_PTR)data->client_cocoa_view, 0, 0);
+     free(data);
+ }
+ 
+ static void metal_release_view(macdrv_metal_view view)
+ {
+     struct metal_surface *owned, *found = NULL;
++    if (!view) return;
+     pthread_mutex_lock(&metal_mutex);
+     LIST_FOR_EACH_ENTRY(owned, &metal_surfaces, struct metal_surface, entry)
+         if (owned->surface->metal_view == view)
+@@ -146,7 +218,11 @@
+             break;
+         }
+     pthread_mutex_unlock(&metal_mutex);
+-    if (!found) return;
++    if (!found)
++    {
++        macdrv_metal_remote_call(METAL_REMOTE_RELEASE, (UINT_PTR)view, 0, 0);
++        return;
++    }
+     client_surface_release(&found->surface->client);
+     free(found);
+ }
+@@ -325,7 +401,7 @@
+  * Unix dispatcher on its kernel stack. Only the latter needs a kernel-to-user
+  * callback; attempting one on the user stack would report stack overflow.
+  * Return buffers are consumed before another transition can overwrite them. */
+-static UINT64 metal_win32_call(UINT slot, const UINT64 *args, UINT count)
++UINT64 macdrv_metal_win32_call(UINT slot, const UINT64 *args, UINT count)
+ {
+     struct metal_win32_params params = {.dispatch = {.callback = metal_callback}, .slot = slot};
+     struct metal_win32_params *packed = &params, *result;
+@@ -366,7 +442,7 @@
+     return value;
+ }
+ #define ARG(p) ((UINT64)(UINT_PTR)(p))
+-#define CALL(slot, ...) metal_win32_call(slot, (const UINT64[]){__VA_ARGS__}, sizeof((const UINT64[]){__VA_ARGS__}) / sizeof(UINT64))
++#define CALL(slot, ...) macdrv_metal_win32_call(slot, (const UINT64[]){__VA_ARGS__}, sizeof((const UINT64[]){__VA_ARGS__}) / sizeof(UINT64))
+ static LONG METAL_WINAPI metal_query(HKEY k, LPCSTR n, LPDWORD r, LPDWORD t, BYTE *d, LPDWORD c)
+ { return CALL(10, ARG(k), ARG(n), ARG(r), ARG(t), ARG(d), ARG(c)); }
+ static LONG METAL_WINAPI metal_set(HKEY k, LPCSTR n, DWORD r, DWORD t, const BYTE *d, DWORD c)
+@@ -393,6 +469,7 @@
+ 
+ extern void macdrv_metal_on_main_thread(void *block);
+ __attribute__((visibility("default"))) const unsigned int magicwine_metal_bridge_v1 = 1;
++__attribute__((visibility("default"))) const unsigned int magicwine_metal_remote_v1 = 1;
+ __attribute__((visibility("default"))) const struct
+ {
+     void (*init_display_devices)(BOOL);
+@@ -423,7 +500,7 @@
+ {
+     metal_init_display_devices, metal_get_win_data, metal_release_win_data, macdrv_get_cocoa_window,
+     macdrv_create_metal_device, macdrv_release_metal_device,
+-    metal_create_view, macdrv_view_get_metal_layer, metal_release_view, macdrv_metal_on_main_thread,
++    metal_create_view, metal_get_layer, metal_release_view, macdrv_metal_on_main_thread,
+     metal_query, metal_set, metal_open, metal_create, metal_close, metal_monitors,
+     metal_monitor_info, metal_adjust, metal_get_long, metal_get_rect, metal_move,
+     metal_position, metal_metrics, metal_set_long
+--- a/dlls/winemac.drv/metal_pe.c
++++ b/dlls/winemac.drv/metal_pe.c
+@@ -69,6 +69,9 @@
+     case 21: result = SetWindowPos(PTR(0), PTR(1), a[2], a[3], a[4], a[5], a[6]); break;
+     case 22: result = GetSystemMetrics(a[0]); break;
+     case 23: result = SetWindowLongPtrW(PTR(0), a[1], a[2]); break;
++    case METAL_REMOTE_DISPATCH: result = metal_remote_dispatch(params); break;
++    case METAL_REMOTE_WATCH: result = metal_remote_watch(a[0]); break;
++    case METAL_REMOTE_UNWATCH: metal_remote_unwatch(a[0]); result = 0; break;
+     default: return STATUS_INVALID_PARAMETER;
+     }
+ #undef PTR
+--- a/dlls/winemac.drv/metal_remote.c
++++ b/dlls/winemac.drv/metal_remote.c
+@@ -0,0 +1,509 @@
++/*
++ * Cross-process Metal presentation for the historical winemac bridge.
++ * Copyright 2026 MagicWine contributors
++ *
++ * CAContext transport backported from Wine commit
++ * 1a63b0d7c431f1ebbaba9afd2daa312690eb8020, Marc-Aurel Zent / CodeWeavers.
++ * LGPL-2.1-or-later; see COPYING.LIB.
++ */
++#if 0
++#pragma makedep unix
++#endif
++#include "config.h"
++#include <stdlib.h>
++#include <limits.h>
++#include "macdrv.h"
++#include "wine/list.h"
++#include "wine/debug.h"
++#include "wine/server.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(macdrv);
++
++/* Only the lazy PE service's Wine thread accesses these lists. In particular,
++ * there is no registry/window/surface lock across owner IPC or OnMainThread.
++ * The service's HWND identifies the producer for scalar driver messages; this
++ * uses Wine's existing same-desktop trust model, not an external IPC broker. */
++static HWND service_window;
++static UINT64 next_token = 1;
++static struct list producers = LIST_INIT(producers), hosts = LIST_INIT(hosts);
++static struct list retired_producers = LIST_INIT(retired_producers);
++
++struct remote_producer
++{
++    struct list entry;
++    HWND hwnd, root;
++    DWORD pid, root_pid, created;
++    UINT64 token, users, explicit_users, target_watch, root_watch, pins;
++    unsigned int context_id;
++    BOOL dead;
++    void *context;
++};
++
++struct remote_host
++{
++    struct list entry;
++    HWND hwnd, root, producer;
++    DWORD pid, created;
++    UINT64 producer_watch;
++    unsigned int context_id;
++    void *host;
++};
++
++UINT64 macdrv_metal_remote_call(UINT command, UINT64 a, UINT64 b, UINT64 c)
++{
++    const UINT64 args[] = {command, a, b, c};
++    return macdrv_metal_win32_call(METAL_REMOTE_DISPATCH, args, ARRAY_SIZE(args));
++}
++
++void macdrv_metal_remote_update(HWND hwnd)
++{
++    /* Never start a service for an ordinary local window, or synchronously
++     * enter it while a driver's win_data_mutex might still be held. */
++    HWND service = InterlockedCompareExchangePointer((void **)&service_window, NULL, NULL);
++    if (service) NtUserPostMessage(service, WM_MACDRV_UPDATE_REMOTE_LAYERS,
++                                   (WPARAM)hwnd, NtGetTickCount());
++}
++
++static UINT64 watch_process(DWORD pid)
++{
++    const UINT64 args[] = {pid};
++    return macdrv_metal_win32_call(METAL_REMOTE_WATCH, args, ARRAY_SIZE(args));
++}
++
++static void unwatch_process(UINT64 watch)
++{
++    macdrv_metal_win32_call(METAL_REMOTE_UNWATCH, &watch, 1);
++}
++
++static DWORD window_pid(HWND hwnd)
++{
++    DWORD pid = 0;
++    NtUserGetWindowThread(hwnd, &pid);
++    return pid;
++}
++
++static struct remote_producer *find_producer(UINT64 token)
++{
++    struct remote_producer *producer;
++    LIST_FOR_EACH_ENTRY(producer, &producers, struct remote_producer, entry)
++        if (producer->token == token || (UINT_PTR)producer->context == token) return producer;
++    LIST_FOR_EACH_ENTRY(producer, &retired_producers, struct remote_producer, entry)
++        if (producer->token == token || (UINT_PTR)producer->context == token) return producer;
++    return NULL;
++}
++
++static void free_producer(struct remote_producer *producer)
++{
++    if (producer->dead) list_remove(&producer->entry);
++    macdrv_remote_destroy_context(producer->context);
++    unwatch_process(producer->target_watch);
++    unwatch_process(producer->root_watch);
++    free(producer);
++}
++
++static void finish_dead_producer(struct remote_producer *producer)
++{
++    if (producer->pins) return;
++    if (!producer->explicit_users) { free_producer(producer); return; }
++    /* An owned layer handoff is paired with the consumer's explicit release.
++     * Tear down presentation now, but keep its real NSView identity allocated
++     * until that release; otherwise an allocator reuse could release a new
++     * HWND's view. D3DMetal never requests this owned handoff. */
++    macdrv_remote_invalidate_context(producer->context);
++    unwatch_process(producer->target_watch);
++    unwatch_process(producer->root_watch);
++    producer->target_watch = producer->root_watch = 0;
++}
++
++static void remove_producer(struct remote_producer *producer)
++{
++    if (producer->dead) return;
++    list_remove(&producer->entry);
++    list_add_tail(&retired_producers, &producer->entry);
++    producer->dead = TRUE;
++    ++producer->pins;
++    if (producer->context_id && producer->root)
++        send_message(producer->root, WM_MACDRV_RELEASE_REMOTE_LAYER,
++                     (WPARAM)service_window, producer->context_id);
++    --producer->pins;
++    finish_dead_producer(producer);
++}
++
++static void remove_host(struct remote_host *host)
++{
++    list_remove(&host->entry);
++    macdrv_remote_destroy_host(host->host);
++    unwatch_process(host->producer_watch);
++    free(host);
++}
++
++/* Win32 bottom-to-top, parent before descendants. A context's creation order
++ * must never reorder siblings. Iterative traversal also handles nested HWNDs. */
++static BOOL paint_order(HWND root, HWND target, double *result)
++{
++    HWND current = root, child, next;
++    double order = 0;
++    while (current)
++    {
++        if (current == target) { *result = order; return TRUE; }
++        ++order;
++        child = NtUserGetWindowRelative(current, GW_CHILD);
++        if (child)
++        {
++            current = NtUserGetWindowRelative(child, GW_HWNDLAST);
++            continue;
++        }
++        while (current && current != root && !(next = NtUserGetWindowRelative(current, GW_HWNDPREV)))
++            current = NtUserGetAncestor(current, GA_PARENT);
++        if (!current || current == root) break;
++        current = next;
++    }
++    return FALSE;
++}
++
++/* The server supplies shaped, ancestor-clipped rectangles in screen pixels.
++ * Use the existing region protocol without allocating a DC or a GDI surface. */
++static HRGN visible_region(HWND hwnd, UINT flags)
++{
++    size_t size = 256;
++    RGNDATA *data;
++    HRGN region = 0;
++    NTSTATUS status;
++    do
++    {
++        if (!(data = malloc(sizeof(*data) + size))) return 0;
++        SERVER_START_REQ(get_visible_region)
++        {
++            req->window = wine_server_user_handle(hwnd);
++            req->flags = flags;
++            wine_server_set_reply(req, data->Buffer, size);
++            if (!(status = wine_server_call(req)))
++            {
++                data->rdh.dwSize = sizeof(data->rdh);
++                data->rdh.iType = RDH_RECTANGLES;
++                data->rdh.nCount = wine_server_reply_size(reply) / sizeof(RECT);
++                data->rdh.nRgnSize = wine_server_reply_size(reply);
++                region = NtGdiExtCreateRegion(NULL, data->rdh.dwSize + data->rdh.nRgnSize, data);
++            }
++            else size = reply->total_size;
++        }
++        SERVER_END_REQ;
++        free(data);
++    } while (status == STATUS_BUFFER_OVERFLOW);
++    return region;
++}
++
++static HRGN host_visible_region(HWND hwnd, HWND root)
++{
++    HWND current, sibling;
++    HRGN region, obscured;
++    if (!(region = visible_region(hwnd, DCX_CLIPCHILDREN))) return 0;
++    for (current = hwnd; current && current != root; current = NtUserGetAncestor(current, GA_PARENT))
++    {
++        /* GPU hosts must also respect siblings without WS_CLIPSIBLINGS: their
++         * pixels may live in local Metal/GL views or in the root GDI surface. */
++        for (sibling = NtUserGetWindowRelative(current, GW_HWNDPREV); sibling;
++             sibling = NtUserGetWindowRelative(sibling, GW_HWNDPREV))
++        {
++            if (!(NtUserGetWindowLongW(sibling, GWL_STYLE) & WS_VISIBLE) ||
++                (NtUserGetWindowLongW(sibling, GWL_EXSTYLE) & WS_EX_TRANSPARENT)) continue;
++            if (!(obscured = visible_region(sibling, DCX_WINDOW))) goto failed;
++            if (NtGdiCombineRgn(region, region, obscured, RGN_DIFF) == ERROR)
++            {
++                NtGdiDeleteObjectApp(obscured);
++                goto failed;
++            }
++            NtGdiDeleteObjectApp(obscured);
++        }
++    }
++    if (current == root) return region;
++failed:
++    NtGdiDeleteObjectApp(region);
++    return 0;
++}
++
++static BOOL update_host(struct remote_host *host)
++{
++    struct macdrv_win_data *data;
++    macdrv_window window = NULL;
++    HWND parent;
++    double order;
++    RECT frame, clip, rect;
++    INT dx = 0, dy = 0;
++    UINT dpi = NtUserGetWinMonitorDpi(host->root, MDT_RAW_DPI);
++    HRGN region;
++    RGNDATA *mask;
++    POINT origin = {0};
++    BOOL visible = TRUE, result;
++
++    if (!paint_order(host->root, host->hwnd, &order)) return FALSE;
++    if (!NtUserGetClientRect(host->hwnd, &frame, dpi)) return FALSE;
++    NtUserMapWindowPoints(host->hwnd, host->root, (POINT *)&frame, 2, dpi);
++    clip = frame;
++    for (parent = host->hwnd; parent; parent = NtUserGetAncestor(parent, GA_PARENT))
++    {
++        DWORD style = NtUserGetWindowLongW(parent, GWL_STYLE);
++        if (!(style & WS_VISIBLE) || (style & WS_MINIMIZE)) visible = FALSE;
++        if (!NtUserGetClientRect(parent, &rect, dpi)) return FALSE;
++        NtUserMapWindowPoints(parent, host->root, (POINT *)&rect, 2, dpi);
++        intersect_rect(&clip, &clip, &rect);
++        if (parent == host->root) break;
++    }
++    if (!parent) return FALSE;
++    if (!(region = host_visible_region(host->hwnd, host->root))) return FALSE;
++    NtUserMapWindowPoints(host->root, NULL, &origin, 1, dpi);
++    NtGdiOffsetRgn(region, -origin.x - clip.left, -origin.y - clip.top);
++    mask = get_region_data(region, NULL);
++    NtGdiDeleteObjectApp(region);
++    if (!mask) return FALSE;
++    if ((data = get_win_data(host->root)))
++    {
++        if ((window = data->cocoa_window)) CFRetain(window);
++        dx = data->rects.client.left - data->rects.visible.left;
++        dy = data->rects.client.top - data->rects.visible.top;
++        release_win_data(data);
++    }
++    OffsetRect(&frame, dx, dy);
++    OffsetRect(&clip, dx, dy);
++    /* All rectangles above are raw Win32 pixels. The Cocoa boundary converts
++     * once, including zero-area children; no edge snapping or frame scaling. */
++    result = macdrv_remote_update_host(host->host, window, cgrect_from_rect(frame),
++                                       cgrect_from_rect(clip), (CGRect *)mask->Buffer, mask->rdh.nCount,
++                                       order, visible);
++    free(mask);
++    return result;
++}
++
++static BOOL host_context(HWND root, HWND source, unsigned int context_id)
++{
++    struct remote_host *host;
++    HWND hwnd;
++    DWORD pid;
++    if (!context_id || window_pid(root) != GetCurrentProcessId() || !(pid = window_pid(source))) return FALSE;
++    LIST_FOR_EACH_ENTRY(host, &hosts, struct remote_host, entry)
++        if (host->producer == source && host->context_id == context_id)
++            return host->root == root && update_host(host);
++
++    /* QUERY returns only a HWND, never a producer-local pointer. The producer
++     * publishes its context before CREATE and pins it across this nested send. */
++    hwnd = (HWND)send_message(source, WM_MACDRV_QUERY_REMOTE_LAYER, 0, context_id);
++    if (!hwnd || NtUserGetAncestor(hwnd, GA_ROOT) != root) return FALSE;
++    if (!(host = calloc(1, sizeof(*host)))) return FALSE;
++    host->hwnd = hwnd;
++    host->root = root;
++    host->producer = source;
++    host->pid = pid;
++    host->context_id = context_id;
++    host->created = NtGetTickCount();
++    host->producer_watch = watch_process(pid);
++    if (!host->producer_watch || !(host->host = macdrv_remote_create_host(context_id))) goto failed;
++    if (!update_host(host) || NtUserGetAncestor(hwnd, GA_ROOT) != root) goto failed;
++    list_add_tail(&hosts, &host->entry);
++    return TRUE;
++failed:
++    macdrv_remote_destroy_host(host->host);
++    unwatch_process(host->producer_watch);
++    free(host);
++    return FALSE;
++}
++
++static BOOL route_producer(struct remote_producer *producer)
++{
++    HWND root = NtUserGetAncestor(producer->hwnd, GA_ROOT);
++    DWORD pid = window_pid(root);
++    UINT64 watch;
++    LRESULT result;
++    if (!root || !pid) return FALSE;
++    if (root != producer->root || pid != producer->root_pid)
++    {
++        if (!(watch = watch_process(pid))) return FALSE;
++        /* Complete detachment before reusing this context in another root.
++         * An asynchronous old release could erase a later A -> B -> A host. */
++        if (producer->root && producer->context_id)
++            send_message(producer->root, WM_MACDRV_RELEASE_REMOTE_LAYER,
++                         (WPARAM)service_window, producer->context_id);
++        if (producer->dead) { unwatch_process(watch); return FALSE; }
++        unwatch_process(producer->root_watch);
++        producer->root = root;
++        producer->root_pid = pid;
++        producer->root_watch = watch;
++    }
++    result = send_message(root, WM_MACDRV_CREATE_REMOTE_LAYER,
++                          (WPARAM)service_window, producer->context_id);
++    return result && !producer->dead && NtUserGetAncestor(producer->hwnd, GA_ROOT) == root;
++}
++
++static UINT64 acquire_producer(HWND hwnd)
++{
++    struct remote_producer *producer;
++    DWORD pid = window_pid(hwnd);
++    if (!pid) return 0;
++    LIST_FOR_EACH_ENTRY(producer, &producers, struct remote_producer, entry)
++        if (producer->hwnd == hwnd && producer->pid == pid)
++        {
++            if (producer->users == ~(UINT64)0) return 0;
++            ++producer->users;
++            ++producer->pins;
++            return producer->token;
++        }
++    if (!next_token || !(producer = calloc(1, sizeof(*producer)))) return 0;
++    producer->hwnd = hwnd;
++    producer->pid = pid;
++    producer->created = NtGetTickCount();
++    producer->users = 1;
++    producer->pins = 1; /* metadata handoff, released by release_win_data */
++    /* Odd tokens are only get/create handoff handles, never Cocoa views.
++     * Never recycle them: a retired metadata release must not find a new HWND. */
++    producer->token = next_token;
++    next_token = next_token > ~(UINT64)0 - 2 ? 0 : next_token + 2;
++    if (!(producer->target_watch = watch_process(pid))) { free(producer); return 0; }
++    list_add_tail(&producers, &producer->entry);
++    return producer->token;
++}
++
++static void refresh_remote(DWORD event, HWND hwnd, DWORD time, UINT64 dead_watch)
++{
++    struct remote_host *host, *next;
++    struct remote_producer *producer, *candidate;
++    UINT64 token = 0;
++    RECT rect;
++
++    LIST_FOR_EACH_ENTRY_SAFE(host, next, &hosts, struct remote_host, entry)
++    {
++        if ((dead_watch && host->producer_watch == dead_watch) ||
++            (event == EVENT_OBJECT_DESTROY && (host->hwnd == hwnd || host->root == hwnd || host->producer == hwnd) &&
++             (INT)(time - host->created) >= 0) || !NtUserIsWindow(host->hwnd) ||
++            !NtUserIsWindow(host->producer) || NtUserGetAncestor(host->hwnd, GA_ROOT) != host->root)
++            remove_host(host);
++        else if ((event == EVENT_OBJECT_DESTROY || event == EVENT_OBJECT_PARENTCHANGE ||
++                  !hwnd || hwnd == host->root || NtUserGetAncestor(hwnd, GA_ROOT) == host->root) &&
++                 !update_host(host))
++        {
++            /* A live hierarchy can change while queried. Keep the registration
++             * pending, not partially ordered, so the next change can realize it. */
++            macdrv_remote_update_host(host->host, NULL, CGRectZero, CGRectZero, NULL, 0, 0, FALSE);
++        }
++    }
++    /* A send can service another command, so keep no list iterator across it.
++     * Pins defer object disposal, not context retirement by a fixed timer. */
++    for (;;)
++    {
++        producer = NULL;
++        LIST_FOR_EACH_ENTRY(candidate, &producers, struct remote_producer, entry)
++            if (candidate->token > token && (!producer || candidate->token < producer->token)) producer = candidate;
++        if (!producer) break;
++        token = producer->token;
++        if ((dead_watch && (producer->target_watch == dead_watch ||
++                           (producer->root_watch == dead_watch &&
++                            NtUserGetAncestor(producer->hwnd, GA_ROOT) == producer->root))) ||
++            (event == EVENT_OBJECT_DESTROY &&
++             (producer->hwnd == hwnd || (producer->root == hwnd &&
++              NtUserGetAncestor(producer->hwnd, GA_ROOT) == producer->root)) &&
++             (INT)(time - producer->created) >= 0) || window_pid(producer->hwnd) != producer->pid)
++        {
++            remove_producer(producer);
++            continue;
++        }
++        if (!producer->context_id) continue;
++        if (NtUserGetClientRect(producer->hwnd, &rect, NtUserGetWinMonitorDpi(producer->hwnd, MDT_RAW_DPI)))
++            macdrv_remote_update_context(producer->context, cgrect_from_rect(rect));
++        if (NtUserGetAncestor(producer->hwnd, GA_ROOT) != producer->root)
++        {
++            ++producer->pins;
++            if (!route_producer(producer) && !producer->dead)
++                remove_producer(producer);
++            if (!--producer->pins && producer->dead) finish_dead_producer(producer);
++        }
++    }
++}
++
++NTSTATUS macdrv_metal_remote(void *arg)
++{
++    struct metal_win32_params *params = arg;
++    const UINT64 *a = params->args;
++    struct remote_producer *producer;
++    struct remote_host *host, *next;
++    RECT rect;
++    UINT64 result = 0;
++
++    switch (a[0])
++    {
++    case METAL_REMOTE_SERVICE:
++        InterlockedExchangePointer((void **)&service_window, (void *)(UINT_PTR)a[1]);
++        result = 1;
++        break;
++    case METAL_REMOTE_ACQUIRE: result = acquire_producer((HWND)(UINT_PTR)a[1]); break;
++    case METAL_REMOTE_END_HANDOFF:
++        if ((producer = find_producer(a[1])) && !--producer->pins && producer->dead)
++            finish_dead_producer(producer);
++        break;
++    case METAL_REMOTE_HOST:
++        result = host_context((HWND)(UINT_PTR)a[1], (HWND)(UINT_PTR)a[2], a[3]);
++        break;
++    case METAL_REMOTE_UNHOST:
++        LIST_FOR_EACH_ENTRY_SAFE(host, next, &hosts, struct remote_host, entry)
++            if (host->root == (HWND)(UINT_PTR)a[1] && host->producer == (HWND)(UINT_PTR)a[2] && host->context_id == a[3])
++                remove_host(host);
++        break;
++    case METAL_REMOTE_QUERY:
++        if ((HWND)(UINT_PTR)a[2] != service_window) break;
++        LIST_FOR_EACH_ENTRY(producer, &producers, struct remote_producer, entry)
++            if (producer->context_id == a[1] && window_pid(producer->hwnd) == producer->pid)
++            { result = (UINT_PTR)producer->hwnd; break; }
++        break;
++    case METAL_REMOTE_EVENT: refresh_remote(a[1], (HWND)(UINT_PTR)a[2], a[3], 0); break;
++    case METAL_REMOTE_DEAD: refresh_remote(0, NULL, 0, a[1]); break;
++    case METAL_REMOTE_CREATE:
++    case METAL_REMOTE_LAYER:
++    case METAL_REMOTE_COPY_LAYER:
++    case METAL_REMOTE_RELEASE:
++        if (!(producer = find_producer(a[1]))) break;
++        if (producer->dead && a[0] != METAL_REMOTE_RELEASE) break;
++        ++producer->pins;
++        if (a[0] == METAL_REMOTE_RELEASE)
++        {
++            if (producer->explicit_users) --producer->explicit_users;
++            if (!--producer->users && !producer->dead) remove_producer(producer);
++        }
++        else if (a[0] == METAL_REMOTE_LAYER || a[0] == METAL_REMOTE_COPY_LAYER)
++        {
++            if (producer->context) result = (UINT_PTR)macdrv_remote_context_layer(
++                producer->context, NULL, a[0] == METAL_REMOTE_COPY_LAYER);
++            /* The optional owned handoff is used once per acquired view. */
++            if (result && a[0] == METAL_REMOTE_COPY_LAYER) ++producer->explicit_users;
++        }
++        else
++        {
++            if (!NtUserGetClientRect(producer->hwnd, &rect, NtUserGetWinMonitorDpi(producer->hwnd, MDT_RAW_DPI)))
++            {
++                remove_producer(producer);
++                goto unpin;
++            }
++            if (!producer->context)
++            {
++                producer->context = macdrv_remote_create_context((macdrv_metal_device)(UINT_PTR)a[2],
++                                                                 cgrect_from_rect(rect), &producer->context_id);
++                if (!producer->context || !route_producer(producer))
++                {
++                    if (!producer->dead) remove_producer(producer);
++                    goto unpin;
++                }
++            }
++            else if (NtUserGetAncestor(producer->hwnd, GA_ROOT) != producer->root &&
++                     !route_producer(producer))
++            {
++                if (!producer->dead) remove_producer(producer);
++                goto unpin;
++            }
++            macdrv_remote_update_context(producer->context, cgrect_from_rect(rect));
++            if (macdrv_remote_context_layer(producer->context, (macdrv_metal_device)(UINT_PTR)a[2], FALSE))
++                result = (UINT_PTR)producer->context;
++        }
++unpin:
++        if (!--producer->pins && producer->dead) finish_dead_producer(producer);
++        break;
++    default: return STATUS_INVALID_PARAMETER;
++    }
++    params->result = result;
++    return STATUS_SUCCESS;
++}
+--- a/dlls/winemac.drv/metal_remote_pe.c
++++ b/dlls/winemac.drv/metal_remote_pe.c
+@@ -0,0 +1,185 @@
++/*
++ * Wine-thread service for cross-process Metal presentation.
++ * Copyright 2026 MagicWine contributors
++ * LGPL-2.1-or-later; see COPYING.LIB.
++ */
++#include <stdarg.h>
++#include <stdlib.h>
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winbase.h"
++#include "winuser.h"
++#include "unixlib.h"
++#include "wine/list.h"
++
++static INIT_ONCE service_once = INIT_ONCE_STATIC_INIT;
++static HWND service_window;
++static struct list watches = LIST_INIT(watches);
++static UINT_PTR next_watch;
++
++struct process_watch
++{
++    struct list entry;
++    HANDLE process, wait;
++    UINT_PTR serial;
++};
++
++static void CALLBACK process_exited(void *arg, BOOLEAN timed_out)
++{
++    struct process_watch *watch = arg;
++    /* This callback owns no native state and never waits for the service. */
++    PostMessageW(service_window, WM_METAL_REMOTE_DEAD, watch->serial, 0);
++}
++
++UINT64 metal_remote_watch(DWORD pid)
++{
++    struct process_watch *watch;
++    if (pid == GetCurrentProcessId()) return ~(UINT64)0;
++    if (!next_watch || !(watch = calloc(1, sizeof(*watch)))) return 0;
++    watch->serial = next_watch++;
++    if (!(watch->process = OpenProcess(SYNCHRONIZE, FALSE, pid))) goto failed;
++    if (!RegisterWaitForSingleObject(&watch->wait, watch->process, process_exited, watch,
++                                     INFINITE, WT_EXECUTEONLYONCE)) goto failed;
++    list_add_tail(&watches, &watch->entry);
++    return watch->serial;
++failed:
++    if (watch->process) CloseHandle(watch->process);
++    free(watch);
++    return 0;
++}
++
++void metal_remote_unwatch(UINT64 cookie)
++{
++    struct process_watch *watch;
++    if (!cookie || cookie == ~(UINT64)0) return;
++    LIST_FOR_EACH_ENTRY(watch, &watches, struct process_watch, entry)
++        if (watch->serial == cookie)
++        {
++            list_remove(&watch->entry);
++            /* The callback only posts; draining it cannot wait on our thread. */
++            UnregisterWaitEx(watch->wait, INVALID_HANDLE_VALUE);
++            CloseHandle(watch->process);
++            free(watch);
++            return;
++        }
++}
++
++static LRESULT CALLBACK service_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
++{
++    struct metal_win32_params params = {0};
++    struct process_watch *watch;
++    if (msg == WM_METAL_REMOTE_CALL)
++    {
++        MACDRV_CALL(metal_remote, (void *)lp);
++        return 0; /* The 64-bit result is in the packet, including on PE32. */
++    }
++    if (msg == WM_METAL_REMOTE_DEAD)
++    {
++        LIST_FOR_EACH_ENTRY(watch, &watches, struct process_watch, entry)
++            if (watch->serial == wp)
++            {
++                params.args[0] = METAL_REMOTE_DEAD;
++                params.args[1] = watch->serial;
++                MACDRV_CALL(metal_remote, &params);
++                break;
++            }
++        return 0;
++    }
++    return DefWindowProcW(hwnd, msg, wp, lp);
++}
++
++static void CALLBACK window_event(HWINEVENTHOOK hook, DWORD event, HWND hwnd,
++                                  LONG object, LONG child, DWORD thread, DWORD time)
++{
++    struct metal_win32_params params = {0};
++    if (!hwnd || child || (object != OBJID_WINDOW && object != OBJID_CLIENT)) return;
++    switch (event)
++    {
++    case EVENT_OBJECT_CREATE:
++    case EVENT_OBJECT_DESTROY:
++    case EVENT_OBJECT_SHOW:
++    case EVENT_OBJECT_HIDE:
++    case EVENT_OBJECT_REORDER:
++    case EVENT_OBJECT_LOCATIONCHANGE:
++    case EVENT_OBJECT_STATECHANGE:
++    case EVENT_OBJECT_PARENTCHANGE:
++    case EVENT_SYSTEM_MINIMIZESTART:
++    case EVENT_SYSTEM_MINIMIZEEND:
++        break;
++    default:
++        return;
++    }
++    params.args[0] = METAL_REMOTE_EVENT;
++    params.args[1] = event;
++    params.args[2] = (UINT_PTR)hwnd;
++    params.args[3] = time;
++    MACDRV_CALL(metal_remote, &params);
++}
++
++struct service_start
++{
++    HANDLE ready;
++    BOOL success;
++};
++
++static DWORD WINAPI service_thread(void *arg)
++{
++    struct service_start *start = arg;
++    struct metal_win32_params params = {0};
++    WNDCLASSW cls = {0};
++    HWINEVENTHOOK objects = NULL, minimize = NULL;
++    HWND window = NULL;
++    MSG msg;
++
++    cls.lpfnWndProc = service_proc;
++    cls.lpszClassName = L"WineMetalRemoteService";
++    cls.hInstance = GetModuleHandleW(L"winemac.drv");
++    if (!RegisterClassW(&cls) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) goto failed;
++    if (!(window = CreateWindowExW(0, cls.lpszClassName, NULL, 0, 0, 0, 0, 0,
++                                   HWND_MESSAGE, NULL, cls.hInstance, NULL))) goto failed;
++    objects = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_PARENTCHANGE, NULL, window_event,
++                              0, 0, WINEVENT_OUTOFCONTEXT);
++    minimize = SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, NULL,
++                               window_event, 0, 0, WINEVENT_OUTOFCONTEXT);
++    if (!objects || !minimize) goto failed;
++    service_window = window;
++    next_watch = 1;
++    params.args[0] = METAL_REMOTE_SERVICE;
++    params.args[1] = (UINT_PTR)window;
++    MACDRV_CALL(metal_remote, &params);
++    start->success = TRUE;
++    SetEvent(start->ready);
++    while (GetMessageW(&msg, NULL, 0, 0) > 0) DispatchMessageW(&msg);
++    return 0;
++failed:
++    if (objects) UnhookWinEvent(objects);
++    if (minimize) UnhookWinEvent(minimize);
++    if (window) DestroyWindow(window);
++    start->success = FALSE;
++    SetEvent(start->ready);
++    return 0;
++}
++
++static BOOL CALLBACK start_service(INIT_ONCE *once, void *param, void **context)
++{
++    struct service_start start = {0};
++    HANDLE thread;
++    if (!(start.ready = CreateEventW(NULL, TRUE, FALSE, NULL))) return FALSE;
++    thread = CreateThread(NULL, 0, service_thread, &start, 0, NULL);
++    if (thread)
++    {
++        WaitForSingleObject(start.ready, INFINITE);
++        CloseHandle(thread);
++    }
++    CloseHandle(start.ready);
++    return start.success;
++}
++
++UINT64 metal_remote_dispatch(struct metal_win32_params *params)
++{
++    /* Deliberately lazy: no worker creation or wait from DllMain. */
++    if (!InitOnceExecuteOnce(&service_once, start_service, NULL, NULL)) return 0;
++    SendMessageW(service_window, WM_METAL_REMOTE_CALL, 0, (LPARAM)params);
++    return params->result;
++}
+--- a/dlls/winemac.drv/unixlib.h
++++ b/dlls/winemac.drv/unixlib.h
+@@ -25,6 +25,7 @@
+     unix_quit_result,
+     unix_metal_init,
+     unix_metal_enum,
++    unix_metal_remote,
+     unix_funcs_count
+ };
+ 
+@@ -90,6 +91,38 @@
+     UINT slot, pointer_mask, security_inherit, security_descriptor;
+ };
+ 
++/* Internal PE/Unix service protocol, not part of the historical Metal table.
++ * All native handles stay 64-bit even in the PE32 service. */
++enum metal_remote_command
++{
++    METAL_REMOTE_ACQUIRE = 1,
++    METAL_REMOTE_CREATE,
++    METAL_REMOTE_LAYER,
++    METAL_REMOTE_RELEASE,
++    METAL_REMOTE_HOST,
++    METAL_REMOTE_UNHOST,
++    METAL_REMOTE_QUERY,
++    METAL_REMOTE_EVENT,
++    METAL_REMOTE_DEAD,
++    METAL_REMOTE_SERVICE,
++    METAL_REMOTE_COPY_LAYER,
++    METAL_REMOTE_END_HANDOFF,
++};
++
++enum metal_remote_callback
++{
++    METAL_REMOTE_DISPATCH = 24,
++    METAL_REMOTE_WATCH,
++    METAL_REMOTE_UNWATCH,
++};
++
++#define WM_METAL_REMOTE_CALL (WM_APP + 0x310)
++#define WM_METAL_REMOTE_DEAD (WM_APP + 0x311)
++
++extern UINT64 metal_remote_dispatch(struct metal_win32_params *params);
++extern UINT64 metal_remote_watch(DWORD pid);
++extern void metal_remote_unwatch(UINT64 cookie);
++
+ struct metal_enum_params
+ {
+     UINT64 callback, monitor, dc, lparam;
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -500,6 +500,7 @@
+ 
+ done:
+     if (win_rgn) NtGdiDeleteObjectApp(win_rgn);
++    macdrv_metal_remote_update(data->hwnd);
+ }
+ 
+ 
+@@ -1328,6 +1329,7 @@
+         create_cocoa_window(data);
+     }
+     release_win_data(data);
++    macdrv_metal_remote_update(hwnd);
+ }
+ 
+ 
+@@ -1390,6 +1392,7 @@
+     }
+ 
+     release_win_data(data);
++    macdrv_metal_remote_update(hwnd);
+ }
+ 
+ 
+@@ -1532,6 +1535,14 @@
+         activate_on_following_focus();
+         TRACE("WM_MACDRV_ACTIVATE_ON_FOLLOWING_FOCUS time %u\n", activate_on_focus_time);
+         return 0;
++    case WM_MACDRV_CREATE_REMOTE_LAYER:
++        return macdrv_metal_remote_call(METAL_REMOTE_HOST, (UINT_PTR)hwnd, wp, (UINT32)lp);
++    case WM_MACDRV_RELEASE_REMOTE_LAYER:
++        return macdrv_metal_remote_call(METAL_REMOTE_UNHOST, (UINT_PTR)hwnd, wp, (UINT32)lp);
++    case WM_MACDRV_QUERY_REMOTE_LAYER:
++        return macdrv_metal_remote_call(METAL_REMOTE_QUERY, (UINT32)lp, (UINT_PTR)hwnd, 0);
++    case WM_MACDRV_UPDATE_REMOTE_LAYERS:
++        return macdrv_metal_remote_call(METAL_REMOTE_EVENT, 0, wp, (UINT32)lp);
+     }
+ 
+     FIXME("unrecognized window msg %x hwnd %p wp %lx lp %lx\n", msg, hwnd, (unsigned long)wp, lp);
+@@ -1646,6 +1657,7 @@
+ 
+ done:
+     release_win_data(data);
++    macdrv_metal_remote_update(hwnd);
+ }
+ 
+ 

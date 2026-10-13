@@ -1,0 +1,154 @@
+{
+  "archive_sha256": "df1b8fe4810dd3ae4a6da78285257dcdcaf2d23b2545760c2d36d5e494fd41e2",
+  "component": "dxmt-v0.80-remote.1",
+  "inputs": {
+    "dxmt-directx-9df86f2.tar.gz": {
+      "sha256": "9c1b8bbfd2d6c758fac4d93c2808a46bc1eee429fe656b4f21b29e02615aa8aa",
+      "url": "https://codeload.github.com/misyltoad/mingw-directx-headers/tar.gz/9df86f2341616ef1888ae59919feaa6d4fad693d"
+    },
+    "dxmt-v0.80-builtin.tar.gz": {
+      "sha256": "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d",
+      "url": "https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz"
+    },
+    "dxmt-v0.80-source.tar.gz": {
+      "sha256": "79cd3a2b32749fc3890b6c2a9337f45de26fdb750014f3457bb7ebafa679492d",
+      "url": "https://codeload.github.com/3Shain/dxmt/tar.gz/refs/tags/v0.80"
+    },
+    "llvm-mingw-20251216-ucrt-macos-universal.tar.xz": {
+      "sha256": "38bb5e48ec3e0ce95fb901f4efff0bd6ffa966d1b32539a6510af816a959d160",
+      "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/llvm-mingw-20251216-ucrt-macos-universal.tar.xz"
+    },
+    "llvm-project-15.0.7.tar.gz": {
+      "sha256": "42a0088f148edcf6c770dfc780a7273014a9a89b66f357c761b4ca7c8dfa10ba",
+      "url": "https://codeload.github.com/llvm/llvm-project/tar.gz/refs/tags/llvmorg-15.0.7"
+    }
+  },
+  "license": "DXMT v0.80 MIT; dependency licenses retained in LICENSE-DXMT.txt and corresponding source archives.",
+  "offline_rebuild": "Extract the source bundle, run bash scripts/build-dxmt.sh --fetch once to cache the SHA-pinned LLVM/MinGW prerequisites, then run bash scripts/build-dxmt.sh using the recorded Apple toolchain. The build itself is offline. Bundled inputs/, wine-development-inputs/ and LICENSE-DXMT.txt are detected automatically; no checkout reconstruction is needed. DXMT_INPUTS and WINE_BUILD may override input locations; pins remain mandatory.",
+  "patch_sha256": "af103ca38e19f6421675d3487a5ff81b9170692da1c5fc29e605079d21bac65e",
+  "payload_sha256": {
+    "i386-windows/d3d10core.dll": "c5a26310d14a30c3e1700a4d0c9865be28a11351a5c4dc5b83ab1bd8fcf7662f",
+    "i386-windows/d3d11.dll": "3396fde761acc0dea2adc3640724e005cab25e131dabb012e7770fd5b4d9d06f",
+    "i386-windows/dxgi.dll": "7df8cdf66e12a108410002abc77b01f70aa59b8a36a70fa0bc6ae3b056841319",
+    "i386-windows/winemetal.dll": "79fdd2bf67150fa65c1e8f48dced62e982f405210baec142a075fa556cd74b8e",
+    "x86_64-unix/winemetal.so": "582ee39a779c4770ddaa73b54ad05aa2308c888ea88af7eba049943e72b33d5b",
+    "x86_64-windows/d3d10core.dll": "833d26971abc8661efc8b5cc18548c70ce8e482e4ea4b1d3f69a367612264d26",
+    "x86_64-windows/d3d11.dll": "e4258f66288b07dad3b2854d556586f547643bac38b0ce018b0e7ba15653ad6e",
+    "x86_64-windows/dxgi.dll": "fc58aae0aba511a1ec4d2417e5bba6adb888bb14315d0f59cccdfd27f670d544",
+    "x86_64-windows/nvapi64.dll": "7c37b66a88aa1fdb08c6035a7fe738af1c1b5eea53af78c4812498d22bef8bc3",
+    "x86_64-windows/nvngx.dll": "18d5847ee524ba6eeb2eee656817ddc00a45c46759a753854335a765e997e5fe",
+    "x86_64-windows/winemetal.dll": "7390824eca278343e5227eb85361917ccc18761aad5769d6991b6b37ea01bfe4"
+  },
+  "rebuilt": [
+    "i386-windows/d3d11.dll",
+    "i386-windows/winemetal.dll",
+    "x86_64-unix/winemetal.so",
+    "x86_64-windows/d3d11.dll",
+    "x86_64-windows/winemetal.dll"
+  ],
+  "recipe_sha256": "f34548f39b1594c40c25b56b4b343b7c4b4431a31a03a2c8d3c709634e15a96e",
+  "schema": 1,
+  "shader_arrays": {
+    "air_msad": {
+      "sha256": "fda73b9a7a91b11060737fd372678d18123f59142a22dd6f6ba2c5d36ffc3962",
+      "size": 5152
+    },
+    "air_samplepos": {
+      "sha256": "0abefdee437628a5bdd26be6ebf1b099ec7c546260b3c937e9ddc40bd4287e80",
+      "size": 3488
+    },
+    "air_tessellation": {
+      "sha256": "21eca32c2172d6434ece59c11a5375fd8195a6285779855ae9dac2a4d1f7c811",
+      "size": 59536
+    },
+    "dxmt_command": {
+      "sha256": "875e4990dcd818c6f4b5dfb697823afd0d2b851601f0b1e89ec0e5dd54bbf195",
+      "size": 152339
+    }
+  },
+  "shader_extractor_sha256": "681a17040e62b8d5e8fb6f9f053ca6ff799455d0b98f90b209fb79ca44fca387",
+  "shader_inputs": "Unchanged generated arrays extracted by named PE/Mach-O symbols, bounded length globals and independent SHA-256 pins from the verified stock archive. Complete shader sources and upstream regeneration rules retained.",
+  "shader_regeneration": "Requires Apple Metal compiler (Xcode toolchain). Original rules: xcrun -sdk macosx metal -o NAME.air -c NAME.metal; xcrun -sdk macosx metallib -o dxmt_command.metallib dxmt_command.air; AIR helper compile adds -std=metal3.1 --target=air64-apple-macos14.0. xxd -n NAME -i INPUT NAME.h. Source files/rules remain in corresponding DXMT source. This package retains original generated arrays, not recompilations.",
+  "source_archive_sha256": "f291b4f1b287ac5a703ae6c41e1d03f24bf7dbf35f76aa610c6c4801f21fb78e",
+  "source_commit": "589adb780354b461645b29999cefaf533594ee99",
+  "source_date_epoch": 1776816000,
+  "stock_payload_sha256": {
+    "i386-windows/d3d10core.dll": "c5a26310d14a30c3e1700a4d0c9865be28a11351a5c4dc5b83ab1bd8fcf7662f",
+    "i386-windows/d3d11.dll": "9afc2b3419818618c4c87274435a28935b0df002caa4b9a8d3a88d3dc846b17d",
+    "i386-windows/dxgi.dll": "7df8cdf66e12a108410002abc77b01f70aa59b8a36a70fa0bc6ae3b056841319",
+    "i386-windows/winemetal.dll": "20a6865facebdaac92b6c06fadf37d2efb5a242b22ca1c349bb57d7ad43df8e3",
+    "x86_64-unix/winemetal.so": "3d50d7f39c64778c71d0af2fce1cde818d09ffbce7c4f7b8ae24ae1df567c0ca",
+    "x86_64-windows/d3d10core.dll": "833d26971abc8661efc8b5cc18548c70ce8e482e4ea4b1d3f69a367612264d26",
+    "x86_64-windows/d3d11.dll": "7ca382af0eb32d8a432f6efb14d594fefb45673663be1f7e6682254bff885c47",
+    "x86_64-windows/dxgi.dll": "fc58aae0aba511a1ec4d2417e5bba6adb888bb14315d0f59cccdfd27f670d544",
+    "x86_64-windows/nvapi64.dll": "7c37b66a88aa1fdb08c6035a7fe738af1c1b5eea53af78c4812498d22bef8bc3",
+    "x86_64-windows/nvngx.dll": "18d5847ee524ba6eeb2eee656817ddc00a45c46759a753854335a765e997e5fe",
+    "x86_64-windows/winemetal.dll": "514245d533c750599614311a792c45ed600aef52948571d98c0fc70fd3df16e0"
+  },
+  "tools": {
+    "clang": {
+      "path": "/Library/Developer/CommandLineTools/usr/bin/clang",
+      "sha256": "1590ac950a3d627817d09ade5cb60b2115f17a72182a3141e010b4bcc482a0c9"
+    },
+    "clang++": {
+      "path": "/Library/Developer/CommandLineTools/usr/bin/clang++",
+      "sha256": "1590ac950a3d627817d09ade5cb60b2115f17a72182a3141e010b4bcc482a0c9"
+    },
+    "cmake": {
+      "path": "/opt/homebrew/Cellar/cmake/4.4.4/bin/cmake",
+      "sha256": "64c16ba19481b4e8fa5fc51afa37a7609128d5e5c10236eb1492d16d22d029c4"
+    },
+    "install_name_tool": {
+      "path": "/Library/Developer/CommandLineTools/usr/bin/install_name_tool",
+      "sha256": "ce7c944f855250c5df6b4de8ab024e94b5577f2385a122bd8993a531d466c0de"
+    },
+    "meson": {
+      "path": "/opt/homebrew/Cellar/meson/1.12.1/bin/meson",
+      "sha256": "4a0b03f00272a9af5598a4be3b90a27cb55c4ff48739c5cafb7a83bc2778c6ce"
+    },
+    "ninja": {
+      "path": "/opt/homebrew/Cellar/ninja/1.13.2/bin/ninja",
+      "sha256": "1474a6ef89624613732e0fc9e6d9fe5338b8885916cf64ab8c1c6097123f3ef6"
+    },
+    "patch": {
+      "path": "/usr/bin/patch",
+      "sha256": "c5da188cbbcd58d7533fcd63a0626756d44751c0cd6da902859fca1cc81ef071"
+    },
+    "python3": {
+      "path": "/opt/homebrew/Cellar/python@3.15/3.15.0/Frameworks/Python.framework/Versions/3.15/bin/python3.15",
+      "sha256": "15c72833c1ffc09bc4e05d1e1866784d126721ad548d9c4d8f943641262535cb"
+    },
+    "sdk": {
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "sha256": "01e27b4a014792aabc1c35e2a3c8af4094c9f8ebfd90d95dbaa9bf30faf52977",
+      "version": "27.0"
+    },
+    "strip": {
+      "path": "/Library/Developer/CommandLineTools/usr/bin/strip",
+      "sha256": "e0d9859a299233c4b2bd48a21f55bb00e575e175eef9193616d3af8660fc846d"
+    },
+    "versions": {
+      "cmake": "cmake version 4.4.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+      "meson": "1.12.1",
+      "ninja": "1.13.2",
+      "python3": "Python 3.15.0"
+    },
+    "xxd": {
+      "path": "/usr/bin/xxd",
+      "sha256": "f7ac1ac162de4af8ab3b865bb30c44b1abd16f2fa81e2bf9f29c5485e3c72781"
+    }
+  },
+  "wine_corresponding_source": {
+    "file": "winemac-wine11.0-metal.4-source.tar.gz",
+    "sha256": "065432da2c0fc4bec24196d40ae7ad0b12ed7d6603e451c459aa3b9787c02fad"
+  },
+  "wine_development_inputs": {
+    "dlls/ntdll/i386-windows/libntdll.a": "bf02af9d46758c85b9a4043413df66bd2ecc85f18a8372aea146374b69887005",
+    "dlls/ntdll/ntdll.so": "ee3db713a091bcc6f34e4b9e9b8587c4c12528a78cf4c970a74780a7b526caee",
+    "dlls/ntdll/x86_64-windows/libntdll.a": "28a24f67db12557d75f758a3edbc0e5379ca7020ee301ead133e7fb421051dfb",
+    "dlls/winecrt0/i386-windows/libwinecrt0.a": "db074b01d2d2c2f121428ae8504ee1c9adb1d682d71f54c967087a759f12c33a",
+    "dlls/winecrt0/x86_64-windows/libwinecrt0.a": "0d17ddfad158a932e4fe292377410f3a6e08ae553c83c143c5c9ce664555a7d4",
+    "tools/winebuild/winebuild": "c6ab0032f4d82edfc64f6724c6fdf3244122b2bf1b9f098e641136e2e38a801d",
+    "winemac.so": "407fdd69559745dc48fd9145c049b9dc291fd1d0037244e8d3e86c285e438316"
+  }
+}

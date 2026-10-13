@@ -5,7 +5,7 @@ import Foundation
 /// Installed only in a fresh, private managed Wine staging tree.
 /// Never modifies a selected, user-provided, or shared runtime.
 enum WineMetalDriver {
-    static let componentID = "winemac-wine11.0-metal.3"
+    static let componentID = "winemac-wine11.0-metal.4"
     static let sourceName = componentID + "-source.tar.gz"
     static let licenseName = "LICENSE-WINE-METAL.txt"
     static let provenanceName = componentID + "-provenance.json"
@@ -24,16 +24,16 @@ enum WineMetalDriver {
     static let images = [
         Image(relativePath: "x86_64-unix/winemac.so", resourceSuffix: ".so.deflate",
               originalDigest: "7687c4095ea6dba1761052ac19d46db3409a36f2bc827b79c6e32bf779df59f4",
-              digest: "c47f0fa67e769f2bd6599f3be00ad6d7a90b44192f19789c4284246e1859d1d0",
-              compressedDigest: "47275d569f1bb6bdf120838e57334485937458bbace71a99128e13382c03ab24"),
+              digest: "407fdd69559745dc48fd9145c049b9dc291fd1d0037244e8d3e86c285e438316",
+              compressedDigest: "a820ba257f31ee704f460f13fb51ea615ca2fea13f747be7658ce3e6ceddf66b"),
         Image(relativePath: "x86_64-windows/winemac.drv", resourceSuffix: "-x86_64.drv.deflate",
               originalDigest: "9c52f24507b692ef0fcc0dc5439b8bee63f869f04ef38494bf52e52ddfbfecf0",
-              digest: "5519fe75aac10b177003752f93289fd69b4dfaeb6fafba639ec76741265a0e3d",
-              compressedDigest: "427e3f3abe154350605092420202002e4afdfd7acde9bef14000387c7a05866d"),
+              digest: "502443bcc71715b173391e52eb0277b53595e6090fbb3792bb06616b909344b3",
+              compressedDigest: "2bc219231b7a5d862e756378a5ce95db17b6ebc031a3d8acdf1bb97cf53e59d2"),
         Image(relativePath: "i386-windows/winemac.drv", resourceSuffix: "-i386.drv.deflate",
               originalDigest: "200a8cd50084d1bd70511681082fbe152a585a8638e84a5aafe8148a8248cda5",
-              digest: "832c4e681b845df2cd25e3215143262677c1bfdb51defbcc2578efbc5fe9fd42",
-              compressedDigest: "b4254cad181023ea4a6b418cbb2485ae43026d2bf53ab96fd6fc1592421f9faa"),
+              digest: "9682b258d67d16c63ca7c1fa666280a494fd450fb5ae9730906effb701fa5ca7",
+              compressedDigest: "a06d077e695969de74c855d0e36b5ae84756d825c9b1bf6074eb564f49b6f9f2"),
         Image(relativePath: "x86_64-unix/ntdll.so", resourceSuffix: "-ntdll.so.deflate",
               originalDigest: "dfb9d4d4d6e7fd3dc537c1bacd69cb3a6bb46ae98311bb5358df3c4eab470c3f",
               digest: "ee3db713a091bcc6f34e4b9e9b8587c4c12528a78cf4c970a74780a7b526caee",
@@ -90,9 +90,9 @@ enum WineMetalDriver {
             (componentID + $0.resourceSuffix, $0.compressedDigest, nativeMaximum, $0)
         }
         pins += [
-            (sourceName, "20eac69e22c27acc7b35f9d5b97dc60698454ab1d1c0da0fe88c3c492998fa86", sourceMaximum, nil),
-            (licenseName, "7c4d8a785a4b2851fa107ac793887b48d13c66f116031cb235d49b6276b37c16", textMaximum, nil),
-            (provenanceName, "a3f0ec9eb736103c36bf39064ddc13046f5f53ddf02e5c5ef08fd7a03e430013", textMaximum, nil)
+            (sourceName, "065432da2c0fc4bec24196d40ae7ad0b12ed7d6603e451c459aa3b9787c02fad", sourceMaximum, nil),
+            (licenseName, "88c17983299ff2954674c19e1983eb455338dc545e772c42607816f756392103", textMaximum, nil),
+            (provenanceName, "1e34883223a811b2db2605fe0aa1882f4b74f94c8a94c42c121a3b5419248d22", textMaximum, nil)
         ]
         return try pins.map { name, digest, maximum, image in
             guard let url = Bundle.module.url(forResource: name, withExtension: nil) else {

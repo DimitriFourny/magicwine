@@ -1,0 +1,306 @@
+# MagicWine alterations to DXMT v0.80 (MIT): capability-gated remote HWND Metal presentation.
+# Apply to pinned upstream 589adb780354b461645b29999cefaf533594ee99.
+# Build-only options retain verified public DXGI and generated shader inputs.
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -131,18 +131,24 @@
+       monitor_(wsi::getWindowMonitor(hWnd)),
+       hud(WMT::DeveloperHUDProperties::instance()) {
+ 
+-    native_view_ = WMT::CreateMetalViewFromHWND((intptr_t)hWnd, pDevice->GetMTLDevice(), layer_weak_);
++    DWORD window_process_id = 0, root_process_id = 0;
++    GetWindowThreadProcessId(hWnd, &window_process_id);
++    GetWindowThreadProcessId(GetAncestor(hWnd, GA_ROOT), &root_process_id);
++    const DWORD current_process_id = GetCurrentProcessId();
++    const bool require_remote = window_process_id != current_process_id ||
++                                root_process_id != current_process_id;
++    native_view_ = WMT::CreateMetalViewFromHWND(
++        (intptr_t)hWnd, pDevice->GetMTLDevice(), layer_, require_remote);
+ 
+     if (!native_view_) {
+-      ERR("Failed to create metal view, it seems like your Wine has no exported symbols needed by DXMT.");
+-      abort();
++      throw MTLD3DError("CreateSwapChain: native Metal view acquisition failed or remote presentation is unsupported");
+     }
+ 
+     if constexpr (EnableMetalFX) {
+       scale_factor = std::max(Config::getInstance().getOption<float>("d3d11.metalSpatialUpscaleFactor", 2), 1.0f);
+     }
+ 
+-    presenter = Rc(new Presenter(pDevice->GetMTLDevice(), layer_weak_,
++    presenter = Rc(new Presenter(pDevice->GetMTLDevice(), layer_,
+                                  pDevice->GetDXMTDevice().queue().cmd_library,
+                                  scale_factor, desc_.SampleDesc.Count));
+ 
+@@ -205,6 +211,7 @@
+   };
+ 
+   ~MTLD3D11SwapChain() {
++    // Drain queued Presenter uses before releasing the view or owned layer.
+     device_context_->WaitUntilGPUIdle();
+     WMT::ReleaseMetalView(native_view_);
+     native_view_ = {};
+@@ -1049,14 +1056,15 @@
+ private:
+   bool LayerSupportEDR() {
+     WMTEDRValue edr_value;
+-    MetalLayer_getEDRValue(layer_weak_, &edr_value);
++    MetalLayer_getEDRValue(layer_, &edr_value);
+     return edr_value.maximum_potential_edr_color_component_value > 1.0f;
+   };
+ 
+   Com<IDXGIFactory1> factory_;
+   Com<IMTLDXGIDevice> dxgi_device_;
+   WMT::Object native_view_;
+-  WMT::MetalLayer layer_weak_;
++  // Declared before presenter: destruction releases its borrowed layer uses first.
++  WMT::Reference<WMT::MetalLayer> layer_;
+   ULONG presentation_count_;
+   DXGI_SWAP_CHAIN_DESC1 desc_;
+   DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc_;
+@@ -1096,13 +1104,6 @@
+     return DXGI_ERROR_INVALID_CALL;
+   InitReturnPtr(ppSwapChain);
+ 
+-  DWORD window_process_id;
+-  GetWindowThreadProcessId(hWnd, &window_process_id);
+-  if (GetProcessId(GetCurrentProcess()) != window_process_id) {
+-    ERR("CreateSwapChain: cross-process swapchain not supported yet");
+-    return E_FAIL;
+-  }
+-
+   Com<IMTLDXGIDevice> layer_factory;
+   if (FAILED(pDevice->QueryInterface(IID_PPV_ARGS(&layer_factory)))) {
+     ERR("CreateSwapChain: failed to get IMTLDXGIDevice");
+@@ -1113,6 +1114,7 @@
+       pDesc->BufferCount != 1) {
+     WARN("CreateSwapChain: unsupported swap effect ", pDesc->SwapEffect, " with backbuffer size ", pDesc->BufferCount);
+   }
++  try {
+   if (env::getEnvVar("DXMT_METALFX_SPATIAL_SWAPCHAIN") == "1") {
+     if (pDevice->GetMTLDevice().supportsFXSpatialScaler()) {
+       *ppSwapChain = new MTLD3D11SwapChain<true>(
+@@ -1127,6 +1129,10 @@
+       pFactory, pDevice, layer_factory.ptr(), hWnd, pDesc, pFullscreenDesc
+   );
+   return S_OK;
++  } catch (const MTLD3DError &err) {
++    ERR(err.message());
++    return E_FAIL;
++  }
+ };
+ 
+ } // namespace dxmt
+\ No newline at end of file
+--- a/src/winemetal/Metal.hpp
++++ b/src/winemetal/Metal.hpp
+@@ -1013,8 +1013,11 @@
+ }
+ 
+ inline Object
+-CreateMetalViewFromHWND(intptr_t hwnd, Device device, MetalLayer &layer) {
+-  return {::CreateMetalViewFromHWND(hwnd, device.handle, &layer.handle)};
++CreateMetalViewFromHWND(intptr_t hwnd, Device device, Reference<MetalLayer> &layer, bool require_remote) {
++  obj_handle_t retained_layer = NULL_OBJECT_HANDLE;
++  auto view = ::CreateMetalViewFromHWND(hwnd, device.handle, &retained_layer, require_remote);
++  layer = Reference<MetalLayer>(retained_layer);
++  return {view};
+ }
+ 
+ inline void
+--- a/src/winemetal/winemetal.h
++++ b/src/winemetal/winemetal.h
+@@ -1655,7 +1655,8 @@
+ 
+ WINEMETAL_API void MetalLayer_getProps(obj_handle_t layer, struct WMTLayerProps *props);
+ 
+-WINEMETAL_API obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer);
++/* On success, *layer owns a +1 reference; release it after queued presentation drains. */
++WINEMETAL_API obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer, bool require_remote);
+ 
+ WINEMETAL_API void ReleaseMetalView(obj_handle_t view);
+ 
+--- a/src/winemetal/winemetal_thunks.h
++++ b/src/winemetal/winemetal_thunks.h
+@@ -227,6 +227,8 @@
+   obj_handle_t device;
+   obj_handle_t ret_view;
+   obj_handle_t ret_layer;
++  /* Matched MagicWine PE/native ABI: never mix with the stock unix library. */
++  uint64_t require_remote;
+ };
+ 
+ struct unixcall_enumerate {
+--- a/src/winemetal/winemetal_thunks.c
++++ b/src/winemetal/winemetal_thunks.c
+@@ -712,12 +712,13 @@
+ }
+ 
+ WINEMETAL_API obj_handle_t
+-CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer) {
++CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer, bool require_remote) {
+   struct unixcall_create_metal_view_from_hwnd params;
+   params.hwnd = (uint64_t)(uintptr_t)hwnd;
+   params.device = device;
+   params.ret_layer = NULL_OBJECT_HANDLE;
+   params.ret_view = NULL_OBJECT_HANDLE;
++  params.require_remote = require_remote;
+   UNIX_CALL(72, &params);
+   *layer = params.ret_layer;
+   return params.ret_view;
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1575,11 +1575,18 @@
+ static NTSTATUS
+ _CreateMetalViewFromHWND(void *obj) {
+   struct unixcall_create_metal_view_from_hwnd *params = obj;
++  params->ret_view = params->ret_layer = NULL_OBJECT_HANDLE;
++  const bool supports_remote = dlsym(RTLD_DEFAULT, "magicwine_metal_remote_v1") != NULL;
++  macdrv_metal_layer (*copy_layer)(macdrv_metal_view) =
++      dlsym(RTLD_DEFAULT, "magicwine_metal_remote_copy_layer");
++  if ((params->require_remote && !supports_remote) || (supports_remote && !copy_layer))
++    return STATUS_SUCCESS;
+ 
+   struct macdrv_win_data *(*pfn_get_win_data)(HWND hwnd) = NULL;
+   void (*pfn_release_win_data)(struct macdrv_win_data *data) = NULL;
+   macdrv_metal_view (*pfn_macdrv_view_create_metal_view)(macdrv_view v, macdrv_metal_device d) = NULL;
+   macdrv_metal_layer (*pfn_macdrv_view_get_metal_layer)(macdrv_metal_view v) = NULL;
++  void (*pfn_macdrv_view_release_metal_view)(macdrv_metal_view v) = NULL;
+ 
+   struct macdrv_functions_t *macdrv_functions;
+   if ((macdrv_functions = dlsym(RTLD_DEFAULT, "macdrv_functions"))) {
+@@ -1587,23 +1594,40 @@
+     pfn_release_win_data = macdrv_functions->release_win_data;
+     pfn_macdrv_view_create_metal_view = macdrv_functions->macdrv_view_create_metal_view;
+     pfn_macdrv_view_get_metal_layer = macdrv_functions->macdrv_view_get_metal_layer;
++    pfn_macdrv_view_release_metal_view = macdrv_functions->macdrv_view_release_metal_view;
+   } else {
+     pfn_get_win_data = dlsym(RTLD_DEFAULT, "get_win_data");
+     pfn_release_win_data = dlsym(RTLD_DEFAULT, "release_win_data");
+     pfn_macdrv_view_create_metal_view = dlsym(RTLD_DEFAULT, "macdrv_view_create_metal_view");
+     pfn_macdrv_view_get_metal_layer = dlsym(RTLD_DEFAULT, "macdrv_view_get_metal_layer");
++    pfn_macdrv_view_release_metal_view = dlsym(RTLD_DEFAULT, "macdrv_view_release_metal_view");
+   }
+ 
+   if (pfn_get_win_data && pfn_release_win_data && pfn_macdrv_view_create_metal_view &&
+-      pfn_macdrv_view_get_metal_layer) {
++      pfn_macdrv_view_get_metal_layer && pfn_macdrv_view_release_metal_view) {
+     struct macdrv_win_data *win_data = pfn_get_win_data((HWND)params->hwnd);
+-    macdrv_metal_view view =
+-        pfn_macdrv_view_create_metal_view(win_data->client_cocoa_view, (macdrv_metal_device)params->device);
++    if (!win_data)
++      return STATUS_SUCCESS;
++    macdrv_metal_view view = win_data->client_cocoa_view ?
++        pfn_macdrv_view_create_metal_view(win_data->client_cocoa_view, (macdrv_metal_device)params->device) : NULL;
++    if (!view) {
++      pfn_release_win_data(win_data);
++      return STATUS_SUCCESS;
++    }
++    /* Keep win_data's acquisition pin until copy installs explicit view ownership.
++     * A remote-capable driver must retain under its service pin. The PE's
++     * ownership snapshot can race reparenting, so use this for local views too;
++     * never fall back to borrowed get-layer after a failed atomic copy. */
++    macdrv_metal_layer layer = supports_remote ? copy_layer(view) :
++        (macdrv_metal_layer)[(id)pfn_macdrv_view_get_metal_layer(view) retain];
++    if (!layer) {
++      pfn_macdrv_view_release_metal_view(view);
++      pfn_release_win_data(win_data);
++      return STATUS_SUCCESS;
++    }
++    pfn_release_win_data(win_data);
+     params->ret_view = (obj_handle_t)view;
+-    if (view) {
+-      params->ret_layer = (obj_handle_t)pfn_macdrv_view_get_metal_layer(view);
+-    }
+-    pfn_release_win_data(win_data);
++    params->ret_layer = (obj_handle_t)layer;
+   }
+ 
+   return STATUS_SUCCESS;
+--- a/meson.options
++++ b/meson.options
+@@ -7,4 +7,6 @@
+ option('wine_builtin_dll', type : 'boolean', value : true)
+ option('enable_tests', type : 'boolean', value : false)
+ option('enable_nvapi', type : 'boolean', value : false)
+-option('enable_nvngx', type : 'boolean', value : false)
+\ No newline at end of file
++option('enable_nvngx', type : 'boolean', value : false)
++option('stock_dxgi_import_library', type : 'string', value : '')
++option('retained_shader_inputs', type : 'boolean', value : false)
+\ No newline at end of file
+--- a/meson.build
++++ b/meson.build
+@@ -139,8 +139,8 @@
+ 
+ add_project_arguments('-DDXMT_PAGE_SIZE=4096', language: 'cpp')
+ 
+-dxmt_version = vcs_tag(
+-  command: ['git', 'describe', '--always'],
++dxmt_version = configure_file(
++  configuration: {'VCS_TAG': 'v0.80-remote.1'},
+   input:  'version.h.in',
+   output: 'version.h',
+ )
+--- a/src/dxgi/meson.build
++++ b/src/dxgi/meson.build
+@@ -11,6 +11,13 @@
+ dxgi_ld_args      = ['-L' + windows_native_install_dir] # a nice trick to force relink
+ dxgi_link_depends = []
+ 
++stock_dxgi_import_library = get_option('stock_dxgi_import_library')
++if stock_dxgi_import_library != ''
++dxgi_dep = declare_dependency(
++  link_args           : [ stock_dxgi_import_library ],
++  include_directories : [ dxmt_include_path, include_directories('.') ],
++)
++else
+ dxgi_dll = shared_library('dxgi', dxgi_src, dxgi_res,
+   name_prefix         : '',
+   dependencies        : [ dxmt_dep, util_dep, winemetal_dep ],
+@@ -36,3 +43,4 @@
+   build_by_default : true
+ )
+ endif
++endif
+--- a/src/dxmt/meson.build
++++ b/src/dxmt/meson.build
+@@ -26,15 +26,19 @@
+   'dxmt_command.metal'
+ ]
+ 
++if get_option('retained_shader_inputs')
++dxmt_shaders_header = files('dxmt_command.h')
++else
+ dxmt_shaders_ir = metalir_generator.process(dxmt_shaders)
+ 
+ dxmt_shaders_lib = metallib_generator.process(dxmt_shaders_ir)
+ 
+ dxmt_shaders_header = hexdump_generator.process(dxmt_shaders_lib)
++endif
+ 
+ dxmt_lib = static_library('dxmt', dxmt_src, dxmt_shaders_header, dxmt_version,
+   dependencies        : [ util_dep, airconv_forward_dep, winemetal_dep ],
+-  include_directories : [ dxmt_include_path ],
++  include_directories : [ dxmt_include_path, include_directories('../..') ],
+ )
+ 
+ dxmt_dep = declare_dependency(
+--- a/src/airconv/meson.build
++++ b/src/airconv/meson.build
+@@ -61,11 +61,15 @@
+   'shaders/air_tessellation.metal',
+ ]
+ 
++if get_option('retained_shader_inputs')
++airconv_shaders_header = files('air_msad.h', 'air_samplepos.h', 'air_tessellation.h')
++else
+ airconv_shaders_ir = metalir_generator.process(
+   airconv_shaders,
+   extra_args: ['-std=metal3.1', '--target=air64-apple-macos14.0'],
+ )
+ airconv_shaders_header = hexdump_generator.process(airconv_shaders_ir)
++endif
+ 
+ airconv_src += airconv_shaders_header
+ 

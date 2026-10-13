@@ -1,66 +1,13 @@
 {
   "commands": [
     [
-      "./bison-3.8.2/configure",
-      "--disable-nls",
-      "--prefix=./tools"
-    ],
-    [
-      "make",
-      "-j4"
-    ],
-    [
-      "make",
-      "install"
-    ],
-    [
       "patch",
       "--batch",
       "--forward",
       "--fuzz=0",
       "-p1",
       "-i",
-      "${ROOT}/patches/wine-metal-driver.patch"
-    ],
-    [
-      "patch",
-      "--batch",
-      "--forward",
-      "--fuzz=0",
-      "-p1",
-      "-i",
-      "${ROOT}/patches/wine-mouse-pointer.patch"
-    ],
-    [
-      "patch",
-      "--batch",
-      "--forward",
-      "--fuzz=0",
-      "-p1",
-      "-i",
-      "${ROOT}/patches/wine-wpad-macos.patch"
-    ],
-    [
-      "./wine-wine-11.0/configure",
-      "--build=x86_64-apple-darwin",
-      "--host=x86_64-apple-darwin",
-      "--enable-archs=i386,x86_64",
-      "--disable-tests",
-      "--without-x",
-      "--with-freetype",
-      "--without-fontconfig",
-      "--with-vulkan",
-      "PKG_CONFIG=false",
-      "FREETYPE_CFLAGS=-I./freetype-2.13.3/include",
-      "FREETYPE_LIBS=-L./font-link -lfreetype",
-      "ac_cv_lib_soname_freetype=@loader_path/../../libfreetype.6.dylib",
-      "ac_cv_lib_soname_vulkan=",
-      "ac_cv_lib_soname_MoltenVK=@loader_path/../../libMoltenVK.dylib",
-      "CC=clang -arch x86_64",
-      "CFLAGS=-O2 -g0 -arch x86_64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -mmacosx-version-min=10.15 -ffile-prefix-map=.=.",
-      "x86_64_CFLAGS=-O2 -g0 -ffile-prefix-map=.=.",
-      "i386_CFLAGS=-O2 -g0 -ffile-prefix-map=.=.",
-      "LDFLAGS=-arch x86_64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -mmacosx-version-min=10.15"
+      "${ROOT}/patches/wine-remote-metal.patch"
     ],
     [
       "make",
@@ -82,6 +29,7 @@
       "dlls/winemac.drv/keyboard.o",
       "dlls/winemac.drv/macdrv_main.o",
       "dlls/winemac.drv/metal.o",
+      "dlls/winemac.drv/metal_remote.o",
       "dlls/winemac.drv/mouse.o",
       "dlls/winemac.drv/opengl.o",
       "dlls/winemac.drv/surface.o",
@@ -121,6 +69,7 @@
       "dlls/winemac.drv/keyboard.o",
       "dlls/winemac.drv/macdrv_main.o",
       "dlls/winemac.drv/metal.o",
+      "dlls/winemac.drv/metal_remote.o",
       "dlls/winemac.drv/mouse.o",
       "dlls/winemac.drv/opengl.o",
       "dlls/winemac.drv/surface.o",
@@ -163,8 +112,8 @@
     ]
   ],
   "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
-  "component": "winemac-wine11.0-metal.3",
-  "compressed_driver_sha256": "47275d569f1bb6bdf120838e57334485937458bbace71a99128e13382c03ab24",
+  "component": "winemac-wine11.0-metal.4",
+  "compressed_driver_sha256": "a820ba257f31ee704f460f13fb51ea615ca2fea13f747be7658ce3e6ceddf66b",
   "compressed_native_ntdll_sha256": "92c99a44c743ef31db90ca8886640df4818d9a60dce5e64e6bf7385bf47ec2fd",
   "compressed_native_win32u_sha256": "e078529ec968140f738d689447e8a05d77e80a5bf7317720e3e0b8d269804533",
   "compressed_native_winhttp_sha256": "7d9ae18a200d62d6ad9ceef26e5804ff73b4d7393dcfa0be711d15e023041892",
@@ -173,8 +122,8 @@
     "x86_64": "01413b61c1dbcb0c880ae4e1cae73cc96cc996e359af262b12670218c1c6404a"
   },
   "compressed_pe_sha256": {
-    "i386": "b4254cad181023ea4a6b418cbb2485ae43026d2bf53ab96fd6fc1592421f9faa",
-    "x86_64": "427e3f3abe154350605092420202002e4afdfd7acde9bef14000387c7a05866d"
+    "i386": "a06d077e695969de74c855d0e36b5ae84756d825c9b1bf6074eb564f49b6f9f2",
+    "x86_64": "2bc219231b7a5d862e756378a5ce95db17b6ebc031a3d8acdf1bb97cf53e59d2"
   },
   "compressed_user32_sha256": {
     "i386": "ecfe9a9f1e572b34d7087e39bc4fe48251f5461991f1443db2e93ecff24f21e7",
@@ -188,12 +137,12 @@
     "x86_64": "060824be0a7eddb5e727904cb7a4cdf8e5b4b76c0c23132697318e703f20c6d4"
   },
   "deployment_target": "10.15",
-  "driver_sha256": "c47f0fa67e769f2bd6599f3be00ad6d7a90b44192f19789c4284246e1859d1d0",
+  "driver_sha256": "407fdd69559745dc48fd9145c049b9dc291fd1d0037244e8d3e86c285e438316",
   "dxmt_contract": {
     "consumed_table_prefix_slots": 10,
     "url": "https://github.com/3Shain/dxmt/blob/v0.80/src/winemetal/unix/winemetal_unix.c"
   },
-  "exports": "00000000000556b0 S ___wine_unix_call_funcs\n00000000000556d0 S ___wine_unix_call_wow64_funcs\n00000000000556f0 S _macdrv_functions\n0000000000045200 S _magicwine_metal_bridge_v1\n",
+  "exports": "00000000000587a0 S ___wine_unix_call_funcs\n00000000000587d0 S ___wine_unix_call_wow64_funcs\n00000000000587f8 S _macdrv_functions\n0000000000048b80 S _magicwine_metal_bridge_v1\n0000000000032020 T _magicwine_metal_remote_copy_layer\n0000000000048b84 S _magicwine_metal_remote_v1\n",
   "freetype": {
     "link_input_stock_member": "Wine Stable.app/Contents/Resources/wine/lib/libfreetype.6.dylib",
     "runtime_soname": "@loader_path/../../libfreetype.6.dylib",
@@ -202,14 +151,15 @@
     "version": "2.13.3"
   },
   "inputs_sha256": {
-    "LICENSE-WINE-METAL.txt": "7c4d8a785a4b2851fa107ac793887b48d13c66f116031cb235d49b6276b37c16",
+    "LICENSE-WINE-METAL.txt": "88c17983299ff2954674c19e1983eb455338dc545e772c42607816f756392103",
     "Tests/WineProxyPolicyTests.c": "9738eeb8ff8cf22184dbe2b4d7a1264b68ab6d9bf17f49f5c9f1dc3dcaa0b23a",
     "Tests/WineProxyTests.c": "51ad4ed9688168c23494752562129838e9cb49de5a7eb8ca662b06695932e866",
+    "Tests/WineRemotePresentationTests.cpp": "a4e45400f7f98f3360fb0d2fb2e0c679b36b55216dd4fe1629b303a5eee465eb",
     "patched-driver/.gitattributes": "f82b99b04a647026fbb2fdb8501237ec9c1e3abb5647d9f690fbbe25f8139e77",
-    "patched-driver/Makefile.in": "3458a6e8e4239d52a8987cbab176781611cfc50144214d557f7eccdea2b6ec7f",
+    "patched-driver/Makefile.in": "b1cfa7f9fe581e167cffaad398cdc1be438b6d7c0374c710584004aeb4520d18",
     "patched-driver/clipboard.c": "00ccc294b01f809f983fd258ec34e51fd92d857f1e236b0d22a1e4e4e5120018",
     "patched-driver/cocoa_app.h": "2764db17ab21573bdb401f4cc1ea1cb7374b3db30ae0ed581b8d955a4f277859",
-    "patched-driver/cocoa_app.m": "42f9874d18df5f3d212e4103ec4b2fabea3aca3b1c9c9fadfd6152c2ebf8c4e6",
+    "patched-driver/cocoa_app.m": "b4fa5ba9fa6b9b612df5c53a7e00debff92fb5fd8231fcb1c0efe72e6efc125a",
     "patched-driver/cocoa_clipboard.m": "6ac9cf79857ef3f8ce5fb329033092254ed5a1097a34772c09b5c9754424ae49",
     "patched-driver/cocoa_cursorclipping.h": "55305632801cded83ec9c464e340a931fd109088e2eed064f32297242192d0e2",
     "patched-driver/cocoa_cursorclipping.m": "082d079412a955cf96c1e948a5a8c1921daba7cab21f92ecf2259a2688c4347d",
@@ -221,26 +171,28 @@
     "patched-driver/cocoa_opengl.m": "8e01a5804fa5e6655b5e6a3b36e6e29235d57c88ce5cb2c81e18e6a66188c9a1",
     "patched-driver/cocoa_status_item.m": "ae3d0b54ba46785539d1ec7c61870fc01056475f9a0c39d44f5f69c01dab5bc0",
     "patched-driver/cocoa_window.h": "8c68789694202a79eed8ce6b16993dedcdfb82eb0c3b36a9d68b3cbd2ce720e1",
-    "patched-driver/cocoa_window.m": "45702b761e342eb4efbfe4b50fcfc862fb5c15a2678d37084f597aac17a6da07",
+    "patched-driver/cocoa_window.m": "4846d44903bce6f41476f53179cbe68bf5ef1296adc070fa832bcb0755601eed",
     "patched-driver/display.c": "7883b39066ab9706aabd84273a8cd1e64db4d915cfa5799fab1e78c95ce94221",
     "patched-driver/dllmain.c": "95908db7fbcb8d95b20ce4842c75666d8e0234a19d2b4a5fac1f3cb8b16be247",
     "patched-driver/event.c": "5dbc7976247f0be6c3b8a21bf8320364f12f72d0deca5c0013f7a978e207abf3",
     "patched-driver/gdi.c": "afad965a906f2c73e72f2a8fcaceffa0cc607cfed0db3d21cc2ea6972eaba2d2",
     "patched-driver/image.c": "ffeb126cf88eed076b961fcb5f387a276722d6a2d98bf919dae9cfd03015c8ec",
     "patched-driver/keyboard.c": "ec41b98b3393335d9e847afdf5487d4153bb65745bac6eeed2c3446506eb95ac",
-    "patched-driver/macdrv.h": "6092152d267a36a547e8bfdcaf6ba4b718773f67af7df6fa823e2d1a63dbc4fa",
-    "patched-driver/macdrv_cocoa.h": "2afbf2017f3f01b74135c8bb60dc1b445cc1ed4d1206b0de7ff0c7a318de6446",
-    "patched-driver/macdrv_main.c": "2c42d7b11e817a9da785365de41030e912782eefb61c4901704a871562597224",
+    "patched-driver/macdrv.h": "83e4dcca2f6e89d2a23c5d02285895283943f734f8027d8c88b3c7aebfd9180a",
+    "patched-driver/macdrv_cocoa.h": "f93f3cc8f276f0953651af8cf153b3dad83984737fd887658900296a4dd830ec",
+    "patched-driver/macdrv_main.c": "4baa314703f1dbc00e287636e5615df2861e0332343ea00197b1b45392af0241",
     "patched-driver/macdrv_res.h": "75809aefe47769005c61d274a2192a2553f3fc0442d9f1a5ce1e298908bef909",
-    "patched-driver/metal.c": "d1fa8359bfa3b0ca85b5b26691559be622e63bdb1f482de462e9bbf61485e336",
-    "patched-driver/metal_pe.c": "251776bfd0f0a4e84e48574a5c696dd9d4da3487302511ed5e8a622959772487",
+    "patched-driver/metal.c": "7dbf51627815ed8f440fe1f1e736d2274dc1d527c4cf83ff135678c6e19fd396",
+    "patched-driver/metal_pe.c": "aadb74439a506d2c52732134292943e0085ba08d7ac05b050f90f322a46286c2",
+    "patched-driver/metal_remote.c": "ff70d16f7f32578e60a6938136114645d222f640430dd4aead5977ad6df06604",
+    "patched-driver/metal_remote_pe.c": "c90c572c77e3842fb97c253f5e12d06c67a357588e8a9eac2daf63e74e5e8565",
     "patched-driver/mouse.c": "29e6e3e3c3886178d1f1ac4974a2a793f121871932d81b2c21734a50e2b409a4",
     "patched-driver/opengl.c": "7d4cf6d40466ba0a6a2c827cb088acab7624c855abde1e5861ccaf0b2e1ba886",
     "patched-driver/surface.c": "f99c41502bb8d29c164283f0586bd4ec7e933148448904dadbe82e972fb7fb7a",
     "patched-driver/systray.c": "a6e7144ef3d7ba40a235b72833a58c627ee9ed95c0cee711211c91b23ae16bd4",
-    "patched-driver/unixlib.h": "85c10e3753172fd37a8f79290b237b78605e7999e3756d5797db0d24cccf3d9c",
+    "patched-driver/unixlib.h": "f83c34392aca2b1ea28f3483a43ab392a5ed88749915e7e8ae821c9a9220f90c",
     "patched-driver/vulkan.c": "80e8ef619ef5d3335f120c635560750e09284ff4fc3950968be811adaf35705c",
-    "patched-driver/window.c": "cb026148b3800b272cd6c75ac561fd4bba2df02625287c5e651ca620e83e90a3",
+    "patched-driver/window.c": "5b5f7ffc460e272409ecc867a9b03cd588c23aeda70c9a2511b1441d438469cb",
     "patched-driver/winemac.rc": "aa2af15506e2b452381ee64f897d25143f665b49f559633f0dd686c04291751e",
     "patched-ntdll/Makefile.in": "080a939dc796158638da4987ec0c8277a7f2419bd25ac8e62a89a03b31723de8",
     "patched-ntdll/actctx.c": "8c7a50e07adce071fa632ef751ac7f561eda7c438e30791750191c59d9322b1b",
@@ -593,8 +545,10 @@
     "patched-wow64win/wow64win_private.h": "56b7236fce6eeff8e4a5c766f14f31919301cdcf1742f8ceb2eeeddd35cecee3",
     "patches/wine-metal-driver.patch": "64babc5970dcdc39e0e22120deaffe3de1dffabd6a4c9c5de4cda88b2ae7f59b",
     "patches/wine-mouse-pointer.patch": "309c602a281e65c62f71d9e69b19bb270c0e2fa982af4312b2a4a4ebe65536d9",
+    "patches/wine-remote-metal.patch": "043803695990c3bca11762edbe04f2ff025c426840222a0df21a1e6eee5ee689",
     "patches/wine-wpad-macos.patch": "4742d98e57e4c61c0fe42dc8f5a3db52efa265c0c14f1b917b7f325ccd1e7a20",
-    "scripts/build-metal-wine.sh": "bc0305809d29c1981d767784d82973f7273152b862517925e37e75e38828ba8e",
+    "scripts/build-metal-wine.sh": "0a887b710847ba76c9307d2b9f5676bd5ce19365aaf262e290b79b8b06180c4e",
+    "scripts/test-remote-presentation.sh": "0d84133ef346182bc135f1890ae5318e209964afa5d831ac1b0c9efe02526896",
     "scripts/test-wine-proxy.sh": "527278e63bde277e02149a6ab470d7dd6fccd370aae16d90cfbdf8c43d594e4e",
     "source-inputs/bison-3.8.2.tar.gz": "06c9e13bdf7eb24d4ceb6b59205a4f67c2c7e7213119644430fe82fbd14a0abb",
     "source-inputs/freetype-2.13.3.tar.xz": "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289",
@@ -624,9 +578,10 @@
   },
   "patch_sha256": "64babc5970dcdc39e0e22120deaffe3de1dffabd6a4c9c5de4cda88b2ae7f59b",
   "pe_sha256": {
-    "i386": "832c4e681b845df2cd25e3215143262677c1bfdb51defbcc2578efbc5fe9fd42",
-    "x86_64": "5519fe75aac10b177003752f93289fd69b4dfaeb6fafba639ec76741265a0e3d"
+    "i386": "9682b258d67d16c63ca7c1fa666280a494fd450fb5ae9730906effb701fa5ca7",
+    "x86_64": "502443bcc71715b173391e52eb0277b53595e6090fbb3792bb06616b909344b3"
   },
+  "remote_metal_patch_sha256": "043803695990c3bca11762edbe04f2ff025c426840222a0df21a1e6eee5ee689",
   "sdk": "26.5",
   "source": {
     "sha256": "f09e8153aa46a581d2b56a5b1363b04832070b9409d9244a68cf482b243ff14a",
