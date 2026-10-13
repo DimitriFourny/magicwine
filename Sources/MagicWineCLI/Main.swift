@@ -145,7 +145,7 @@ struct MagicWineCLI {
     magicwine [--root <data-directory>] <command>
       runtimes                                 Find installed Wine
       install-wine --accept-unsigned
-        Install/reuse Wine from Gcenx with the bundled source-built DXMT bridge
+        Install/reuse Wine from Gcenx with the source-built DXMT/D3DMetal driver bridge
         DXMT is included; enabling it requires no additional download
       list                                     List bottles and their UUIDs
       create <name> <wine-executable>           Create and initialize a bottle

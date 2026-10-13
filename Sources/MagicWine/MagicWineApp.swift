@@ -195,7 +195,7 @@ private struct LibraryView: View {
                 }
                 WineCard(title: "Graphics & Compatibility", icon: "gamecontroller") {
                     Text("Standard uses Wine’s built-in graphics. Bundled DXVK translates Direct3D 9/10/11 through Vulkan/MoltenVK; bundled DXMT translates Direct3D 10/11 through Metal. Imported D3DMetal supports 64-bit Direct3D 11/12.")
-                    Text("Wine includes MagicWine’s pinned, source-built Metal driver bridge and bundled DXMT. Standard is the default; optionally enable DXMT in a bottle’s graphics settings on Apple Silicon with macOS 15 or newer, without another download. D3DMetal requires a compatible custom Wine runtime.")
+                    Text("Wine includes MagicWine’s pinned, source-built driver for DXMT and D3DMetal. Standard is the default. Bundled DXMT needs Apple Silicon and macOS 15 or newer; D3DMetal uses your locally installed Apple libraries with the same managed Wine.")
                     Text("D3DMetal is not bundled or downloaded. MagicWine finds local libraries beside the bottle’s Wine or in CrossOver under Applications, and asks for a folder only when none are found. You remain responsible for the terms accompanying your libraries; experimental-backend consent does not accept their license.")
                     Text("Components cannot be upgraded in place. Switch to Standard to restore the original files, then enable a backend again. Direct backend switches preserve the same originals.")
                     Text("Changing graphics stops that bottle’s Windows processes.")
@@ -381,7 +381,7 @@ private struct RuntimeSetupView: View {
             .disabled(model.runtimeActivity != nil)
             Text("Downloads Wine from Gcenx/macOS_Wine_builds with MagicWine’s bundled, pinned source-built Metal driver bridge. DXMT is also bundled—no additional download is needed to enable it.")
                 .font(.callout).foregroundStyle(.secondary)
-            Text("Standard graphics is the default. DXMT is optional on Apple Silicon with macOS 15 or newer. D3DMetal requires a compatible custom Wine runtime.")
+            Text("Standard graphics is the default. DXMT is optional on Apple Silicon with macOS 15 or newer. D3DMetal uses the same Wine and requires locally installed Apple libraries.")
                 .font(.caption).foregroundStyle(.secondary)
             DisclosureGroup("Windows Multimedia") {
                 VStack(alignment: .leading, spacing: 8) {
