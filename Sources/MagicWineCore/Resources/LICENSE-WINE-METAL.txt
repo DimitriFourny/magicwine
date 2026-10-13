@@ -1,5 +1,6 @@
-MagicWine Metal Wine support: public Wine 11 native and PE winemac/ntdll modules
-with the public Unix-call entry point, native pthread TLS, and D3DMetal Nt ABI.
+MagicWine Metal and mouse-pointer Wine support: public Wine 11 native and PE
+winemac/ntdll/win32u/user32/wow64win modules with the public Unix-call entry
+point, native pthread TLS, D3DMetal Nt ABI, and mouse-pointer input support.
 The MagicWine D3DMetal/DXMT client-surface bridge is LGPL-2.1-or-later.
 ABI reference: Whisky-App/wine a92f7f06c4cff7291578e58eb95284b00e322799,
 dlls/winemac.drv/macdrv_main.c and macdrv.h (LGPL-2.1-or-later).
@@ -10,7 +11,10 @@ No proprietary CrossOver or Apple binaries are included.
 Original Wine file copyright notices are retained in the corresponding source.
 Rebuild offline: extract the adjacent -source.tar.gz and run bash scripts/build-metal-wine.sh.
 The source bundle includes the complete original Wine 11 source archive,
-patch, recipe, and public pinned native link inputs.
+patches, recipe, and public pinned native link inputs. FreeType 2.13.3 source
+and its FTL/GPLv2 licenses are included in source-inputs/freetype-2.13.3.tar.xz;
+only its headers and a stock configure-link input are used. The rebuilt
+win32u loads the existing runtime libfreetype.6.dylib without absolute paths.
 
 		  GNU LESSER GENERAL PUBLIC LICENSE
 		       Version 2.1, February 1999

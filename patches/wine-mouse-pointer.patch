@@ -1,0 +1,417 @@
+diff --git a/dlls/user32/misc.c b/dlls/user32/misc.c
+--- a/dlls/user32/misc.c
++++ b/dlls/user32/misc.c
+@@ -526,10 +526,11 @@
+ 
+ BOOL WINAPI GetPointerInfo(UINT32 id, POINTER_INFO *info)
+ {
+-    FIXME("(%d %p): stub\n", id, info);
+-
+-    SetLastError(ERROR_INVALID_PARAMETER);
+-    return FALSE;
++    UINT32 count = 1;
++
++    TRACE( "id %u, info %p\n", id, info );
++
++    return NtUserGetPointerInfoList( id, PT_POINTER, 0, 0, sizeof(*info), &count, &count, info );
+ }
+ 
+ LRESULT WINAPI ImeWndProcA( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
+diff --git a/dlls/win32u/input.c b/dlls/win32u/input.c
+--- a/dlls/win32u/input.c
++++ b/dlls/win32u/input.c
+@@ -405,6 +405,7 @@
+ };
+ 
+ static LONG clipping_cursor; /* clipping thread counter */
++static LONG enable_mouse_in_pointer = -1;
+ 
+ BOOL grab_pointer = TRUE;
+ BOOL grab_fullscreen = FALSE;
+@@ -2614,9 +2615,20 @@
+  */
+ BOOL WINAPI NtUserEnableMouseInPointer( BOOL enable )
+ {
+-    FIXME( "enable %u stub!\n", enable );
+-    RtlSetLastWin32Error( ERROR_CALL_NOT_IMPLEMENTED );
+-    return FALSE;
++    LONG prev;
++
++    TRACE( "enable %u\n", enable );
++
++    /* Based on Wine commit 71b686ce9fdce65416080c834a9103a743dc095c
++     * (Remi Bernon): the first process-wide choice is permanent. */
++    enable = !!enable;
++    prev = InterlockedCompareExchange( &enable_mouse_in_pointer, enable, -1 );
++    if (prev != -1 && prev != enable)
++    {
++        RtlSetLastWin32Error( ERROR_ACCESS_DENIED );
++        return FALSE;
++    }
++    return TRUE;
+ }
+ 
+ /**********************************************************************
+@@ -2634,9 +2646,7 @@
+  */
+ BOOL WINAPI NtUserIsMouseInPointerEnabled(void)
+ {
+-    FIXME( "stub!\n" );
+-    RtlSetLastWin32Error( ERROR_CALL_NOT_IMPLEMENTED );
+-    return FALSE;
++    return ReadNoFence( &enable_mouse_in_pointer ) == 1;
+ }
+ 
+ static BOOL is_captured_by_system(void)
+@@ -2713,10 +2723,45 @@
+ BOOL WINAPI NtUserGetPointerInfoList( UINT32 id, POINTER_INPUT_TYPE type, UINT_PTR unk0, UINT_PTR unk1, SIZE_T size,
+                                       UINT32 *entry_count, UINT32 *pointer_count, void *pointer_info )
+ {
+-    FIXME( "id %#x, type %#x, unk0 %#lx, unk1 %#lx, size %#lx, entry_count %p, pointer_count %p, pointer_info %p stub!\n",
++    const POINTER_INFO *info = &get_user_thread_info()->mouse_pointer_info;
++    SIZE_T target_size;
++
++    TRACE( "id %#x, type %#x, unk0 %#lx, unk1 %#lx, size %#lx, entry_count %p, pointer_count %p, pointer_info %p\n",
+            id, type, (long)unk0, (long)unk1, size, entry_count, pointer_count, pointer_info );
+-    RtlSetLastWin32Error( ERROR_CALL_NOT_IMPLEMENTED );
+-    return FALSE;
++
++    /* Wine 564cae8afa391f8906d70a893aaf5c2bc247a708 (Anna Figueiredo Gomes).
++     * Windows also accepts pen/touch-sized queries for the mouse id; these
++     * describe the same PT_MOUSE frame, not a fabricated pen/touch device.
++     * Keep the size checks in sync with wow64_NtUserGetPointerInfoList. */
++    switch (type)
++    {
++    case PT_POINTER: target_size = sizeof(POINTER_INFO); break;
++    case PT_PEN: target_size = sizeof(POINTER_PEN_INFO); break;
++    case PT_TOUCH:
++    case PT_TOUCHPAD: target_size = sizeof(POINTER_TOUCH_INFO); break;
++    default: target_size = 0; break;
++    }
++    if (!target_size || size != target_size || id != 1 || info->pointerId != id)
++    {
++        RtlSetLastWin32Error( ERROR_INVALID_PARAMETER );
++        return FALSE;
++    }
++    if (!entry_count || !pointer_count || !pointer_info)
++    {
++        RtlSetLastWin32Error( ERROR_NOACCESS );
++        return FALSE;
++    }
++    if (!*entry_count || !*pointer_count)
++    {
++        *entry_count = *pointer_count = 1;
++        RtlSetLastWin32Error( ERROR_INSUFFICIENT_BUFFER );
++        return FALSE;
++    }
++
++    *entry_count = *pointer_count = 1;
++    memset( pointer_info, 0, size );
++    *(POINTER_INFO *)pointer_info = *info;
++    return TRUE;
+ }
+ 
+ static BOOL get_clip_cursor( RECT *rect, UINT dpi, MONITOR_DPI_TYPE type )
+diff --git a/dlls/win32u/message.c b/dlls/win32u/message.c
+--- a/dlls/win32u/message.c
++++ b/dlls/win32u/message.c
+@@ -2552,6 +2552,97 @@
+     return TRUE;
+ }
+ 
++/* Mouse-only backport of Wine 71b686ce9fdce65416080c834a9103a743dc095c
++ * (Remi Bernon) and 2448865d5b84a00fa7a9c99a40afa628d153851a
++ * (Anna Figueiredo Gomes). Keep the frame private to win32u so the shared
++ * ntuser_thread_info ABI and the syscall table remain unchanged. */
++static void send_mouse_pointer_message( const MSG *msg, POINT screen_pos, ULONG_PTR extra_info )
++{
++    static LONG frame_id;
++    POINTER_INFO *info = &get_user_thread_info()->mouse_pointer_info;
++    POINTER_BUTTON_CHANGE_TYPE change = POINTER_CHANGE_NONE;
++    POINTER_FLAGS flags = POINTER_FLAG_INRANGE | POINTER_FLAG_PRIMARY;
++    UINT message, dpi, keys = LOWORD( msg->wParam );
++    WORD message_flags;
++    LARGE_INTEGER counter;
++
++    /* Touch/pen promotion already has its own pointer messages. */
++    if ((extra_info & 0xffffff00) == 0xff515700 || !NtUserIsMouseInPointerEnabled()) return;
++
++    switch (msg->message)
++    {
++    case WM_MOUSEMOVE: message = WM_POINTERUPDATE; flags |= POINTER_FLAG_UPDATE; break;
++    case WM_LBUTTONDOWN:
++        message = WM_POINTERDOWN; flags |= POINTER_FLAG_DOWN; change = POINTER_CHANGE_FIRSTBUTTON_DOWN; break;
++    case WM_LBUTTONUP:
++        message = WM_POINTERUP; flags |= POINTER_FLAG_UP; change = POINTER_CHANGE_FIRSTBUTTON_UP; break;
++    case WM_RBUTTONDOWN:
++        message = WM_POINTERDOWN; flags |= POINTER_FLAG_DOWN; change = POINTER_CHANGE_SECONDBUTTON_DOWN; break;
++    case WM_RBUTTONUP:
++        message = WM_POINTERUP; flags |= POINTER_FLAG_UP; change = POINTER_CHANGE_SECONDBUTTON_UP; break;
++    case WM_MBUTTONDOWN:
++        message = WM_POINTERDOWN; flags |= POINTER_FLAG_DOWN; change = POINTER_CHANGE_THIRDBUTTON_DOWN; break;
++    case WM_MBUTTONUP:
++        message = WM_POINTERUP; flags |= POINTER_FLAG_UP; change = POINTER_CHANGE_THIRDBUTTON_UP; break;
++    case WM_XBUTTONDOWN:
++        message = WM_POINTERDOWN;
++        flags |= POINTER_FLAG_DOWN;
++        if (HIWORD( msg->wParam ) == XBUTTON1) change = POINTER_CHANGE_FOURTHBUTTON_DOWN;
++        else if (HIWORD( msg->wParam ) == XBUTTON2) change = POINTER_CHANGE_FIFTHBUTTON_DOWN;
++        break;
++    case WM_XBUTTONUP:
++        message = WM_POINTERUP;
++        flags |= POINTER_FLAG_UP;
++        if (HIWORD( msg->wParam ) == XBUTTON1) change = POINTER_CHANGE_FOURTHBUTTON_UP;
++        else if (HIWORD( msg->wParam ) == XBUTTON2) change = POINTER_CHANGE_FIFTHBUTTON_UP;
++        break;
++    case WM_MOUSEWHEEL: message = WM_POINTERWHEEL; flags |= POINTER_FLAG_WHEEL; break;
++    case WM_MOUSEHWHEEL: message = WM_POINTERHWHEEL; flags |= POINTER_FLAG_HWHEEL; break;
++    default: return;
++    }
++
++    /* The server snapshots all five buttons after each transition. Do not
++     * query asynchronous state or replace the held buttons with just the
++     * changed button: both lose drag / multi-button state. */
++    if (keys & MK_LBUTTON) flags |= POINTER_FLAG_FIRSTBUTTON;
++    if (keys & MK_RBUTTON) flags |= POINTER_FLAG_SECONDBUTTON;
++    if (keys & MK_MBUTTON) flags |= POINTER_FLAG_THIRDBUTTON;
++    if (keys & MK_XBUTTON1) flags |= POINTER_FLAG_FOURTHBUTTON;
++    if (keys & MK_XBUTTON2) flags |= POINTER_FLAG_FIFTHBUTTON;
++    if (keys & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON | MK_XBUTTON1 | MK_XBUTTON2))
++        flags |= POINTER_FLAG_INCONTACT;
++
++    /* Only the low 16 bits are POINTER_MESSAGE_FLAG_* values. Wheel
++     * messages instead carry a signed delta in the entire high word. */
++    message_flags = LOWORD( flags );
++    info->InputData = 0;
++    if (message == WM_POINTERWHEEL || message == WM_POINTERHWHEEL)
++    {
++        message_flags = HIWORD( msg->wParam );
++        info->InputData = (SHORT)message_flags;
++    }
++
++    info->pointerType = PT_MOUSE;
++    info->pointerId = 1;
++    do info->frameId = InterlockedIncrement( &frame_id ); while (!info->frameId);
++    info->pointerFlags = flags;
++    info->sourceDevice = INVALID_HANDLE_VALUE;
++    info->hwndTarget = msg->hwnd;
++    info->ptPixelLocation = info->ptPixelLocationRaw = screen_pos;
++    dpi = get_system_dpi();
++    info->ptHimetricLocation.x = (LONGLONG)screen_pos.x * 2540 / dpi;
++    info->ptHimetricLocation.y = (LONGLONG)screen_pos.y * 2540 / dpi;
++    info->ptHimetricLocationRaw = info->ptHimetricLocation;
++    info->dwTime = msg->time;
++    info->historyCount = 1;
++    info->dwKeyStates = keys & (MK_SHIFT | MK_CONTROL);
++    NtQueryPerformanceCounter( &counter, NULL );
++    info->PerformanceCount = counter.QuadPart;
++    info->ButtonChangeType = change;
++
++    send_message( msg->hwnd, message, MAKELONG( 1, message_flags ), MAKELONG( screen_pos.x, screen_pos.y ) );
++}
++
+ /***********************************************************************
+  *          process_mouse_message
+  *
+@@ -2562,7 +2653,7 @@
+ {
+     static MSG clk_msg;
+ 
+-    POINT pt;
++    POINT pt, pointer_pos = msg->pt;
+     UINT message;
+     INT hittest;
+     EVENTMSG event;
+@@ -2708,6 +2799,7 @@
+ 
+     if (!remove || info.hwndCapture)
+     {
++        if (remove && hittest == HTCLIENT) send_mouse_pointer_message( msg, pointer_pos, extra_info );
+         msg->message = message;
+         return TRUE;
+     }
+@@ -2762,6 +2854,10 @@
+     /* Windows sends the normal mouse message as the message parameter
+        in the WM_SETCURSOR message even if it's non-client mouse message */
+     send_message( msg->hwnd, WM_SETCURSOR, (WPARAM)msg->hwnd, MAKELONG( hittest, msg->message ));
++
++    /* Synthesize only after filtering, hooks and activation accepted a
++     * removed client event. PM_NOREMOVE must never dispatch a pointer. */
++    if (!eat_msg && hittest == HTCLIENT) send_mouse_pointer_message( msg, pointer_pos, extra_info );
+ 
+     msg->message = message;
+     return !eat_msg;
+diff --git a/dlls/win32u/ntuser_private.h b/dlls/win32u/ntuser_private.h
+--- a/dlls/win32u/ntuser_private.h
++++ b/dlls/win32u/ntuser_private.h
+@@ -128,6 +128,7 @@
+     DWORD                         clipping_reset;         /* time when clipping was last reset */
+     struct session_thread_data   *session_data;           /* shared session thread data */
+     struct mouse_tracking_info   *mouse_tracking_info;    /* NtUserTrackMouseEvent handling */
++    POINTER_INFO                  mouse_pointer_info;     /* Last accepted mouse pointer frame */
+ };
+ 
+ C_ASSERT( sizeof(struct user_thread_info) <= sizeof(((TEB *)0)->Win32ClientInfo) );
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -338,6 +338,55 @@
+     ULONG  lpszClassName;
+     ULONG  hIconSm;
+ } WNDCLASSEXW32;
++
++/* Wine 07719effdbbf5bb88828ca21ff2b0f6b09716d07 (Bernhard Uebelacker):
++ * pointer-sized handles require explicit conversion across the WoW64 ABI. */
++typedef struct
++{
++    DWORD pointerType;
++    UINT32 pointerId;
++    UINT32 frameId;
++    UINT32 pointerFlags;
++    ULONG sourceDevice;
++    ULONG hwndTarget;
++    POINT ptPixelLocation;
++    POINT ptHimetricLocation;
++    POINT ptPixelLocationRaw;
++    POINT ptHimetricLocationRaw;
++    DWORD dwTime;
++    UINT32 historyCount;
++    INT32 InputData;
++    DWORD dwKeyStates;
++    UINT64 PerformanceCount;
++    INT32 ButtonChangeType;
++} POINTER_INFO32;
++
++typedef struct
++{
++    POINTER_INFO32 pointerInfo;
++    PEN_FLAGS penFlags;
++    PEN_MASK penMask;
++    UINT32 pressure;
++    UINT32 rotation;
++    INT32 tiltX;
++    INT32 tiltY;
++} POINTER_PEN_INFO32;
++
++typedef struct
++{
++    POINTER_INFO32 pointerInfo;
++    TOUCH_FLAGS touchFlags;
++    TOUCH_MASK touchMask;
++    RECT rcContact;
++    RECT rcContactRaw;
++    UINT32 orientation;
++    UINT32 pressure;
++} POINTER_TOUCH_INFO32;
++
++C_ASSERT( sizeof(POINTER_INFO32) == 88 );
++C_ASSERT( offsetof(POINTER_INFO32, PerformanceCount) == 72 );
++C_ASSERT( offsetof(POINTER_INFO32, ButtonChangeType) == 80 );
++
+ 
+ struct client_menu_name32
+ {
+@@ -2840,6 +2889,26 @@
+     return HandleToUlong( NtUserGetOpenClipboardWindow() );
+ }
+ 
++static void pointer_info_64to32( POINTER_INFO32 *out, const POINTER_INFO *in )
++{
++    out->pointerType = in->pointerType;
++    out->pointerId = in->pointerId;
++    out->frameId = in->frameId;
++    out->pointerFlags = in->pointerFlags;
++    out->sourceDevice = HandleToUlong( in->sourceDevice );
++    out->hwndTarget = HandleToUlong( in->hwndTarget );
++    out->ptPixelLocation = in->ptPixelLocation;
++    out->ptHimetricLocation = in->ptHimetricLocation;
++    out->ptPixelLocationRaw = in->ptPixelLocationRaw;
++    out->ptHimetricLocationRaw = in->ptHimetricLocationRaw;
++    out->dwTime = in->dwTime;
++    out->historyCount = in->historyCount;
++    out->InputData = in->InputData;
++    out->dwKeyStates = in->dwKeyStates;
++    out->PerformanceCount = in->PerformanceCount;
++    out->ButtonChangeType = in->ButtonChangeType;
++}
++
+ NTSTATUS WINAPI wow64_NtUserGetPointerInfoList( UINT *args )
+ {
+     UINT id = get_ulong( &args );
+@@ -2847,11 +2916,72 @@
+     UINT unk0 = get_ulong( &args );
+     UINT unk1 = get_ulong( &args );
+     UINT size = get_ulong( &args );
+-    void *entry_count = get_ptr( &args );
+-    void *pointer_count = get_ptr( &args );
++    UINT32 *entry_count = get_ptr( &args );
++    UINT32 *pointer_count = get_ptr( &args );
+     void *pointer_info = get_ptr( &args );
+-
+-    return NtUserGetPointerInfoList( id, type, unk0, unk1, size, entry_count, pointer_count, pointer_info );
++    union
++    {
++        POINTER_INFO pointer;
++        POINTER_PEN_INFO pen;
++        POINTER_TOUCH_INFO touch;
++    } info;
++    SIZE_T size32, size64;
++    NTSTATUS ret;
++
++    /* Same type/size checks as NtUserGetPointerInfoList. This mouse-only
++     * implementation returns one frame, so conversion needs no allocation. */
++    switch (type)
++    {
++    case PT_POINTER:
++        size32 = sizeof(POINTER_INFO32);
++        size64 = sizeof(POINTER_INFO);
++        break;
++    case PT_PEN:
++        size32 = sizeof(POINTER_PEN_INFO32);
++        size64 = sizeof(POINTER_PEN_INFO);
++        break;
++    case PT_TOUCH:
++    case PT_TOUCHPAD:
++        size32 = sizeof(POINTER_TOUCH_INFO32);
++        size64 = sizeof(POINTER_TOUCH_INFO);
++        break;
++    default:
++        set_last_error32( ERROR_INVALID_PARAMETER );
++        return FALSE;
++    }
++    if (size != size32)
++    {
++        set_last_error32( ERROR_INVALID_PARAMETER );
++        return FALSE;
++    }
++
++    ret = NtUserGetPointerInfoList( id, type, unk0, unk1, size64, entry_count, pointer_count,
++                                    pointer_info ? &info : NULL );
++    if (!ret) return ret;
++
++    memset( pointer_info, 0, size32 );
++    pointer_info_64to32( pointer_info, &info.pointer );
++    if (type == PT_PEN)
++    {
++        POINTER_PEN_INFO32 *out = pointer_info;
++        out->penFlags = info.pen.penFlags;
++        out->penMask = info.pen.penMask;
++        out->pressure = info.pen.pressure;
++        out->rotation = info.pen.rotation;
++        out->tiltX = info.pen.tiltX;
++        out->tiltY = info.pen.tiltY;
++    }
++    else if (type == PT_TOUCH || type == PT_TOUCHPAD)
++    {
++        POINTER_TOUCH_INFO32 *out = pointer_info;
++        out->touchFlags = info.touch.touchFlags;
++        out->touchMask = info.touch.touchMask;
++        out->rcContact = info.touch.rcContact;
++        out->rcContactRaw = info.touch.rcContactRaw;
++        out->orientation = info.touch.orientation;
++        out->pressure = info.touch.pressure;
++    }
++    return ret;
+ }
+ 
+ NTSTATUS WINAPI wow64_NtUserGetPriorityClipboardFormat( UINT *args )

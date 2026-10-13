@@ -392,7 +392,13 @@ public actor WineRuntime {
         // Managed Metal Wine keeps native pthread GS active. Mono's inline
         // GS-relative dynamic TLS reads bypass the real Windows TEB; its API
         // TLS mode works across Standard, DXVK, DXMT and D3DMetal launches.
-        if prefix != nil, executable.resolvingSymlinksInPath().standardizedFileURL == managedExecutableURL {
+        // Older bottles retain their pinned Metal runtime when a newer managed
+        // build is installed; they still need the same Mono TLS correction.
+        let managedMetalRoot = paths.runtimesDirectory.resolvingSymlinksInPath().standardizedFileURL.path +
+            "/wine-\(RuntimeInstallation.version)-\(RuntimeInstallation.archiveSHA256.prefix(12))-winemac-wine11.0-metal."
+        let selectedPath = executable.resolvingSymlinksInPath().standardizedFileURL.path
+        if prefix != nil, selectedPath.hasPrefix(managedMetalRoot),
+           selectedPath.hasSuffix("/" + RuntimeInstallation.relativeExecutable) {
             let option = "use-fallback-tls"
             let existing = environment["MONO_DEBUG"] ?? ""
             if !existing.split(separator: ",").contains(Substring(option)) {
