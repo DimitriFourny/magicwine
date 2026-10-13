@@ -1,6 +1,19 @@
 import SwiftUI
 import MagicWineCore
 
+struct BluetoothSymbol: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.25))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.75))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.25))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.75))
+        return path
+    }
+}
+
 /// An original vector controller illustration; coordinates describe a 540 × 300 canvas.
 struct GamepadDiagram: View {
     let input: GamepadInput

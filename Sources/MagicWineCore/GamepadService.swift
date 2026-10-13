@@ -53,8 +53,8 @@ public final class GamepadService: ObservableObject {
     private var activity: NSObjectProtocol?
     private var slotDevices: [GamepadDevice?] = Array(repeating: nil, count: 4)
     private var nextMetadataUpdate = 0.0
-    private var bluetoothBatteryLevels: [UUID: Double] = [:]
-    private var nextBluetoothBatteryUpdate = 0.0
+    private var bluetoothReadings: [UUID: GamepadBluetoothBattery.Reading] = [:]
+    private var bluetoothBatterySchedule = GamepadBluetoothBattery.RefreshSchedule()
     private var bluetoothBatteryUpdatePending = false
     private var nextUIPublish = 0.0
     private var inputsChanged = false
@@ -157,8 +157,8 @@ public final class GamepadService: ObservableObject {
             controller.device.playerIndex = GCControllerPlayerIndex(rawValue: slot) ?? .indexUnset
             occupied.insert(slot)
         }
-        bluetoothBatteryLevels.removeAll()
-        nextBluetoothBatteryUpdate = 0
+        bluetoothReadings.removeAll()
+        bluetoothBatterySchedule.reset(at: ProcessInfo.processInfo.systemUptime)
         refreshMetadata()
         inputsChanged = true
         for session in sessions.values {
@@ -176,9 +176,10 @@ public final class GamepadService: ObservableObject {
                                  name: controller.device.vendorName ?? controller.device.productCategory,
                                  playerIndex: controller.slot,
                                  batteryLevel: level.flatMap { $0.isFinite && (0...1).contains($0) ? $0 : nil }
-                                     ?? bluetoothBatteryLevels[controller.id],
+                                     ?? bluetoothReadings[controller.id]?.batteryLevel,
                                  batteryCharging: battery?.batteryState == .charging,
-                                 supportsHaptics: controller.device.haptics != nil)
+                                 supportsHaptics: controller.device.haptics != nil,
+                                 isBluetooth: bluetoothReadings[controller.id] != nil)
         }
         if devices != updated { devices = updated }
         for slot in 0..<4 { slotDevices[slot] = updated.first(where: { $0.playerIndex == slot }) }
@@ -187,28 +188,32 @@ public final class GamepadService: ObservableObject {
 
     private func refreshBluetoothBattery() {
         let now = ProcessInfo.processInfo.systemUptime
-        guard !bluetoothBatteryUpdatePending, now >= nextBluetoothBatteryUpdate,
-              devices.contains(where: { device in
-                  device.batteryLevel == nil || bluetoothBatteryLevels[device.id] != nil
-              }) else { return }
-        nextBluetoothBatteryUpdate = now + 30
+        guard !bluetoothBatteryUpdatePending, now >= bluetoothBatterySchedule.nextUpdate,
+              !controllers.isEmpty else { return }
         bluetoothBatteryUpdatePending = true
         let identities = controllers.map { (id: $0.id, name: $0.device.vendorName) }
         Task { [weak self] in
             let levels = await Task.detached(priority: .utility) { GamepadBluetoothBattery.read() }.value
             guard let self else { return }
-            self.bluetoothBatteryUpdatePending = false
+            let sameConnection = self.controllers.map(\.id) == identities.map(\.id)
             // Discard results collected for a previous connection/assignment.
-            if self.controllers.map(\.id) == identities.map(\.id) {
-                var matched: [UUID: Double] = [:]
+            if sameConnection {
+                var matched: [UUID: GamepadBluetoothBattery.Reading] = [:]
                 for identity in identities {
                     guard let name = identity.name,
                           !identities.contains(where: { $0.id != identity.id && $0.name == name }) else { continue }
                     matched[identity.id] = levels[name]
                 }
-                self.bluetoothBatteryLevels = matched
+                self.bluetoothReadings = matched
             }
             self.refreshMetadata()
+            if sameConnection {
+                self.bluetoothBatterySchedule.complete(
+                    at: ProcessInfo.processInfo.systemUptime,
+                    missingBattery: self.devices.contains(where: { $0.batteryLevel == nil }))
+            }
+            self.bluetoothBatteryUpdatePending = false
+            self.refreshBluetoothBattery()
         }
     }
 

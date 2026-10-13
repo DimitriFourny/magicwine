@@ -77,15 +77,18 @@ public struct GamepadDevice: Identifiable, Equatable, Sendable {
     public var batteryLevel: Double?
     public var batteryCharging: Bool
     public var supportsHaptics: Bool
+    /// True only when matched to a connected device in macOS's Bluetooth report.
+    public var isBluetooth: Bool
 
     public init(id: UUID, name: String, playerIndex: Int?, batteryLevel: Double? = nil,
-                batteryCharging: Bool = false, supportsHaptics: Bool = false) {
+                batteryCharging: Bool = false, supportsHaptics: Bool = false, isBluetooth: Bool = false) {
         self.id = id
         self.name = name
         self.playerIndex = playerIndex
         self.batteryLevel = batteryLevel
         self.batteryCharging = batteryCharging
         self.supportsHaptics = supportsHaptics
+        self.isBluetooth = isBluetooth
     }
 }
 
