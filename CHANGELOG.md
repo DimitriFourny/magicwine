@@ -66,6 +66,7 @@
 - Add the reference-inspired Gamepads page with a live controller illustration, XInput remapping, stick/trigger calibration, input plots, truthful device metadata, haptic identification, and editable/importable/exportable profiles.
 - Forward macOS GameController input to up to four Windows XInput slots through original 32/64-bit bridge DLLs, with background capture, saved-profile updates, dual-handle rumble, cross-client motor ownership, disconnect clearing, and stale-host protection. Preserve original Wine DLLs and reject custom system replacements; leave shared Wine and game-local files unchanged.
 - Pass all 143 Swift regressions and real 32/64-bit XInput probes, including sustained rumble and competing writers. Exercise the actual Swift profile → shared memory → Wine input path, return vibration, CLI heartbeat, and native wide/narrow page rendering. No physical controller was connected; hardware haptics and Witcher 3 gameplay remain unverified.
+- Fix missing Gamepads battery readings for Bluetooth controllers that macOS recognizes but GameController does not expose, verified with an 8BitDo Ultimate 2 Wireless reporting 100%. Add a background Bluetooth-report fallback refreshed every 30 seconds, preserve native readings, and reject ambiguous names, disconnected devices, and invalid percentages. All 10 focused gamepad regressions pass; rebuild and sign the app/CLI.
 
 ## 0.1.0 — 2026-10-11
 

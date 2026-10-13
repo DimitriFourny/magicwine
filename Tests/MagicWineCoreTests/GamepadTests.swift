@@ -3,6 +3,32 @@ import Testing
 @testable import MagicWineCore
 
 struct GamepadTests {
+    @Test func bluetoothBatteryUsesOnlyConnectedUnambiguousGamepads() throws {
+        let report: [String: Any] = ["SPBluetoothDataType": [[
+            "device_connected": [
+                ["8BitDo Ultimate 2 Wireless": ["device_minorType": "Gamepad", "device_batteryLevelMain": "100%"]],
+                ["Empty": ["device_minorType": "Gamepad", "device_batteryLevelMain": "0%"]],
+                ["Partial": ["device_minorType": "Gamepad", "device_batteryLevelMain": "42%"]],
+                ["Duplicate": ["device_minorType": "Gamepad", "device_batteryLevelMain": "80%"]],
+                ["Duplicate": ["device_minorType": "Gamepad"]],
+                ["Mouse": ["device_minorType": "Mouse", "device_batteryLevelMain": "90%"]]
+            ],
+            "device_not_connected": [
+                ["Disconnected": ["device_minorType": "Gamepad", "device_batteryLevelMain": "60%"]]
+            ]
+        ]]]
+        let levels = GamepadBluetoothBattery.levels(from: try JSONSerialization.data(withJSONObject: report))
+        #expect(levels == ["8BitDo Ultimate 2 Wireless": 1, "Empty": 0, "Partial": 0.42])
+    }
+
+    @Test func bluetoothBatteryRejectsInvalidReadings() throws {
+        let readings = ["-1%", "101%", "nan%", "inf%", "unknown", "50"]
+        let connected = readings.map { [$0: ["device_minorType": "Gamepad", "device_batteryLevelMain": $0]] }
+        let report = ["SPBluetoothDataType": [["device_connected": connected]]]
+        #expect(GamepadBluetoothBattery.levels(from: try JSONSerialization.data(withJSONObject: report)).isEmpty)
+        #expect(GamepadBluetoothBattery.levels(from: Data("not JSON".utf8)).isEmpty)
+    }
+
     @Test func radialDeadZoneSuppressesDriftAndPreservesFullTravel() {
         var profile = GamepadProfile()
         profile.leftDeadZone = 0.1
