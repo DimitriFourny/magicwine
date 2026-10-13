@@ -301,12 +301,11 @@ struct BottleDashboardView: View {
 
     private func programRow(_ program: WindowsProgram) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: (program.executablePath as NSString).pathExtension.lowercased() == "lnk" ? "link" : "app")
-                .font(.system(size: 20))
-                .foregroundStyle(WineTheme.muted)
-                .frame(width: 38, height: 38)
-                .background(WineTheme.elevated, in: RoundedRectangle(cornerRadius: 9))
-                .accessibilityHidden(true)
+            WindowsProgramIconView(
+                executablePath: program.executablePath,
+                prefix: bottleURL.appendingPathComponent("prefix", isDirectory: true),
+                revision: model.programIconRevision
+            )
             VStack(alignment: .leading, spacing: 4) {
                 Text(program.name)
                     .font(.system(.callout, weight: .semibold))
