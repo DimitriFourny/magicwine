@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild Wine 11's Metal ABI, mouse-pointer and macOS WPAD native/PE modules.
+# Rebuild Wine 11's Metal presentation, mouse-pointer and macOS WPAD modules.
 # Requires Apple clang 21.0.0 (clang-2100.3.34.2), macOS SDK 26.5, make,
 # flex, Python 3 and both x86_64/i686-w64-mingw32 GCC toolchains.
 # The shipped corresponding-source archive supports the same command offline.
@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 exec python3 - "$ROOT" <<'PY'
 import gzip, hashlib, json, os, pathlib, shutil, subprocess, sys, tarfile, tempfile, zlib
 root = pathlib.Path(sys.argv[1])
-component = 'winemac-wine11.0-metal.3'
+component = 'winemac-wine11.0-metal.4'
 output = root / 'Sources/MagicWineCore/Resources'
 local = root / '.local'
 local.mkdir(exist_ok=True)
@@ -76,6 +76,9 @@ verify(pointer_patch,pointer_patch_hash)
 wpad_patch = root / 'patches/wine-wpad-macos.patch'
 wpad_patch_hash = '4742d98e57e4c61c0fe42dc8f5a3db52efa265c0c14f1b917b7f325ccd1e7a20'
 verify(wpad_patch,wpad_patch_hash)
+remote_patch = root / 'patches/wine-remote-metal.patch'
+remote_patch_hash = '043803695990c3bca11762edbe04f2ff025c426840222a0df21a1e6eee5ee689'
+verify(remote_patch,remote_patch_hash)
 inputs = work / 'source-inputs'
 inputs.mkdir()
 offline = root / 'source-inputs'
@@ -132,6 +135,7 @@ src = work / 'wine-wine-11.0'
 run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(patch)],src)
 run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(pointer_patch)],src)
 run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(wpad_patch)],src)
+run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(remote_patch)],src)
 build = work / 'build'
 build.mkdir()
 # FreeType is dlopened, not linked into win32u. Keep configure's link checks
@@ -181,7 +185,8 @@ pe_winhttp = {arch:build / ('dlls/winhttp/' + arch + '-windows/winhttp.dll') for
 run(['make','-j4',*[str(path.relative_to(build)) for path in
                   [*pe_drivers.values(), *pe_ntdll.values(), *pe_user32.values(), *pe_wow64win.values(), *pe_winhttp.values()]]],build)
 exports = subprocess.check_output(['nm','-gU',str(driver)],text=True)
-required = ['macdrv_functions','magicwine_metal_bridge_v1',
+required = ['macdrv_functions','magicwine_metal_bridge_v1','magicwine_metal_remote_v1',
+            'magicwine_metal_remote_copy_layer',
             '__wine_unix_call_funcs','__wine_unix_call_wow64_funcs']
 for name in required:
     if not any(line.endswith(' _'+name) for line in exports.splitlines()): raise SystemExit('Missing driver export: '+name)
@@ -219,8 +224,9 @@ payload = work / (component + '-source')
 payload.mkdir()
 shutil.copytree(inputs,payload / 'source-inputs')
 for name in ('scripts/build-metal-wine.sh','patches/wine-metal-driver.patch','patches/wine-mouse-pointer.patch',
-             'patches/wine-wpad-macos.patch','Tests/WineProxyTests.c','Tests/WineProxyPolicyTests.c',
-             'scripts/test-wine-proxy.sh'):
+             'patches/wine-wpad-macos.patch','patches/wine-remote-metal.patch',
+             'Tests/WineProxyTests.c','Tests/WineProxyPolicyTests.c','scripts/test-wine-proxy.sh',
+             'Tests/WineRemotePresentationTests.cpp','scripts/test-remote-presentation.sh'):
     target = payload / name
     target.parent.mkdir(parents=True,exist_ok=True)
     shutil.copyfile(root / name,target)
@@ -231,10 +237,12 @@ for module in ('win32u','user32','wow64win','winhttp'):
 license_text = ('MagicWine Metal, mouse-pointer and macOS WPAD Wine support: public Wine 11 native and PE\n'
                 'winemac/ntdll/win32u/user32/wow64win/winhttp modules with the public Unix-call entry\n'
                 'point, native pthread TLS, D3DMetal Nt ABI, mouse-pointer input support,\n'
-                'and macOS SystemConfiguration proxy autodiscovery policy integration.\n'
+                'remote root/child Metal layer hosting, and macOS proxy autodiscovery policy.\n'
                 'The MagicWine D3DMetal/DXMT client-surface bridge is LGPL-2.1-or-later.\n'
                 'ABI reference: Whisky-App/wine a92f7f06c4cff7291578e58eb95284b00e322799,\n'
                 'dlls/winemac.drv/macdrv_main.c and macdrv.h (LGPL-2.1-or-later).\n'
+                'Remote Metal transport: Wine commit 1a63b0d7c431f1ebbaba9afd2daa312690eb8020,\n'
+                'Marc-Aurel Zent / CodeWeavers (LGPL-2.1-or-later), adapted to Wine 11 and child HWNDs.\n'
                 'Native ABI source references: CodeWeavers CrossOver 26.1 public source mirror,\n'
                 'rnowak/wine-crossover-sources b4f3c510a1808e6e32fb99e9bc11fa46ccc207dc;\n'
                 'Alien4042x/WineForge a342f4aeb23d719339f444b9e94e06ecf0ff1a14 (LGPL-2.1-or-later).\n'
@@ -299,6 +307,7 @@ metadata = {'component':component,'source':{'url':source_url,'sha256':source_has
                      'original_winhttp_sha256':original_winhttp_hashes},
             'patch_sha256':patch_hash,'mouse_pointer_patch_sha256':pointer_patch_hash,
             'wpad_macos_patch_sha256':wpad_patch_hash,
+            'remote_metal_patch_sha256':remote_patch_hash,
             'link_inputs_sha256':link_hashes,
             'freetype':{'url':freetype_url,'sha256':freetype_hash,'version':'2.13.3',
                         'runtime_soname':'@loader_path/../../libfreetype.6.dylib',

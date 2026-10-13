@@ -32,7 +32,7 @@ public struct GraphicsConfiguration: Codable, Hashable, Sendable {
         switch backend {
         case .standard: componentID == nil
         case .dxvk: componentID == DXVKInstallation.componentID
-        case .dxmt: componentID == DXMTInstallation.componentID
+        case .dxmt: componentID.map(DXMTInstallation.supports(componentID:)) ?? false
         case .d3dmetal: componentID.map(D3DMetalInstallation.supports(componentID:)) ?? false
         }
     }

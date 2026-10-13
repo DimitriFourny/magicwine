@@ -3,59 +3,42 @@ import Darwin
 import Foundation
 import Metal
 
-/// v0.80 is the last MIT release. All upstream payload bytes remain unmodified.
-/// The isolated GraphicsRuntimeView, not WINEDLLPATH alone, prevents WineD3D fallback.
+/// MIT DXMT v0.80 with source-built, capability-gated remote Metal presentation.
+/// Both winemetal PEs and the Unix bridge are an inseparable ABI-matched set.
 enum DXMTInstallation {
-    static let componentID = "dxmt-v0.80"
-    static let archiveRoot = "v0.80"
-    static let archiveName = "dxmt-v0.80-builtin"
-    static let archiveSHA256 = "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d"
-    static let source = "https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz"
-    static let notice = "DXMT — Experimental translates Direct3D 10/11 to Metal, not Direct3D 9/12. This pinned, unmodified MIT-licensed v0.80 package requires macOS 15 or later, an Apple Silicon Metal GPU, Rosetta and compatible Wine. Use Install Wine in Downloads or Settings for MagicWine's managed runtime with the required Metal-view interface. The DXMT package and driver are bundled; no additional DXMT download is needed. Standard graphics remains the default; select DXMT in the bottle's Graphics settings to enable it. A compatible custom Wine runtime may also be used. An isolated process-local loader view prevents runtime WineD3D or winemetal from shadowing DXMT; the shared runtime is never modified by graphics selection. No CrossOver or Apple proprietary binaries are bundled. Quarantine and the original release archive are preserved. Restore Standard before updating a component."
+    static let componentID = "dxmt-v0.80-remote.1"
+    static let archiveRoot = componentID
+    static let archiveName = componentID
+    static let archiveSHA256 = DXMTRemoteBuildPins.archiveSHA256
+    static let source = "bundled:Sources/MagicWineCore/Resources/\(componentID).tar.gz"
+    static let sourceArchiveName = componentID + "-source.tar.gz"
+    static let provenanceName = componentID + "-provenance.json"
+    static let stockArchiveName = "dxmt-v0.80-builtin.tar.gz"
+    private static let stockArchiveSHA256 = "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d"
+    static let notice = "DXMT — Experimental translates Direct3D 10/11 to Metal, not Direct3D 9/12. This altered MIT-licensed v0.80 package requires macOS 15 or later, an Apple Silicon Metal GPU, Rosetta and compatible Wine. MagicWine rebuilds the matched D3D11 and Metal-view modules for real cross-process presentation on its managed Wine driver; unsupported custom drivers fail gracefully. All other public upstream payloads are unchanged. Complete corresponding source, build inputs, patches, licenses and provenance are bundled. No CrossOver or Apple proprietary runtime binaries are included. Standard graphics remains the default. An isolated process-local loader view prevents WineD3D from shadowing DXMT without modifying shared Wine files."
     private static let directories: Set<String> = ["i386-windows", "x86_64-windows", "x86_64-unix"]
     private static let licenseSHA256 = "0acf1ce81dc7bbc0165f2f95ea359f37dc6bbe6546ef9f5feefa33496a942624"
-    // Independent pins: a rewritten receipt cannot bless different extracted files.
-    // Optional upstream NVAPI/NVNGX are preserved but never overlaid or enabled.
-    static let payloadDigests: [String: String] = [
-        "i386-windows/d3d10core.dll": "c5a26310d14a30c3e1700a4d0c9865be28a11351a5c4dc5b83ab1bd8fcf7662f",
-        "i386-windows/d3d11.dll": "9afc2b3419818618c4c87274435a28935b0df002caa4b9a8d3a88d3dc846b17d",
-        "i386-windows/dxgi.dll": "7df8cdf66e12a108410002abc77b01f70aa59b8a36a70fa0bc6ae3b056841319",
-        "i386-windows/winemetal.dll": "20a6865facebdaac92b6c06fadf37d2efb5a242b22ca1c349bb57d7ad43df8e3",
-        "x86_64-unix/winemetal.so": "3d50d7f39c64778c71d0af2fce1cde818d09ffbce7c4f7b8ae24ae1df567c0ca",
-        "x86_64-windows/d3d10core.dll": "833d26971abc8661efc8b5cc18548c70ce8e482e4ea4b1d3f69a367612264d26",
-        "x86_64-windows/d3d11.dll": "7ca382af0eb32d8a432f6efb14d594fefb45673663be1f7e6682254bff885c47",
-        "x86_64-windows/dxgi.dll": "fc58aae0aba511a1ec4d2417e5bba6adb888bb14315d0f59cccdfd27f670d544",
-        "x86_64-windows/nvapi64.dll": "7c37b66a88aa1fdb08c6035a7fe738af1c1b5eea53af78c4812498d22bef8bc3",
-        "x86_64-windows/nvngx.dll": "18d5847ee524ba6eeb2eee656817ddc00a45c46759a753854335a765e997e5fe",
-        "x86_64-windows/winemetal.dll": "514245d533c750599614311a792c45ed600aef52948571d98c0fc70fd3df16e0",
-    ]
-    // This versioned component metadata is immutable. Its original notice is
-    // separate from live onboarding text so UI changes cannot invalidate receipts.
+    // Generated only from the completed source build, independently of receipts.
+    static let payloadDigests = DXMTRemoteBuildPins.payloadDigests
     private static let provenance = """
     MagicWine DXMT component: \(componentID)
-    Upstream: https://github.com/3Shain/dxmt/tree/589adb780354b461645b29999cefaf533594ee99
-    Release archive: \(source)
-    Archive SHA-256: \(archiveSHA256)
-    Checksum authority: upstream GitHub release asset digest; independently recorded file pins.
-    License: MIT at v0.80 (last MIT release); dependency notices in LICENSE-DXMT.txt.
-    Upstream build: .github/workflows/ci.yml at the pinned source commit;
-    LLVM 15.0.7, public 3Shain/wine v8.16-3shain, LLVM-MinGW 20251216.
-
-    The release archive and all payload bytes are unmodified. Original release
-    archive is retained as dxmt-v0.80-builtin.tar.gz. No binaries from CrossOver
-    or proprietary Apple components are redistributed.
-    Wine 11 set_dll_path searches its runtime before WINEDLLPATH. Therefore
-    setting WINEDLLPATH alone cannot replace builtin WineD3D. Launch MUST use
-    MagicWine's isolated GraphicsRuntimeView overlaid with these DXMT PEs and
-    winemetal.so, not the original Wine loader. Overrides are builtin-only.
-    Loader reference: https://github.com/wine-mirror/wine/blob/wine-11.0/dlls/ntdll/unix/loader.c
-    WINEDLLPATH is this component root, NOT the x86_64-unix subdirectory.
-    Wine appends the architecture suffix and associates winemetal.dll with
-    x86_64-unix/winemetal.so for both PE architectures. Wine ntdll's LC_RPATH
-    resolves @rpath/ntdll.so and @rpath/winemac.so in the selected runtime view.
-    No shared Wine files, DLL registry overrides, or dyld globals are changed.
-    Optional nvapi64/nvngx remain archived and verified, but are not enabled.
-    DXMT — Experimental translates Direct3D 10/11 to Metal, not Direct3D 9/12. This pinned, unmodified MIT-licensed v0.80 package requires macOS 15 or later, an Apple Silicon Metal GPU, Rosetta and a compatible custom Wine runtime exposing the Metal-view interface. Stock managed Wine 11 lacks that interface: select a compatible custom Wine runtime in Settings before creating a new bottle. An isolated process-local loader view prevents runtime WineD3D or winemetal from shadowing DXMT; the shared runtime is never modified. No CrossOver or Apple proprietary binaries are bundled. Quarantine and the original release archive are preserved. Restore Standard before updating a component.
+    Upstream MIT release: https://github.com/3Shain/dxmt/tree/589adb780354b461645b29999cefaf533594ee99
+    Original release: https://github.com/3Shain/dxmt/releases/download/v0.80/\(stockArchiveName)
+    Original release SHA-256: \(stockArchiveSHA256)
+    Altered archive SHA-256: \(archiveSHA256)
+    Corresponding source: \(sourceArchiveName), SHA-256 \(DXMTRemoteBuildPins.sourceSHA256)
+    Build provenance: \(provenanceName), SHA-256 \(DXMTRemoteBuildPins.provenanceSHA256)
+    Recipe: scripts/build-dxmt.sh; source changes: patches/dxmt-remote-metal.patch.
+    The matched i386/x86_64 d3d11.dll, winemetal.dll and x86_64 winemetal.so are
+    source-built. All other payloads and retained upstream archive are unchanged.
+    Native magicwine_metal_remote_v1 capability gates foreign HWND/root support;
+    real window ownership is preserved. Native acquisition failures return E_FAIL.
+    Immutable generated shader arrays are retained from the verified public
+    archive, with named-symbol extraction, independent pins and full shader source.
+    Build-input licenses remain in the corresponding-source bundle.
+    Launch MUST use MagicWine's isolated GraphicsRuntimeView. Builtin overrides
+    and the component-root WINEDLLPATH prevent WineD3D from shadowing DXMT.
+    Optional upstream NVAPI/NVNGX remain verified but are not enabled.
 
     """
     private struct Receipt: Codable, Equatable {
@@ -69,12 +52,50 @@ enum DXMTInstallation {
         var files = payloadDigests
         files[archiveName + ".tar.gz"] = archiveSHA256
         files["LICENSE-DXMT.txt"] = licenseSHA256
+        files[stockArchiveName] = stockArchiveSHA256
+        files[sourceArchiveName] = DXMTRemoteBuildPins.sourceSHA256
+        files[provenanceName] = DXMTRemoteBuildPins.provenanceSHA256
         files["PROVENANCE.txt"] = digest(Data(provenance.utf8))
         return files
     }
     private static var expectedReceipt: Receipt {
-        Receipt(schema: 1, componentID: componentID, source: source,
+        Receipt(schema: 2, componentID: componentID, source: source,
                 archiveSHA256: archiveSHA256, files: expectedFiles)
+    }
+
+    // The already-published stock component is immutable, not an alias for the
+    // remote build. Existing bottle pins remain launchable with their own bytes.
+    private static let historicalReceipt = Receipt(
+        schema: 1, componentID: "dxmt-v0.80",
+        source: "https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz",
+        archiveSHA256: "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d",
+        files: [
+            "i386-windows/d3d10core.dll": "c5a26310d14a30c3e1700a4d0c9865be28a11351a5c4dc5b83ab1bd8fcf7662f",
+            "i386-windows/d3d11.dll": "9afc2b3419818618c4c87274435a28935b0df002caa4b9a8d3a88d3dc846b17d",
+            "i386-windows/dxgi.dll": "7df8cdf66e12a108410002abc77b01f70aa59b8a36a70fa0bc6ae3b056841319",
+            "i386-windows/winemetal.dll": "20a6865facebdaac92b6c06fadf37d2efb5a242b22ca1c349bb57d7ad43df8e3",
+            "x86_64-unix/winemetal.so": "3d50d7f39c64778c71d0af2fce1cde818d09ffbce7c4f7b8ae24ae1df567c0ca",
+            "x86_64-windows/d3d10core.dll": "833d26971abc8661efc8b5cc18548c70ce8e482e4ea4b1d3f69a367612264d26",
+            "x86_64-windows/d3d11.dll": "7ca382af0eb32d8a432f6efb14d594fefb45673663be1f7e6682254bff885c47",
+            "x86_64-windows/dxgi.dll": "fc58aae0aba511a1ec4d2417e5bba6adb888bb14315d0f59cccdfd27f670d544",
+            "x86_64-windows/nvapi64.dll": "7c37b66a88aa1fdb08c6035a7fe738af1c1b5eea53af78c4812498d22bef8bc3",
+            "x86_64-windows/nvngx.dll": "18d5847ee524ba6eeb2eee656817ddc00a45c46759a753854335a765e997e5fe",
+            "x86_64-windows/winemetal.dll": "514245d533c750599614311a792c45ed600aef52948571d98c0fc70fd3df16e0",
+            "dxmt-v0.80-builtin.tar.gz": "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d",
+            "LICENSE-DXMT.txt": "0acf1ce81dc7bbc0165f2f95ea359f37dc6bbe6546ef9f5feefa33496a942624",
+            "PROVENANCE.txt": "a46d4a8d8ada378fb5c7242d5dcacc96648f17800fb8187812630328a7c0e4e5",
+        ])
+
+    static func supports(componentID requested: String) -> Bool {
+        requested == componentID || requested == historicalReceipt.componentID
+    }
+
+    private static func pinnedReceipt(for requested: String) throws -> Receipt {
+        switch requested {
+        case componentID: return expectedReceipt
+        case historicalReceipt.componentID: return historicalReceipt
+        default: throw MagicWineError.setup("Unsupported DXMT component \(requested). Restore Standard before selecting the current DXMT component.")
+        }
     }
     private struct FileStamp: Equatable, Sendable {
         let device: Int32
@@ -161,13 +182,22 @@ enum DXMTInstallation {
         let component = extraction.appendingPathComponent(archiveRoot, isDirectory: true)
         try validatePayloadLayout(at: component)
         for (name, expected) in payloadDigests {
-            guard try hash(component.appendingPathComponent(name), maximum: 32 * 1_048_576) == expected else {
-                throw MagicWineError.setup("DXMT upstream payload checksum mismatch: \(name).")
+            guard try hash(component.appendingPathComponent(name), maximum: 64 * 1_048_576) == expected else {
+                throw MagicWineError.setup("DXMT pinned payload checksum mismatch: \(name).")
             }
         }
         try FileManager.default.moveItem(at: archive, to: component.appendingPathComponent(archiveName + ".tar.gz"))
         try FileManager.default.copyItem(at: license, to: component.appendingPathComponent("LICENSE-DXMT.txt"))
         try Data(provenance.utf8).write(to: component.appendingPathComponent("PROVENANCE.txt"), options: .atomic)
+        for name in [stockArchiveName, sourceArchiveName, provenanceName] {
+            guard let resource = Bundle.module.url(forResource: name, withExtension: nil) else {
+                throw MagicWineError.setup("Bundled DXMT corresponding source or provenance is missing: \(name). Reinstall MagicWine.")
+            }
+            try requireFile(resource)
+            let target = component.appendingPathComponent(name)
+            try FileManager.default.copyItem(at: resource, to: target)
+            try DXVKInstallation.preserveQuarantine(from: resource, to: target)
+        }
         try writeReceipt(at: component)
         // Propagate quarantine to every loadable copy, not only its enclosing directory.
         try DXVKInstallation.preserveQuarantine(from: bundled, to: component)
@@ -179,11 +209,9 @@ enum DXMTInstallation {
     }
 
     static func validate(componentID requested: String, paths: ApplicationPaths) throws -> URL {
-        guard requested == componentID else {
-            throw MagicWineError.setup("Unsupported DXMT component \(requested). Restore Standard before selecting the current DXMT component.")
-        }
+        _ = try pinnedReceipt(for: requested)
         try validateManagedParents(paths)
-        let root = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
+        let root = paths.componentsDirectory.appendingPathComponent(requested, isDirectory: true)
         try validateRoot(root)
         return root
     }
@@ -274,7 +302,10 @@ enum DXMTInstallation {
         try requireDirectory(root)
         let payloadNames = Array(payloadDigests.keys)
         var expected = Set(payloadNames).union(directories)
-        if includesMetadata { expected.formUnion(expectedFiles.keys); expected.insert("installation.json") }
+        if includesMetadata {
+            expected.formUnion(try pinnedReceipt(for: root.lastPathComponent).files.keys)
+            expected.insert("installation.json")
+        }
         var actual = Set<String>()
         var enumerationError: Error?
         guard let enumeration = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [], options: [],
@@ -310,6 +341,8 @@ enum DXMTInstallation {
     }
 
     private static func validateRoot(_ root: URL) throws {
+        let expectedReceipt = try pinnedReceipt(for: root.lastPathComponent)
+        let expectedFiles = expectedReceipt.files
         try validatePayloadLayout(at: root, includesMetadata: true)
         let receiptData = try boundedFile(root.appendingPathComponent("installation.json"), maximum: 65_536)
         let receipt: Receipt
@@ -319,7 +352,8 @@ enum DXMTInstallation {
         let before = try stamps(at: root, names: Array(expectedFiles.keys) + ["installation.json", ""] + directories.sorted())
         if cache.matches(before, at: root) { return }
         for (name, expected) in expectedFiles {
-            guard try hash(root.appendingPathComponent(name), maximum: 32 * 1_048_576) == expected else {
+            let maximum = name == sourceArchiveName ? 1_024 * 1_048_576 : 64 * 1_048_576
+            guard try hash(root.appendingPathComponent(name), maximum: maximum) == expected else {
                 throw MagicWineError.setup("DXMT component changed or is corrupted: \(name). Restore Standard and reinstall this component; cached files were left untouched.")
             }
         }
@@ -331,7 +365,8 @@ enum DXMTInstallation {
     static func writeReceipt(at root: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(expectedReceipt).write(to: root.appendingPathComponent("installation.json"), options: .atomic)
+        try encoder.encode(pinnedReceipt(for: root.lastPathComponent))
+            .write(to: root.appendingPathComponent("installation.json"), options: .atomic)
     }
 
     static func publish(_ component: URL, paths: ApplicationPaths) throws -> URL {
@@ -484,9 +519,10 @@ enum DXMTInstallation {
 
     private static func requireFile(_ url: URL) throws {
         let status = try inspect(url)
+        let maximum = url.lastPathComponent == sourceArchiveName ? 1_024 * 1_048_576 : 64 * 1_048_576
         guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), status.st_nlink == 1,
-              status.st_size > 0, status.st_size <= 32 * 1_048_576 else {
-            throw MagicWineError.setup("The DXMT file must be a nonempty ordinary file without symbolic/hard links and within the 32 MiB safety limit: \(url.path).")
+              status.st_size > 0, status.st_size <= Int64(maximum) else {
+            throw MagicWineError.setup("The DXMT file must be a nonempty ordinary file without symbolic/hard links and within its \(maximum / 1_048_576) MiB safety limit: \(url.path).")
         }
     }
 
