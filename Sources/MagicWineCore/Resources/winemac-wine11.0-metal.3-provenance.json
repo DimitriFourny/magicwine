@@ -32,6 +32,15 @@
       "${ROOT}/patches/wine-mouse-pointer.patch"
     ],
     [
+      "patch",
+      "--batch",
+      "--forward",
+      "--fuzz=0",
+      "-p1",
+      "-i",
+      "${ROOT}/patches/wine-wpad-macos.patch"
+    ],
+    [
       "./wine-wine-11.0/configure",
       "--build=x86_64-apple-darwin",
       "--host=x86_64-apple-darwin",
@@ -80,7 +89,8 @@
       "dlls/winemac.drv/vulkan.o",
       "dlls/winemac.drv/window.o",
       "dlls/ntdll/ntdll.so",
-      "dlls/win32u/win32u.so"
+      "dlls/win32u/win32u.so",
+      "dlls/winhttp/winhttp.so"
     ],
     [
       "clang",
@@ -147,14 +157,17 @@
       "dlls/ntdll/i386-windows/ntdll.dll",
       "dlls/user32/x86_64-windows/user32.dll",
       "dlls/user32/i386-windows/user32.dll",
-      "dlls/wow64win/x86_64-windows/wow64win.dll"
+      "dlls/wow64win/x86_64-windows/wow64win.dll",
+      "dlls/winhttp/x86_64-windows/winhttp.dll",
+      "dlls/winhttp/i386-windows/winhttp.dll"
     ]
   ],
   "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
-  "component": "winemac-wine11.0-metal.2",
+  "component": "winemac-wine11.0-metal.3",
   "compressed_driver_sha256": "47275d569f1bb6bdf120838e57334485937458bbace71a99128e13382c03ab24",
   "compressed_native_ntdll_sha256": "92c99a44c743ef31db90ca8886640df4818d9a60dce5e64e6bf7385bf47ec2fd",
   "compressed_native_win32u_sha256": "e078529ec968140f738d689447e8a05d77e80a5bf7317720e3e0b8d269804533",
+  "compressed_native_winhttp_sha256": "7d9ae18a200d62d6ad9ceef26e5804ff73b4d7393dcfa0be711d15e023041892",
   "compressed_ntdll_sha256": {
     "i386": "c906ffa9bb4f56860a7682202bdf09c25cb342118c37af5695c91dc87d4de460",
     "x86_64": "01413b61c1dbcb0c880ae4e1cae73cc96cc996e359af262b12670218c1c6404a"
@@ -166,6 +179,10 @@
   "compressed_user32_sha256": {
     "i386": "ecfe9a9f1e572b34d7087e39bc4fe48251f5461991f1443db2e93ecff24f21e7",
     "x86_64": "9134e73d59c17f599f288fc51936cafd33b0c355de97215a1df739084adecdd4"
+  },
+  "compressed_winhttp_sha256": {
+    "i386": "87581a5733350d694ef615b9b6a41dfc2eeea33233df4564a4f1d044c35aa693",
+    "x86_64": "29543134104414ff04c63e898004600cb4237fc282affc5d858be87de4d42a0c"
   },
   "compressed_wow64win_sha256": {
     "x86_64": "060824be0a7eddb5e727904cb7a4cdf8e5b4b76c0c23132697318e703f20c6d4"
@@ -185,7 +202,9 @@
     "version": "2.13.3"
   },
   "inputs_sha256": {
-    "LICENSE-WINE-METAL.txt": "2375e77b18d406e78ec93c39c8735ed268c9f6f7451e20cc5810a66a9d8900cb",
+    "LICENSE-WINE-METAL.txt": "7c4d8a785a4b2851fa107ac793887b48d13c66f116031cb235d49b6276b37c16",
+    "Tests/WineProxyPolicyTests.c": "9738eeb8ff8cf22184dbe2b4d7a1264b68ab6d9bf17f49f5c9f1dc3dcaa0b23a",
+    "Tests/WineProxyTests.c": "51ad4ed9688168c23494752562129838e9cb49de5a7eb8ca662b06695932e866",
     "patched-driver/.gitattributes": "f82b99b04a647026fbb2fdb8501237ec9c1e3abb5647d9f690fbbe25f8139e77",
     "patched-driver/Makefile.in": "3458a6e8e4239d52a8987cbab176781611cfc50144214d557f7eccdea2b6ec7f",
     "patched-driver/clipboard.c": "00ccc294b01f809f983fd258ec34e51fd92d857f1e236b0d22a1e4e4e5120018",
@@ -548,6 +567,24 @@
     "patched-win32u/win32u_private.h": "bd42e59a7e49c7e6813af01c8ddbdcb48c30b85527a9e40be80dcc6772d890b3",
     "patched-win32u/window.c": "e8886852b66f5e3fe41644d55a4c3e7872df5dd4b236f5936c202ac3ada9c9ee",
     "patched-win32u/winstation.c": "56bc9d7f23f67a4664cd893fe26760ebe3984e7d0f632238af39fd16131b023e",
+    "patched-winhttp/Makefile.in": "91091b1ed9d235e769c4270de6736fbada6058c01d976a7bab4d065dd5e7ab5d",
+    "patched-winhttp/cookie.c": "436f8dd6dde9455b4049c8141c2fdcf955bb236016d9e95e9c69e8b315bb0c10",
+    "patched-winhttp/handle.c": "95665c75bf977a95bf5765771ac55ddf94edae75ad4574210f9ae68783305a4f",
+    "patched-winhttp/main.c": "fe9ddeeb059c134c4b206afb8d9c4a34bb4ca444b0e324a90f3708ac67a6cc7c",
+    "patched-winhttp/net.c": "4d458c83c59f9053412d290035c82e63f7a42fc5ececff095a193ed52d8cbc1c",
+    "patched-winhttp/request.c": "76e11bf961485c44fd1a9b0343c930a4f5853dea6773ec1503bf8eb7fc6828f3",
+    "patched-winhttp/rsrc.rc": "b819b3f9e00e907c7e32f1c6aa3f23715587d2bb698087e409dd94aae42c8dcf",
+    "patched-winhttp/session.c": "ec4edb822412a07d2d3d460d7ed435be25fbdf0d5f0ca223ef7f99cbb2c61835",
+    "patched-winhttp/tests/Makefile.in": "79c754dd24272db48adefa12ba7d67554b3ef0fdadc65fe9edb398df5285c7e7",
+    "patched-winhttp/tests/notification.c": "2579f19f4219b6945f9f275b1f9e5acb938c447344cf5070a56c4706f51cef75",
+    "patched-winhttp/tests/url.c": "4b3705ea6068b5f57fc558ea32fb50062e7c0e66f4f4e405fd05d0803a1f7967",
+    "patched-winhttp/tests/winhttp.c": "73b3a38885f777752204cd1fdf3b6ba437fba1e2f19738dda5d8259cccaab02e",
+    "patched-winhttp/unixlib.c": "efaf52f91ce4484985eeb60bad5336622bd2b6e210b417228a5ff976f3c0bc5d",
+    "patched-winhttp/unixlib.h": "077dfbc9beba6333d174790d26c55928d37e457fa88118c7c090c7d03ca9daa7",
+    "patched-winhttp/url.c": "3067a16ef7b9150e320d4bc4ccd10285534c9d3be2c14f644745df5a21b8abbc",
+    "patched-winhttp/winhttp.spec": "6f4a293b62dee0b79b0b2e5fc07c0364135d2360882706b1bbf11ca21efd73c9",
+    "patched-winhttp/winhttp_private.h": "bdb231facb47e197e6af7bf6a6fb7dd23f5c1122509674eb25a319f915634eea",
+    "patched-winhttp/winhttp_tlb.idl": "c23ebc2ac6d6b666eae27869bc99f943d927c4931948da249be48da5d6f95b45",
     "patched-wow64win/Makefile.in": "f20feb6767674ab6ef88de68e98c3be91ebc6874079379c4317d84c83af90940",
     "patched-wow64win/gdi.c": "7fe6ddf585fe907f6fa78e88fd961bece3647e9a9c4b2350158fb0242b5f9555",
     "patched-wow64win/syscall.c": "960963894109e52b80682aa50b670cfd157a18af95f749a1cb785eb2fbdcd9df",
@@ -556,7 +593,9 @@
     "patched-wow64win/wow64win_private.h": "56b7236fce6eeff8e4a5c766f14f31919301cdcf1742f8ceb2eeeddd35cecee3",
     "patches/wine-metal-driver.patch": "64babc5970dcdc39e0e22120deaffe3de1dffabd6a4c9c5de4cda88b2ae7f59b",
     "patches/wine-mouse-pointer.patch": "309c602a281e65c62f71d9e69b19bb270c0e2fa982af4312b2a4a4ebe65536d9",
-    "scripts/build-metal-wine.sh": "ea7f5faea5b2c6d315ebcf512cc568bea72bfc8e963479b63fda272f08d5bae5",
+    "patches/wine-wpad-macos.patch": "4742d98e57e4c61c0fe42dc8f5a3db52efa265c0c14f1b917b7f325ccd1e7a20",
+    "scripts/build-metal-wine.sh": "bc0305809d29c1981d767784d82973f7273152b862517925e37e75e38828ba8e",
+    "scripts/test-wine-proxy.sh": "527278e63bde277e02149a6ab470d7dd6fccd370aae16d90cfbdf8c43d594e4e",
     "source-inputs/bison-3.8.2.tar.gz": "06c9e13bdf7eb24d4ceb6b59205a4f67c2c7e7213119644430fe82fbd14a0abb",
     "source-inputs/freetype-2.13.3.tar.xz": "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289",
     "source-inputs/libfreetype.6.dylib": "df39a1b319ea882ca04bc2c800bfb7d225335890eefa48a173df856edf2d7946",
@@ -577,6 +616,8 @@
   "native_ntdll_sha256": "ee3db713a091bcc6f34e4b9e9b8587c4c12528a78cf4c970a74780a7b526caee",
   "native_win32u_linkage": "win32u.so:\n\t@rpath/win32u.so (compatibility version 0.0.0, current version 0.0.0)\n\t@rpath/ntdll.so (compatibility version 0.0.0, current version 0.0.0)\n\t/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText (compatibility version 1.0.0, current version 877.4.0)\n\t/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit (compatibility version 45.0.0, current version 2685.60.104)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)\n\t/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 5026.5.4)\n",
   "native_win32u_sha256": "3ed06f88e58a5a3efabb43419cdfe2ffe2109a5f8025512bfad6a86f75644d9f",
+  "native_winhttp_linkage": "winhttp.so:\n\t@rpath/winhttp.so (compatibility version 0.0.0, current version 0.0.0)\n\t@rpath/ntdll.so (compatibility version 0.0.0, current version 0.0.0)\n\t/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration (compatibility version 1.0.0, current version 1405.120.5)\n\t/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 5026.5.4)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)\n",
+  "native_winhttp_sha256": "33579844fa7d4b75bcd3306ed295ca625a966bd9b84a06c9cb787ce9029ac01f",
   "ntdll_sha256": {
     "i386": "a5cc94b8824f34cfc41dffeb59cb5873db6523cffa2633dc5d5016650970c579",
     "x86_64": "63695dba9ca40e8e75f10470ec5f462a33efe99b717b3551d61a5aeaa1a8effb"
@@ -608,6 +649,10 @@
       "i386": "6bc9d98d72f6f2e7a17d0c7f9dc62477f5d39ead0373f788ae60fb137b98e925",
       "x86_64": "8ea5e7d18a3d1fc774f56a30c13c1abe0848a3a0af0c2d007e1b852e716a7496"
     },
+    "original_winhttp_sha256": {
+      "i386": "e1690fcfa7aff4d5add9645bb6b86c1a0a68debdcac75ea2ae55e7a43b7e32da",
+      "x86_64": "297679186e7cb8f82e559c02dbd4f40a6b2457e3ac32460f061d142f25f5a857"
+    },
     "original_wow64win_sha256": {
       "x86_64": "9b87f84fb9320cb100f94b562fa15cbcbc9d84b29a0cf345324fb5f17f12cc39"
     },
@@ -619,7 +664,12 @@
     "x86_64": "8dee0d4c6ec6fbb3c96f5a925cf63aa6b5d4aa995b90f1056ffb88a1dcb2a556"
   },
   "vulkan_runtime_soname": "@loader_path/../../libMoltenVK.dylib",
+  "winhttp_sha256": {
+    "i386": "355918a51cc1669ab6e0b388fdba5f2c4d067cc1089929f2b1eaa409dd79df92",
+    "x86_64": "e9dbcd78079d2da587e8b55c742f26add346974be0fca2c88e3d9f9b3061cd4e"
+  },
   "wow64win_sha256": {
     "x86_64": "9608a27a6cc9bdb83814c014fe831e16199ae0264ce10efa97e95f256e592085"
-  }
+  },
+  "wpad_macos_patch_sha256": "4742d98e57e4c61c0fe42dc8f5a3db52efa265c0c14f1b917b7f325ccd1e7a20"
 }
