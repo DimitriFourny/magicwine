@@ -49,9 +49,8 @@ struct GraphicsSettingsView: View {
                 Text("Graphics")
                 Spacer(minLength: 8)
                 Menu {
-                    Picker("Graphics", selection: Binding(
-                        get: { currentBottle.graphics.backend },
-                        set: { backend in
+                    ForEach(GraphicsBackend.allCases, id: \.self) { backend in
+                        Button {
                             guard !unavailable else { return }
                             guard backend != currentBottle.graphics.backend else { return }
                             if backend != .standard {
@@ -59,13 +58,14 @@ struct GraphicsSettingsView: View {
                             } else {
                                 model.setGraphics(.standard, in: currentBottle)
                             }
-                        }
-                    )) {
-                        ForEach(GraphicsBackend.allCases, id: \.self) { backend in
-                            Text(backend.displayName).tag(backend)
+                        } label: {
+                            if backend == currentBottle.graphics.backend {
+                                Label(backend.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(backend.displayName)
+                            }
                         }
                     }
-                    .pickerStyle(.inline)
                 } label: {
                     Text(currentBottle.graphics.backend.displayName)
                 }
@@ -165,6 +165,11 @@ struct GraphicsSettingsView: View {
 
             if !currentBottle.isInitialized {
                 Text("Finish bottle setup before changing graphics.")
+                    .font(.callout)
+                    .foregroundStyle(WineTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if state.hasRunningPrograms && state.title == nil && !state.isStopping {
+                Text("Quit Windows programs, including Steam in the tray, or use Stop before changing graphics.")
                     .font(.callout)
                     .foregroundStyle(WineTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
