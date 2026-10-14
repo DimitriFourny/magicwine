@@ -25,6 +25,9 @@
 - Measure isolated 20,000-round-trip handoff medians over ten samples per mode: 64-bit server 292.02 ms versus MSync 100.27 ms; 32-bit server 296.54 ms versus MSync 127.18 ms. These measurements do not establish game-FPS improvements. Rebuild/sign the app and CLI, verify fresh managed installation and all-backend launch policy, and reproduce all bundled artifact hashes with the offline source recipe.
 - Move Graphics HUD, Retina / HiDPI, and MSync descriptions into clickable info popovers beside their toggles; keep help available while settings are disabled. Simplify graphics picker labels and confirmation titles by removing the Experimental suffix.
 - Disable the extra native focus rectangle on sidebar navigation buttons, including Gamepads, while retaining the existing selected-item highlight and button interaction.
+- Replace the bottle's adoption-only **Use Updated Wine** action with **Update Wine…**: one unsigned-runtime confirmation installs or reuses the current managed Wine, then switches only the selected stopped bottle. Show installation progress and failures inline; preserve other metadata, the previous runtime, custom runtimes, and the preferred Wine setting for new bottles.
+- Rename the Downloads installer to **Install / Update Wine…** and explain the distinction between installing Wine and updating an existing bottle. Update CLI error guidance with actionable installation commands.
+- Build/sign the native app and CLI. Exercise the real native update button, trust dialog, cancellation, download progress, rejected adoption while Wine is not stopped, and successful cached-runtime adoption after Stop; verify MSync availability and preservation of other bottle metadata and old Wine files.
 
 ## Unreleased — 2026-10-13
 

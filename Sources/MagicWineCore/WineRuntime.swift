@@ -225,7 +225,7 @@ public actor WineRuntime {
         let (current, launch, lifetime) = try await idleBottle(bottle)
         defer { lifetime.release(); launch.release() }
         guard supportsMSync(current.runtime) else {
-            throw MagicWineError.setup("MSync requires the updated MagicWine-managed Wine runtime. Install / Update Wine, then explicitly use the updated Wine for this bottle. Custom and older Wine are unchanged.")
+            throw MagicWineError.setup("MSync requires the updated MagicWine-managed Wine runtime. Choose Update Wine in this bottle’s dashboard, or run install-wine --accept-unsigned followed by runtime upgrade in the CLI. Custom Wine is unchanged.")
         }
         try Task.checkCancellation()
         return try await store.setSynchronization(msyncEnabled: msyncEnabled, in: current)
@@ -245,7 +245,7 @@ public actor WineRuntime {
         }
         let executable = managedExecutableURL
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-            throw MagicWineError.setup("Install / Update Wine first, then choose Use Updated Wine. This operation does not download or authorize unsigned software.")
+            throw MagicWineError.setup("The updated Wine runtime is not installed. Choose Update Wine in this bottle’s dashboard to install and switch in one step, or run install-wine --accept-unsigned before retrying runtime upgrade in the CLI.")
         }
         try RuntimeInstallation.validateCachedRuntime(at: RuntimeInstallation.destination(paths: paths), paths: paths)
         try validateGraphicsRuntime(current.graphics.backend, executable: executable)

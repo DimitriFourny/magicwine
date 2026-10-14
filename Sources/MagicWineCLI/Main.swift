@@ -202,7 +202,7 @@ struct MagicWineCLI {
       synchronization <bottle-UUID> [msync|server]
         Read or change synchronization (default MSync); requires idle updated managed Wine
       runtime upgrade <bottle-UUID>             Explicitly adopt installed updated Wine for an old managed bottle
-        Install / Update Wine first; does not download Wine or change custom runtime bottles
+        Run install-wine --accept-unsigned first; does not download Wine or change custom runtime bottles
       exec <bottle-UUID> <wine-arguments…>       Run Wine with isolated prefix
     """
 }
