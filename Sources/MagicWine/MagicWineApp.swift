@@ -193,7 +193,7 @@ private struct LibraryView: View {
                     Text("1. Install Wine in Downloads. Custom Wine executables are available in Settings under Advanced.")
                     Text("2. Create a bottle with the + button. Each bottle keeps its own runtime and Windows files.")
                     Text("3. Install an EXE/MSI, complete the Windows installer, and launch a discovered shortcut.")
-                    Text("4. Use Add Program for an existing EXE/LNK, or Refresh Shortcuts after installation.")
+                    Text("4. Use Add Program for an existing EXE/LNK/URL, or Refresh Shortcuts after installation.")
                 }
                 WineCard(title: "Graphics & Compatibility", icon: "gamecontroller") {
                     Text("Standard uses Wine’s built-in graphics. Bundled DXVK translates Direct3D 9/10/11 through Vulkan/MoltenVK; bundled DXMT translates Direct3D 10/11 through Metal. Imported D3DMetal supports 64-bit Direct3D 11/12.")

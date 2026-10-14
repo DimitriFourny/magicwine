@@ -139,8 +139,8 @@ public actor WineRuntime {
     }
 
     public func launch(_ program: WindowsProgram, in bottle: Bottle) async throws -> OperationResult {
-        let executable = try windowsFile(URL(fileURLWithPath: program.executablePath), extensions: ["exe", "lnk"])
-        let isShortcut = executable.pathExtension.lowercased() == "lnk"
+        let executable = try windowsFile(URL(fileURLWithPath: program.executablePath), extensions: ["exe", "lnk", "url"])
+        let isShortcut = ["lnk", "url"].contains(executable.pathExtension.lowercased())
         let arguments = isShortcut ? ["start", "/unix", executable.path] : [executable.path]
         let result = try await execute(arguments: arguments, bottle: bottle,
                                        directory: executable.deletingLastPathComponent(), timeout: nil)
@@ -325,6 +325,11 @@ public actor WineRuntime {
         var executable = server ? wine.deletingLastPathComponent().appendingPathComponent("wineserver") : wine
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(executable.path). Select an intact Wine distribution; this bottle was not migrated.")
+        }
+        if !server {
+            try GraphicsPrefix.withLock(bottleDirectory: prefix.deletingLastPathComponent()) {
+                try BottleDesktop.prepare(prefix: prefix)
+            }
         }
         var processEnvironment = environment(executable: wine, prefix: prefix)
         if !server, current.isInitialized {

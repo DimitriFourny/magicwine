@@ -69,7 +69,7 @@ struct MagicWineCLI {
                 let updated = try await store.discoverPrograms(in: bottle)
                 print("Installer finished. \(updated.programs.count) saved programs. Log: \(result.logURL.path)")
             case "add":
-                guard (1...2).contains(rest.count) else { throw argumentError("add <bottle-UUID> <program.exe|shortcut.lnk> [name]") }
+                guard (1...2).contains(rest.count) else { throw argumentError("add <bottle-UUID> <program.exe|shortcut.lnk|shortcut.url> [name]") }
                 let updated = try await store.registerProgram(in: bottle, executableURL: URL(fileURLWithPath: rest[0]), name: rest.count == 2 ? rest[1] : nil)
                 printPrograms(updated)
             case "refresh": printPrograms(try await store.discoverPrograms(in: bottle))
@@ -151,8 +151,8 @@ struct MagicWineCLI {
       create <name> <wine-executable>           Create and initialize a bottle
       initialize <bottle-UUID>                  Retry setup
       install <bottle-UUID> <file.exe|file.msi>  Run an installer
-      add <bottle-UUID> <file.exe|file.lnk> [name]
-      refresh <bottle-UUID>                    Discover Start Menu shortcuts
+      add <bottle-UUID> <file.exe|file.lnk|file.url> [name]
+      refresh <bottle-UUID>                    Discover Start Menu and Desktop LNK/URL shortcuts
       apps <bottle-UUID>                        List saved program UUIDs
       launch <bottle-UUID> <program-UUID>       Run a saved program
       stop <bottle-UUID>                        Stop this bottle only

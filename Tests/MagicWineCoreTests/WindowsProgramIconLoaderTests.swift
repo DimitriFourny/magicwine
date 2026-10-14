@@ -60,6 +60,46 @@ struct WindowsProgramIconLoaderTests {
         #expect(pixel(image) == [0, 255, 0, 255])
     }
 
+    @Test func internetShortcutLoadsLocalWindowsIconPixels() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let icons = root.appendingPathComponent("drive_c/Program Files (x86)/Steam/steam/games")
+        try FileManager.default.createDirectory(at: icons, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try icon(red: 0, green: 255).write(to: icons.appendingPathComponent("game.ico"))
+        let shortcut = root.appendingPathComponent("Chop Chop Inc..URL")
+        let text = """
+        [InternetShortcut]
+        URL=steam://rungameid/4369130
+        ICONFILE=C:\\Program Files (x86)\\Steam\\steam\\games\\game.ico
+        ICONINDEX=0
+        """
+        try Data(text.utf8).write(to: shortcut)
+        let loader = WindowsProgramIconLoader()
+        let image = try #require(await loader.image(for: shortcut, prefix: root))
+        #expect(pixel(image) == [0, 255, 0, 255])
+    }
+
+    @Test func internetShortcutMissingMalformedOrRemoteIconReturnsFallback() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("damaged icon".utf8).write(to: root.appendingPathComponent("damaged.ico"))
+        try icon(red: 255, green: 0).write(to: root.appendingPathComponent("target.ico"))
+        let shortcut = root.appendingPathComponent("game.url")
+        let loader = WindowsProgramIconLoader()
+        for fields in ["", "IconFile=missing.ico", "IconFile=damaged.ico",
+                       "IconFile=https://example.invalid/game.ico",
+                       "IconFile=\\\\server\\share\\game.ico",
+                       "IconFile=target.ico\nIconIndex=invalid"] {
+            // URL is a launch target, never an alternate icon source.
+            try Data("[InternetShortcut]\nURL=target.ico\n\(fields)".utf8).write(to: shortcut)
+            #expect(await loader.image(for: shortcut, prefix: root) == nil)
+        }
+        try Data("[InternetShortcut]\nIconFile=target.ico".utf8).write(to: shortcut)
+        let repaired = try #require(await loader.image(for: shortcut, prefix: root))
+        #expect(pixel(repaired) == [255, 0, 0, 255])
+    }
+
     private func icon(red: UInt8, green: UInt8) -> Data {
         // ImageIO supports Windows icon sizes starting at 16x16.
         var bytes: [UInt8] = [0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 104, 4, 0, 0, 22, 0, 0, 0]

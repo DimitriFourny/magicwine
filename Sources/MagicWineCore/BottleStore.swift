@@ -58,17 +58,19 @@ public actor BottleStore {
 
     public func save(_ bottle: Bottle) throws {
         try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            let current = try loadUnlocked(bottle)
+            let current = try loadUnlocked(bottle, normalizePrograms: false)
             guard bottle.graphics == current.graphics else {
                 throw MagicWineError.setup("Graphics settings must be changed through WineRuntime.configureGraphics.")
             }
-            try saveUnlocked(bottle)
+            var normalized = bottle
+            _ = normalizePrograms(in: &normalized)
+            try saveUnlocked(normalized)
         }
     }
 
     public func delete(_ bottle: Bottle) throws {
         try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            _ = try loadUnlocked(bottle)
+            _ = try loadUnlocked(bottle, normalizePrograms: false)
             try FileManager.default.trashItem(at: directoryURL(for: bottle), resultingItemURL: nil)
         }
     }
@@ -101,14 +103,16 @@ public actor BottleStore {
     }
 
     public func registerProgram(in bottle: Bottle, executableURL: URL, name: String? = nil) throws -> Bottle {
-        try mutateCurrent(bottle) { current in
+        try mutateCurrent(bottle) { current, identities in
             let executable = executableURL.standardizedFileURL.resolvingSymlinksInPath()
             let ext = executable.pathExtension.lowercased()
             let attributes = try? executable.resourceValues(forKeys: [.isRegularFileKey])
-            guard executable.isFileURL, ["exe", "lnk"].contains(ext), attributes?.isRegularFile == true else {
+            guard executable.isFileURL, ["exe", "lnk", "url"].contains(ext), attributes?.isRegularFile == true else {
                 throw MagicWineError.invalidProgram(executable.path)
             }
             guard !current.programs.contains(where: { $0.executablePath == executable.path }) else { return }
+            let identity = WindowsShortcut.launchIdentity(for: executable, prefix: prefixURL(for: current))
+            guard identities.insert(identity).inserted else { return }
             let programName = try validatedName(name ?? executable.deletingPathExtension().lastPathComponent)
             current.programs.append(WindowsProgram(name: programName, executablePath: executable.path))
             current.programs.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -116,14 +120,16 @@ public actor BottleStore {
     }
 
     public func removeProgram(id: UUID, in bottle: Bottle) throws -> Bottle {
-        try mutateCurrent(bottle) { current in
+        try mutateCurrent(bottle) { current, _ in
             current.programs.removeAll { $0.id == id }
         }
     }
 
     public func discoverPrograms(in bottle: Bottle) throws -> Bottle {
-        try mutateCurrent(bottle) { current in
-            let drive = prefixURL(for: bottle).appendingPathComponent("drive_c", isDirectory: true)
+        try mutateCurrent(bottle) { current, identities in
+            let prefix = prefixURL(for: bottle)
+            try BottleDesktop.prepare(prefix: prefix)
+            let drive = prefix.appendingPathComponent("drive_c", isDirectory: true)
             let roots = [drive.appendingPathComponent("ProgramData/Microsoft/Windows/Start Menu/Programs"),
                          drive.appendingPathComponent("users")]
             var known = Set(current.programs.map(\.executablePath))
@@ -131,6 +137,7 @@ public actor BottleStore {
                 guard let enumerator = FileManager.default.enumerator(
                     at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey],
                     options: [.skipsHiddenFiles], errorHandler: { _, _ in false }) else { continue }
+                var candidates: [URL] = []
                 for case let candidate as URL in enumerator {
                     let attributes = try candidate.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey])
                     if attributes.isSymbolicLink == true {
@@ -138,8 +145,7 @@ public actor BottleStore {
                         continue
                     }
                     if root.lastPathComponent == "users", attributes.isDirectory == true {
-                        let components = candidate.pathComponents
-                        let relativeDepth = components.count - root.pathComponents.count
+                        let relativeDepth = enumerator.level
                         // At each user's root, only Desktop and AppData can contain launchers.
                         if relativeDepth == 2, !["Desktop", "AppData"].contains(candidate.lastPathComponent) {
                             enumerator.skipDescendants()
@@ -147,14 +153,22 @@ public actor BottleStore {
                         if relativeDepth == 3, candidate.deletingLastPathComponent().lastPathComponent == "AppData",
                            candidate.lastPathComponent != "Roaming" { enumerator.skipDescendants() }
                     }
-                    guard attributes.isRegularFile == true, candidate.pathExtension.lowercased() == "lnk" else { continue }
-                    let relative = candidate.path.replacingOccurrences(of: root.path + "/", with: "")
+                    guard attributes.isRegularFile == true,
+                          ["lnk", "url"].contains(candidate.pathExtension.lowercased()) else { continue }
+                    let relative = candidate.pathComponents.suffix(enumerator.level).joined(separator: "/")
                     if root.lastPathComponent == "users",
                        !relative.contains("/Desktop/"), !relative.contains("/Start Menu/Programs/") { continue }
                     let name = candidate.deletingPathExtension().lastPathComponent
                     if name.localizedCaseInsensitiveContains("uninstall") { continue }
-                    guard known.insert(candidate.path).inserted else { continue }
-                    current.programs.append(WindowsProgram(name: name, executablePath: candidate.path))
+                    candidates.append(candidate)
+                }
+                // Shared menus win over user folders; sorted paths make each root deterministic.
+                candidates.sort { $0.path < $1.path }
+                for candidate in candidates {
+                    guard known.insert(candidate.path).inserted,
+                          identities.insert(WindowsShortcut.launchIdentity(for: candidate, prefix: prefix)).inserted else { continue }
+                    current.programs.append(WindowsProgram(name: candidate.deletingPathExtension().lastPathComponent,
+                                                          executablePath: candidate.path))
                 }
             }
             current.programs.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -195,10 +209,12 @@ public actor BottleStore {
         guard current.id == bottle.id else { throw MagicWineError.invalidBottle }
     }
 
-    private func loadUnlocked(_ bottle: Bottle) throws -> Bottle {
+    private func loadUnlocked(_ bottle: Bottle, normalizePrograms shouldNormalize: Bool = true) throws -> Bottle {
         try validateOwnership(bottle)
         try GraphicsPrefix.recover(bottleDirectory: directoryURL(for: bottle))
-        return try decoder.decode(Bottle.self, from: Data(contentsOf: directoryURL(for: bottle).appendingPathComponent("bottle.json")))
+        var current = try decoder.decode(Bottle.self, from: Data(contentsOf: directoryURL(for: bottle).appendingPathComponent("bottle.json")))
+        if shouldNormalize { _ = normalizePrograms(in: &current) }
+        return current
     }
 
     private func saveUnlocked(_ bottle: Bottle) throws {
@@ -206,10 +222,26 @@ public actor BottleStore {
         try encoder.encode(bottle).write(to: directoryURL(for: bottle).appendingPathComponent("bottle.json"), options: .atomic)
     }
 
-    private func mutateCurrent(_ bottle: Bottle, _ mutation: (inout Bottle) throws -> Void) throws -> Bottle {
+    private func normalizePrograms(in bottle: inout Bottle) -> Set<WindowsShortcut.LaunchIdentity> {
+        let prefix = prefixURL(for: bottle)
+        var paths: Set<String> = []
+        var identities: Set<WindowsShortcut.LaunchIdentity> = []
+        paths.reserveCapacity(bottle.programs.count)
+        identities.reserveCapacity(bottle.programs.count)
+        bottle.programs.removeAll { program in
+            guard paths.insert(program.executablePath).inserted else { return true }
+            return !identities.insert(WindowsShortcut.launchIdentity(
+                for: URL(fileURLWithPath: program.executablePath), prefix: prefix)).inserted
+        }
+        return identities
+    }
+
+    private func mutateCurrent(_ bottle: Bottle,
+                               _ mutation: (inout Bottle, inout Set<WindowsShortcut.LaunchIdentity>) throws -> Void) throws -> Bottle {
         try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle)
-            try mutation(&current)
+            var current = try loadUnlocked(bottle, normalizePrograms: false)
+            var identities = normalizePrograms(in: &current)
+            try mutation(&current, &identities)
             try saveUnlocked(current)
             return current
         }

@@ -147,14 +147,14 @@ struct BottleDashboardView: View {
         }
         .buttonStyle(WineButtonStyle())
         .disabled(operationUnavailable)
-        .help("Register an existing EXE or LNK shortcut without moving its file")
+        .help("Register an existing EXE, LNK, or URL shortcut without moving its file")
 
         Button { model.refreshPrograms(in: currentBottle) } label: {
             Label("Refresh Shortcuts", systemImage: "arrow.clockwise")
         }
         .buttonStyle(WineButtonStyle())
         .disabled(operationUnavailable)
-        .help("Find Windows Start Menu and Desktop shortcuts")
+        .help("Find Windows Start Menu and Desktop shortcuts, including Steam URL shortcuts")
     }
 
     @ViewBuilder
@@ -279,7 +279,7 @@ struct BottleDashboardView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Label("No programs yet", systemImage: "app.dashed")
                         .font(.headline)
-                    Text("Install an EXE or MSI, or add an existing Windows program. Refresh Shortcuts finds Start Menu and Desktop shortcuts after installation.")
+                    Text("Install an EXE or MSI, or add an existing Windows program. Refresh Shortcuts finds Start Menu and Desktop shortcuts, including Steam URL shortcuts.")
                         .font(.callout)
                         .foregroundStyle(WineTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
