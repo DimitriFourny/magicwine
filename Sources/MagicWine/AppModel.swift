@@ -368,6 +368,46 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func supportsMSync(_ bottle: Bottle) -> Bool { wine.supportsMSync(bottle.runtime) }
+
+    func canUpgradeRuntime(_ bottle: Bottle) -> Bool { wine.canUpgradeRuntime(bottle.runtime) }
+
+    func setMSyncEnabled(_ enabled: Bool, in bottle: Bottle) {
+        guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
+              supportsMSync(bottle) else { return }
+        let state = activity(for: bottle)
+        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping,
+              bottle.msyncEnabled != enabled else { return }
+        perform(in: bottle, title: "Changing synchronization…") {
+            do {
+                let updated = try await self.wine.configureSynchronization(msyncEnabled: enabled, in: bottle)
+                self.replace(updated)
+                return nil
+            } catch {
+                self.report(error, title: "Could Not Change Synchronization")
+                throw error
+            }
+        }
+    }
+
+    func upgradeRuntime(in bottle: Bottle) {
+        guard !isLoading, runtimeActivity == nil,
+              let bottle = bottles.first(where: { $0.id == bottle.id }),
+              canUpgradeRuntime(bottle) else { return }
+        let state = activity(for: bottle)
+        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
+        perform(in: bottle, title: "Using updated Wine…") {
+            do {
+                let updated = try await self.wine.upgradeRuntime(in: bottle)
+                self.replace(updated)
+                return nil
+            } catch {
+                self.report(error, title: "Could Not Use Updated Wine")
+                throw error
+            }
+        }
+    }
+
     func setRetinaEnabled(_ enabled: Bool, in bottle: Bottle) {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
               bottle.isInitialized else { return }

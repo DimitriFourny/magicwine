@@ -3,7 +3,7 @@ import CryptoKit
 import Darwin
 
 struct RuntimeInstallation {
-    static let notice = "MagicWine downloads pinned Gcenx Wine 11.0_1 and includes source-built, open-source Wine driver and runtime modules for DXMT and D3DMetal support. This is not a notarized MagicWine runtime. By confirming installation, you authorize use of unsigned Wine and its bundled modules, and removal of com.apple.quarantine only inside the MagicWine-managed Wine Stable.app. MagicWine does not disable Gatekeeper or change system-wide security settings. SHA-256 checksums verify pinned contents, not malware safety. Standard graphics remains the default; Metal backends require a supported host, and D3DMetal additionally requires locally installed Apple libraries. Wine's optional Windows multimedia support requires the upstream universal GStreamer runtime (1.28.2 or newer) in /Library/Frameworks/GStreamer.framework; missing multimedia support is not a failure of basic Wine setup."
+    static let notice = "MagicWine downloads pinned Gcenx Wine 11.0_1 and includes source-built, open-source Wine driver, runtime modules, and a matching wineserver for MSync, DXMT, and D3DMetal support. This is not a notarized MagicWine runtime. By confirming installation, you authorize use of unsigned Wine and its bundled modules, and removal of com.apple.quarantine only inside the MagicWine-managed Wine Stable.app. MagicWine does not disable Gatekeeper or change system-wide security settings. SHA-256 checksums verify pinned contents, not malware safety. MSync is enabled by default and can be disabled per bottle. Standard graphics remains the default; Metal backends require a supported host, and D3DMetal additionally requires locally installed Apple libraries. Wine's optional Windows multimedia support requires the upstream universal GStreamer runtime (1.28.2 or newer) in /Library/Frameworks/GStreamer.framework; missing multimedia support is not a failure of basic Wine setup."
 
     static let source = URL(string: "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0_1/wine-stable-11.0_1-osx64.tar.xz")!
     static let archiveSHA256 = "b50dc50ec7f41d58b115a6b685d4d1315ba3c797bd3aa0f49213f2703cb82388"
@@ -101,10 +101,20 @@ struct RuntimeInstallation {
     ]
 
     static func reuseCachedRuntime(at destination: URL, paths: ApplicationPaths) throws -> Int {
+        let receipt = try validateCachedRuntime(at: destination, paths: paths)
+        let removed = try removeQuarantine(from: destination, paths: paths)
+        try writeReceipt(receipt, at: destination)
+        return removed
+    }
+
+    /// Inspect an already installed runtime without changing download trust or files.
+    @discardableResult
+    static func validateCachedRuntime(at destination: URL, paths: ApplicationPaths) throws -> [String: String] {
         guard destination.standardizedFileURL == self.destination(paths: paths).standardizedFileURL else {
             throw MagicWineError.setup("The cached Wine installation path does not match the pinned runtime.")
         }
         try validateManagedDirectory(destination, paths: paths)
+        _ = try validateLayout(at: destination)
         let receiptURL = destination.appendingPathComponent("installation.json")
         guard try fileType(at: receiptURL) == mode_t(S_IFREG) else {
             throw MagicWineError.setup("The cached Wine installation receipt is not an ordinary file.")
@@ -119,9 +129,7 @@ struct RuntimeInstallation {
         let executable = destination.appendingPathComponent(relativeExecutable)
         try WineMetalDriver.validate(at: executable)
         try DXMTInstallation.validateNativeRuntime(executable)
-        let removed = try removeQuarantine(from: destination, paths: paths)
-        try writeReceipt(receipt, at: destination)
-        return removed
+        return receipt
     }
 
     static func tool(_ path: String, arguments: [String], paths: ApplicationPaths,

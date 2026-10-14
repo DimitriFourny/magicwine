@@ -21,6 +21,10 @@ struct GraphicsSettingsView: View {
         busy || model.isLoading || state.title != nil || state.hasRunningPrograms || state.isStopping || !currentBottle.isInitialized
     }
 
+    private var synchronizationUnavailable: Bool {
+        busy || model.isLoading || state.title != nil || state.hasRunningPrograms || state.isStopping
+    }
+
     private func backendNotice(_ backend: GraphicsBackend) -> String {
         switch backend {
         case .standard: ""
@@ -95,6 +99,28 @@ struct GraphicsSettingsView: View {
             .disabled(unavailable)
             Text("Enabled by default for sharper desktop apps. Turning Retina on sets 200% scaling; turning it off sets 100%. This bottle-wide setting affects games too and requires stopping Windows programs.")
                 .font(.caption).foregroundStyle(.secondary)
+
+            Toggle("MSync", isOn: Binding(
+                get: { model.supportsMSync(currentBottle) && currentBottle.msyncEnabled },
+                set: { enabled in
+                    guard !synchronizationUnavailable, model.supportsMSync(currentBottle) else { return }
+                    model.setMSyncEnabled(enabled, in: currentBottle)
+                }
+            ))
+            .disabled(synchronizationUnavailable || !model.supportsMSync(currentBottle))
+            Text("MSync uses macOS synchronization to reduce Wine server overhead. It works with every graphics backend. Turn it off to use Wine server synchronization. Close Windows programs or use Stop before changing it.")
+                .font(.caption).foregroundStyle(.secondary)
+            if !model.supportsMSync(currentBottle) {
+                if model.canUpgradeRuntime(currentBottle) {
+                    Text("This bottle is pinned to older Wine without MSync. Install / Update Wine first, then choose Use Updated Wine below. Installing alone does not change this bottle.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Use Updated Wine") { model.upgradeRuntime(in: currentBottle) }
+                        .disabled(synchronizationUnavailable || model.runtimeActivity != nil)
+                } else {
+                    Text("MSync is unavailable for this custom Wine runtime. Its synchronization settings are unchanged. To use MSync, install MagicWine’s updated managed Wine and create a bottle with it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
 
             if !currentBottle.isInitialized {
                 Text("Finish bottle setup before changing graphics.")

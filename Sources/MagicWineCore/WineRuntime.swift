@@ -29,6 +29,22 @@ public actor WineRuntime {
             .resolvingSymlinksInPath().standardizedFileURL
     }
 
+    /// Capability belongs to the pinned managed runtime, not its Wine version string.
+    public nonisolated func supportsMSync(_ runtime: RuntimeDescriptor) -> Bool {
+        runtime.executableURL.resolvingSymlinksInPath().standardizedFileURL == managedExecutableURL
+    }
+
+    public nonisolated func canUpgradeRuntime(_ runtime: RuntimeDescriptor) -> Bool {
+        guard !supportsMSync(runtime) else { return false }
+        let root = paths.runtimesDirectory.resolvingSymlinksInPath().standardizedFileURL
+        let executable = runtime.executableURL.resolvingSymlinksInPath().standardizedFileURL
+        let stem = "wine-\(RuntimeInstallation.version)-\(RuntimeInstallation.archiveSHA256.prefix(12))-winemac-wine11.0-metal."
+        return (1...6).contains { revision in
+            executable == root.appendingPathComponent(stem + String(revision))
+                .appendingPathComponent(RuntimeInstallation.relativeExecutable)
+        }
+    }
+
     /// Only current managed Wine is an automatic default; external Wine requires an explicit preference.
     public nonisolated func preferredRuntime(in runtimes: [RuntimeDescriptor], preferredPath: String?) -> RuntimeDescriptor? {
         let managed = managedExecutableURL
@@ -200,6 +216,71 @@ public actor WineRuntime {
         try await execute(arguments: arguments, bottle: bottle, directory: nil, timeout: timeout)
     }
 
+    public func configureSynchronization(msyncEnabled: Bool, in bottle: Bottle) async throws -> Bottle {
+        guard !settingsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Settings setup is already in progress for this bottle.")
+        }
+        settingsChanging.insert(bottle.id)
+        defer { settingsChanging.remove(bottle.id) }
+        let (current, launch, lifetime) = try await idleBottle(bottle)
+        defer { lifetime.release(); launch.release() }
+        guard supportsMSync(current.runtime) else {
+            throw MagicWineError.setup("MSync requires the updated MagicWine-managed Wine runtime. Install / Update Wine, then explicitly use the updated Wine for this bottle. Custom and older Wine are unchanged.")
+        }
+        try Task.checkCancellation()
+        return try await store.setSynchronization(msyncEnabled: msyncEnabled, in: current)
+    }
+
+    /// Explicit adoption only: never downloads Wine or changes quarantine/trust settings.
+    public func upgradeRuntime(in bottle: Bottle) async throws -> Bottle {
+        guard !settingsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Settings setup is already in progress for this bottle.")
+        }
+        settingsChanging.insert(bottle.id)
+        defer { settingsChanging.remove(bottle.id) }
+        let (current, launch, lifetime) = try await idleBottle(bottle)
+        defer { lifetime.release(); launch.release() }
+        guard canUpgradeRuntime(current.runtime) else {
+            throw MagicWineError.setup("Only a bottle pinned to an older MagicWine-managed Metal Wine runtime can use this upgrade.")
+        }
+        let executable = managedExecutableURL
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+            throw MagicWineError.setup("Install / Update Wine first, then choose Use Updated Wine. This operation does not download or authorize unsigned software.")
+        }
+        try RuntimeInstallation.validateCachedRuntime(at: RuntimeInstallation.destination(paths: paths), paths: paths)
+        try validateGraphicsRuntime(current.graphics.backend, executable: executable)
+        let runtime = try await inspect(executableURL: executable)
+        try Task.checkCancellation()
+        return try await store.setRuntime(runtime, in: current)
+    }
+
+    private func idleBottle(_ bottle: Bottle) async throws -> (Bottle, GraphicsOperationLease, GraphicsOperationLease) {
+        guard active[bottle.id]?.isEmpty != false, pendingLaunches[bottle.id]?.isEmpty != false else {
+            throw MagicWineError.setup("Close this bottle's Windows programs or use Stop before changing synchronization or Wine.")
+        }
+        try paths.prepare()
+        let launch = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                              kind: .launch, exclusive: true, timeout: .zero)
+        do {
+            let lifetime = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                                    kind: .lifetime, exclusive: true, timeout: .zero)
+            do {
+                let current = try await store.current(bottle)
+                // A detached Windows child may outlive our process lease. Waiting briefly
+                // observes the real server without killing it or changing its backend.
+                _ = try await execute(arguments: ["-w"], bottle: current, directory: nil,
+                                      timeout: 0.5, server: true, tracked: false, idleProbe: true)
+                return (current, launch, lifetime)
+            } catch {
+                lifetime.release()
+                throw error
+            }
+        } catch {
+            launch.release()
+            throw error
+        }
+    }
+
     public func configureDisplay(retinaEnabled: Bool, in bottle: Bottle) async throws -> Bottle {
         guard !settingsChanging.contains(bottle.id) else {
             throw MagicWineError.setup("Graphics or display setup is already in progress for this bottle.")
@@ -307,7 +388,7 @@ public actor WineRuntime {
     }
 
     private func execute(arguments: [String], bottle: Bottle, directory: URL?, timeout: TimeInterval?,
-                         server: Bool = false, tracked: Bool = true) async throws -> OperationResult {
+                         server: Bool = false, tracked: Bool = true, idleProbe: Bool = false) async throws -> OperationResult {
         guard server || !settingsChanging.contains(bottle.id) else {
             throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
         }
@@ -333,7 +414,7 @@ public actor WineRuntime {
             throw try pendingStop(bottle)
         }
         defer { launch?.release() }
-        let current = server ? bottle : try await store.current(bottle)
+        let current = try await store.current(bottle)
         try Task.checkCancellation()
         if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
         guard server || !settingsChanging.contains(bottle.id) else {
@@ -373,7 +454,7 @@ public actor WineRuntime {
                 try BottleDesktop.prepare(prefix: prefix)
             }
         }
-        var processEnvironment = environment(executable: wine, prefix: prefix)
+        var processEnvironment = environment(executable: wine, prefix: prefix, msyncEnabled: current.msyncEnabled)
         if !server, current.isInitialized {
             let gamepadEnvironment = try await GamepadService.shared.prepare(paths: paths)
             // Main-actor discovery suspends this actor. Honor Stop before changing
@@ -414,6 +495,9 @@ public actor WineRuntime {
             throw CancellationError()
         } catch ProcessOperation.Interrupted.timedOut(let log) {
             if tracked { await cleanup(bottle) }
+            if idleProbe {
+                throw MagicWineError.setup("This bottle's Wine server is still running. Close its Windows programs or use Stop before changing synchronization or Wine. Log: \(log.path)")
+            }
             throw MagicWineError.setup("Wine operation timed out. Log: \(log.path)")
         }
     }
@@ -433,10 +517,14 @@ public actor WineRuntime {
         await task.value
     }
 
-    private func environment(executable: URL, prefix: URL?) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
-        // Avoid accidental architecture/prefix/loader configuration from a launching shell.
-        for key in Array(environment.keys) where key.hasPrefix("WINE") || key.hasPrefix("DYLD_") ||
+    internal nonisolated func environment(executable: URL, prefix: URL?, msyncEnabled: Bool = true,
+                                         inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        var environment = inherited
+        let managedMSync = supportsMSync(RuntimeDescriptor(executableURL: executable, version: ""))
+        // Preserve custom Wine's synchronization policy; only our managed backend
+        // owns these switches. Other inherited loader/prefix settings remain isolated.
+        for key in Array(environment.keys) where (key.hasPrefix("WINE") &&
+            (managedMSync || (key != "WINEMSYNC" && key != "WINEESYNC" && key != "WINEFSYNC"))) || key.hasPrefix("DYLD_") ||
             key.hasPrefix("DXVK_") || key.hasPrefix("DXMT_") || key.hasPrefix("D3DM_") ||
             key.hasPrefix("MTL_") || key.hasPrefix("MAGICWINE_GAMEPAD_") ||
             key == "CX_APPLEGPTK_LIBD3DSHARED_PATH" {
@@ -447,6 +535,11 @@ public actor WineRuntime {
         if let prefix { environment["WINEPREFIX"] = prefix.path }
         // Prefer application-local browser interop assemblies over Wine's namesake DLL.
         environment["WINEDLLOVERRIDES"] = "shdocvw=n,b"
+        if managedMSync {
+            environment["WINEMSYNC"] = msyncEnabled ? "1" : "0"
+            environment["WINEESYNC"] = "0"
+            environment["WINEFSYNC"] = "0"
+        }
         // Managed Metal Wine keeps native pthread GS active. Mono's inline
         // GS-relative dynamic TLS reads bypass the real Windows TEB; its API
         // TLS mode works across Standard, DXVK, DXMT and D3DMetal launches.

@@ -57,10 +57,11 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public var name: String
     public let createdAt: Date
-    public let runtime: RuntimeDescriptor
+    public internal(set) var runtime: RuntimeDescriptor
     public var isInitialized: Bool
     public var programs: [WindowsProgram]
     public var graphics: GraphicsConfiguration
+    public var msyncEnabled: Bool
     private var displayPreference: DisplayConfiguration?
     public var display: DisplayConfiguration {
         get { displayPreference ?? .init() }
@@ -70,7 +71,7 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
 
     public init(id: UUID = UUID(), name: String, createdAt: Date = Date(), runtime: RuntimeDescriptor,
                 isInitialized: Bool = false, programs: [WindowsProgram] = [], graphics: GraphicsConfiguration = .init(),
-                display: DisplayConfiguration = .init()) {
+                display: DisplayConfiguration = .init(), msyncEnabled: Bool = true) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
@@ -79,10 +80,11 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
         self.programs = programs
         self.graphics = graphics
         self.displayPreference = display
+        self.msyncEnabled = msyncEnabled
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, createdAt, runtime, isInitialized, programs, graphics
+        case id, name, createdAt, runtime, isInitialized, programs, graphics, msyncEnabled
         case displayPreference = "display"
     }
 
@@ -101,6 +103,8 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
         }
         displayPreference = container.contains(.displayPreference)
             ? try container.decode(DisplayConfiguration.self, forKey: .displayPreference) : nil
+        msyncEnabled = container.contains(.msyncEnabled)
+            ? try container.decode(Bool.self, forKey: .msyncEnabled) : true
     }
 }
 
