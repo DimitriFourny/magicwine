@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: MIT
  * MagicWine shared-file ABI v1. All fields are little-endian. macOS hosts are
  * arm64/x86_64 and Windows guests are i686/x86_64. Sequences are aligned atomic
  * 32-bit words; the 64-bit timestamps are accessed only inside their seqlocks.

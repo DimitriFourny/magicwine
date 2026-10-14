@@ -2,6 +2,8 @@
 
 ## Unreleased — 2026-10-14
 
+- Prepare the repository for publication: license current original source under MIT, preserve explicitly licensed Wine-derived code and checksum-pinned historical component notices/source archives, and package `THIRD_PARTY_NOTICES.md` with the app and CLI.
+- Replace the README with a research-only warning recommending CrossOver, a screenshot under `docs/images/`, and concise build, usage, safety, and license information. Ignore local environment files while allowing `.env.example`.
 - Discover, register, and launch Windows `.url` Internet Shortcuts alongside LNK shortcuts, including Steam game URLs. Dispatch through the selected bottle's Wine shell; load local ICO/PE artwork using case-insensitive Internet Shortcut fields and Windows text encodings.
 - Keep Windows Desktop bottle-local before initial Wine setup and later launches. Refreshing shortcuts also replaces existing Desktop symlinks without importing or changing their host targets; preserve local contents and other shell-folder mappings.
 - Use directory-enumerator depth for per-user shortcut traversal, avoiding macOS temporary-path aliases hiding Start Menu and Desktop entries.

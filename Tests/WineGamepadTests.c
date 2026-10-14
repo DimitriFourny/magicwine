@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: MIT
  * Runs against the real MagicWine DLLs under Wine, not a mocked XInput API.
  */
 #define WIN32_LEAN_AND_MEAN

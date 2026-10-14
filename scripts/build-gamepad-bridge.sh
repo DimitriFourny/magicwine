@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Build the original MagicWine XInput bridge, not proprietary controller DLLs.
 # Run: bash scripts/build-gamepad-bridge.sh
 # Prerequisites on macOS: brew install mingw-w64 python
@@ -38,7 +38,7 @@ for arch in i686 x86_64; do
 done
 
 # An offline, deterministic corresponding-source distribution includes the
-# original sources, this exact build recipe and the repository GPL license.
+# original sources, this exact build recipe and the repository MIT license.
 python3 - "$ROOT" "$WORK" "$COMPONENT" <<'PY'
 import gzip
 import hashlib

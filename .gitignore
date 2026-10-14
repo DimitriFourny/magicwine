@@ -6,3 +6,8 @@ dist/
 .DS_Store
 *.xcuserstate
 xcuserdata/
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example

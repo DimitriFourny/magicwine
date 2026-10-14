@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: MIT
  * Original MagicWine XInput bridge. The shared-file ABI is declared in bridge.h.
  * No controller enumeration or synthetic fallback takes place inside Wine.
  */
