@@ -81,7 +81,7 @@ remote_patch = root / 'patches/wine-remote-metal.patch'
 remote_patch_hash = '373a97240b94902a8fa89b1afe89d138fd87c4d09a4d378f94a1d6faa9fb7809'
 verify(remote_patch,remote_patch_hash)
 msync_patch = root / 'patches/wine-msync.patch'
-msync_patch_hash = 'ce6cf894bfda48df5616e75852d7005e49c03dbc45aca83d381e7795ed08df16'
+msync_patch_hash = '7e9b8ab7f41b6b2f96705d5deb5a5b97ae78e28e76e5416ed1196a0a0719898d'
 verify(msync_patch,msync_patch_hash)
 msync_commit = 'b4f3c510a1808e6e32fb99e9bc11fa46ccc207dc'
 msync_source_url = 'https://raw.githubusercontent.com/rnowak/wine-crossover-sources/' + msync_commit + '/wine/'
@@ -174,7 +174,7 @@ run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(msync_patch)],src)
 # Regenerate the client and server from the same protocol. Generated results
 # are also present in the patch so the offline source contains the exact ABI.
 run(['perl','tools/make_requests'],src)
-if '#define SERVER_PROTOCOL_VERSION 931' not in (src / 'include/wine/server_protocol.h').read_text():
+if '#define SERVER_PROTOCOL_VERSION 932' not in (src / 'include/wine/server_protocol.h').read_text():
     raise SystemExit('Unexpected MSync client/server protocol version')
 build = work / 'build'
 build.mkdir()
@@ -375,7 +375,8 @@ metadata = {'component':component,'source':{'url':source_url,'sha256':source_has
             'msync_patch_sha256':msync_patch_hash,
             'msync':{'url':msync_source_url,'commit':msync_commit,'inputs_sha256':msync_inputs,
                      'design_url':'https://github.com/marzent/wine-msync',
-                     'license':'LGPL-2.1-or-later','protocol_version':931,
+                     'license':'LGPL-2.1-or-later','protocol_version':932,
+                     'shared_slot_bytes':32,'reference_count_bits':32,'object_index_bits':28,
                      'environment':'WINEMSYNC=1/0','startup_marker':'msync: up and running.'},
             'link_inputs_sha256':link_hashes,
             'freetype':{'url':freetype_url,'sha256':freetype_hash,'version':'2.13.3',

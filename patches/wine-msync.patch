@@ -10,7 +10,7 @@ uses Mach messages, shared memory and Darwin shared ulocks; this is not an
 environment-only switch. Existing Wine 11 inproc-sync hooks cover events,
 semaphores, mutexes, APC alerts, process/thread termination and server objects.
 WINEMSYNC=0 retains normal wineserver synchronization. Client/server mode
-mismatches are fatal. The rebuilt server and ntdll use protocol 931 together.
+mismatches are fatal. The rebuilt server and ntdll use protocol 932 together.
 
 Local port adjustments: preserve MagicWine's native Metal ABI wrappers; use the
 msync debug channel; refuse both startup mode mismatches; never close a shared
@@ -19,6 +19,12 @@ recursive/abandoned mutex state and wake restored objects on wait-all rollback;
 publish abandonment after clearing recursion; reject semaphore count overflow;
 check APCs before wait-all acquisition; fix partial wait registration cleanup;
 wait for registration acknowledgment before reusing the per-thread wait word.
+Shared mappings use stable demand-zero pointer tables with atomic page publication.
+Process-owned cache references are tracked through authenticated server requests,
+reclaimed at final process death, and released on the ordered Mach pump only by
+kernel-audit-authenticated wineserver commands. Shared references use checked
+32-bit counts in matching 32-byte slots, with an ordered free-slot list. Native
+NtReleaseMutant returns the Windows previous-state value (1 - recursion count).
 Generated protocol files are included; regenerate with perl tools/make_requests.
 Upstream file copyright/license notices are retained. Original pinned public
 inputs, their SHA-256 digests and COPYING.LIB accompany the offline source bundle.
@@ -56,7 +62,7 @@ diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
 diff --git a/dlls/ntdll/unix/msync.c b/dlls/ntdll/unix/msync.c
 --- /dev/null
 +++ b/dlls/ntdll/unix/msync.c
-@@ -0,0 +1,1133 @@
+@@ -0,0 +1,1137 @@
 +/*
 + * mach semaphore-based synchronization objects
 + *
@@ -236,31 +242,34 @@ diff --git a/dlls/ntdll/unix/msync.c b/dlls/ntdll/unix/msync.c
 +{
 +    int count;
 +    int max;
-+    unsigned short msync_type;
-+    unsigned short refcount;
++    unsigned int msync_type;
++    unsigned int refcount;
 +    int multiple_waiters;
++    int reserved[3];
 +};
-+C_ASSERT(sizeof(struct semaphore) == 16);
++C_ASSERT(sizeof(struct semaphore) == MSYNC_SHM_SIZE);
 +
 +struct event
 +{
 +    int signaled;
 +    int unused;
-+    unsigned short msync_type;
-+    unsigned short refcount;
++    unsigned int msync_type;
++    unsigned int refcount;
 +    int multiple_waiters;
++    int reserved[3];
 +};
-+C_ASSERT(sizeof(struct event) == 16);
++C_ASSERT(sizeof(struct event) == MSYNC_SHM_SIZE);
 +
 +struct mutex
 +{
 +    int tid;
 +    int count;  /* recursion count */
-+    unsigned short msync_type;
-+    unsigned short refcount;
++    unsigned int msync_type;
++    unsigned int refcount;
 +    int multiple_waiters;
++    int reserved[3];
 +};
-+C_ASSERT(sizeof(struct mutex) == 16);
++C_ASSERT(sizeof(struct mutex) == MSYNC_SHM_SIZE);
 +
 +typedef struct
 +{
@@ -534,69 +543,55 @@ diff --git a/dlls/ntdll/unix/msync.c b/dlls/ntdll/unix/msync.c
 +
 +static void *get_shm_slow( unsigned int idx )
 +{
-+    int entry  = (idx * 16) / pagesize;
-+    int offset = (idx * 16) % pagesize;
-+    void *ret;
++    unsigned int entry = idx >> (vm_kernel_page_shift - MSYNC_SHM_SHIFT);
++    unsigned int offset = (idx << MSYNC_SHM_SHIFT) & vm_kernel_page_mask;
++    void *addr;
 +
 +    os_unfair_lock_lock( &shm_addrs_lock );
-+
-+    if (entry >= shm_addrs_size)
++    if (!(addr = __atomic_load_n( &shm_addrs[entry], __ATOMIC_ACQUIRE )))
 +    {
-+        int new_size = max(shm_addrs_size * 2, entry + 1);
-+
-+        if (!(shm_addrs = realloc( shm_addrs, new_size * sizeof(shm_addrs[0]) )))
-+            ERR("Failed to grow shm_addrs array to size %d.\n", shm_addrs_size);
-+        memset( shm_addrs + shm_addrs_size, 0, (new_size - shm_addrs_size) * sizeof(shm_addrs[0]) );
-+        shm_addrs_size = new_size;
++        if (!(addr = request_shm_from_server( entry, 0 )))
++        {
++            fprintf( stderr, "msync: failed to map shared page %u\n", entry );
++            exit(1);
++        }
++        TRACE( "Mapping page %u at %p.\n", entry, addr );
++        __atomic_store_n( &shm_addrs[entry], addr, __ATOMIC_RELEASE );
 +    }
-+
-+    if (!shm_addrs[entry])
-+    {
-+        void *addr = request_shm_from_server( entry, 0 );
-+        if (!addr)
-+            ERR("Failed to map page %d (offset %#lx).\n", entry, entry * pagesize);
-+
-+        TRACE("Mapping page %d at %p.\n", entry, addr);
-+
-+        if (__sync_val_compare_and_swap( &shm_addrs[entry], 0, addr ))
-+            mach_vm_deallocate( mach_task_self(), (mach_vm_address_t)addr, pagesize ); /* someone beat us to it */
-+    }
-+
-+    ret = (void *)((unsigned long)shm_addrs[entry] + offset);
-+
 +    os_unfair_lock_unlock( &shm_addrs_lock );
-+
-+    return ret;
++    return (char *)addr + offset;
 +}
 +
 +static inline void *get_shm( const unsigned int idx )
 +{
-+    int entry = idx >> (vm_kernel_page_shift - 4);
-+    int offset = (idx << 4) & vm_kernel_page_mask;
++    unsigned int entry = idx >> (vm_kernel_page_shift - MSYNC_SHM_SHIFT);
++    unsigned int offset = (idx << MSYNC_SHM_SHIFT) & vm_kernel_page_mask;
++    void *addr;
 +
-+    if (entry >= shm_addrs_size || !shm_addrs[entry])
++    if (idx >= MSYNC_MAX_OBJECTS)
++    {
++        fprintf( stderr, "msync: invalid shared object index %u\n", idx );
++        exit(1);
++    }
++    if (!(addr = __atomic_load_n( &shm_addrs[entry], __ATOMIC_ACQUIRE )))
 +        return get_shm_slow( idx );
-+
-+    return (void *)((unsigned long)shm_addrs[entry] + offset);
++    return (char *)addr + offset;
 +}
 +
 +void msync_close( int obj )
 +{
-+    static __thread mach_msg_header_t send_header;
-+    mach_msg_return_t mr;
++    NTSTATUS status;
 +
 +    TRACE( "obj=%d.\n", obj );
-+
-+    send_header.msgh_bits = MACH_MSGH_BITS_REMOTE(MACH_MSG_TYPE_COPY_SEND);
-+    send_header.msgh_id = obj | (1 << 28);
-+    send_header.msgh_size = sizeof(send_header);
-+    send_header.msgh_remote_port = server_port;
-+
-+    mr = mach_msg2( &send_header, MACH_SEND_MSG, send_header.msgh_size,
-+                    0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, 0);
-+
-+    if (mr != MACH_MSG_SUCCESS)
-+        ERR( "Failed to send message to server to close msync object %d: %#x\n", obj, mr );
++    /* The server authenticates the process on this connection. The cache calls
++     * this only after the handle and every overlapping operation release it. */
++    SERVER_START_REQ( close_msync )
++    {
++        req->shm_idx = obj;
++        status = wine_server_call( req );
++    }
++    SERVER_END_REQ;
++    if (status) ERR( "Failed to close shared object %d: %#x\n", obj, status );
 +}
 +
 +void msync_init(void)
@@ -615,18 +610,27 @@ diff --git a/dlls/ntdll/unix/msync.c b/dlls/ntdll/unix/msync.c
 +    SERVER_END_REQ;
 +
 +    if (status != STATUS_SUCCESS && status != STATUS_INVALID_PARAMETER)
-+        fatal_error( "msync: cannot query wineserver synchronization mode: %#x\n", status );
++    {
++        fprintf( stderr, "msync: cannot query wineserver synchronization mode: %#x\n", status );
++        exit(1);
++    }
 +    if (!!do_msync() != (status == STATUS_SUCCESS))
-+        fatal_error( "msync: WINEMSYNC mismatch: this process is %s but wineserver is %s; "
-+                     "stop wineserver before changing WINEMSYNC.\n",
-+                     do_msync() ? "enabled" : "disabled",
-+                     status == STATUS_SUCCESS ? "enabled" : "disabled" );
++    {
++        fprintf( stderr, "msync: WINEMSYNC mismatch: this process is %s but wineserver is %s; "
++                         "stop wineserver before changing WINEMSYNC.\n",
++                         do_msync() ? "enabled" : "disabled",
++                         status == STATUS_SUCCESS ? "enabled" : "disabled" );
++        exit(1);
++    }
 +
 +    if (!do_msync()) return;
 +    dlhandle = dlopen( NULL, RTLD_NOW );
 +
 +    if (stat( config_dir, &st ) == -1)
-+        fatal_error( "msync: cannot stat %s\n", config_dir );
++    {
++        fprintf( stderr, "msync: cannot stat %s\n", config_dir );
++        exit(1);
++    }
 +
 +    if (st.st_ino != (unsigned long)st.st_ino)
 +        snprintf( message_port_name, 28, "wine-%lx%08lx-msync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
@@ -635,8 +639,14 @@ diff --git a/dlls/ntdll/unix/msync.c b/dlls/ntdll/unix/msync.c
 +
 +    pagesize = (long)vm_kernel_page_size;
 +
-+    shm_addrs = calloc( 128, sizeof(shm_addrs[0]) );
-+    shm_addrs_size = 128;
++    /* Reserve a stable table for every representable Mach-message index.
++     * calloc's untouched pages stay demand-zero; readers never race realloc. */
++    shm_addrs_size = MSYNC_MAX_OBJECTS >> (vm_kernel_page_shift - MSYNC_SHM_SHIFT);
++    if (!(shm_addrs = calloc( shm_addrs_size, sizeof(*shm_addrs) )))
++    {
++        fprintf( stderr, "msync: cannot reserve shared page table\n" );
++        exit(1);
++    }
 +
 +    /* Bootstrap mach wineserver communication */
 +
@@ -778,7 +788,7 @@ diff --git a/dlls/ntdll/unix/msync.c b/dlls/ntdll/unix/msync.c
 +    if (mutex->tid != GetCurrentThreadId())
 +        return STATUS_MUTANT_NOT_OWNED;
 +
-+    if (prev_count) *prev_count = mutex->count;
++    if (prev_count) *prev_count = 1 - mutex->count;
 +
 +    if (!--mutex->count)
 +    {
@@ -1193,7 +1203,7 @@ diff --git a/dlls/ntdll/unix/msync.c b/dlls/ntdll/unix/msync.c
 diff --git a/dlls/ntdll/unix/msync.h b/dlls/ntdll/unix/msync.h
 --- /dev/null
 +++ b/dlls/ntdll/unix/msync.h
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,54 @@
 +/*
 + * mach semaphore-based synchronization objects
 + *
@@ -1218,6 +1228,11 @@ diff --git a/dlls/ntdll/unix/msync.h b/dlls/ntdll/unix/msync.h
 +extern int do_msync(void);
 +extern void msync_init(void);
 +extern void msync_close( int obj );
++
++/* Must match server/msync.h and the shared object layouts. */
++#define MSYNC_MAX_OBJECTS (1u << 28)
++#define MSYNC_SHM_SHIFT 5
++#define MSYNC_SHM_SIZE (1u << MSYNC_SHM_SHIFT)
 +
 +#ifdef __APPLE__
 +
@@ -1393,12 +1408,54 @@ diff --git a/include/wine/server_protocol.h b/include/wine/server_protocol.h
  };
  
  
-@@ -7093,6 +7095,6 @@
+@@ -6013,6 +6015,17 @@
+     struct reply_header __header;
+     obj_handle_t handle;
+     char __pad_12[4];
++};
++
++
++struct close_msync_request
++{
++    struct request_header __header;
++    unsigned int shm_idx;
++};
++struct close_msync_reply
++{
++    struct reply_header __header;
+ };
+ 
+ 
+@@ -6459,6 +6472,7 @@
+     REQ_set_keyboard_repeat,
+     REQ_get_inproc_sync_fd,
+     REQ_get_inproc_alert_fd,
++    REQ_close_msync,
+     REQ_d3dkmt_object_create,
+     REQ_d3dkmt_object_update,
+     REQ_d3dkmt_object_query,
+@@ -6772,6 +6786,7 @@
+     struct set_keyboard_repeat_request set_keyboard_repeat_request;
+     struct get_inproc_sync_fd_request get_inproc_sync_fd_request;
+     struct get_inproc_alert_fd_request get_inproc_alert_fd_request;
++    struct close_msync_request close_msync_request;
+     struct d3dkmt_object_create_request d3dkmt_object_create_request;
+     struct d3dkmt_object_update_request d3dkmt_object_update_request;
+     struct d3dkmt_object_query_request d3dkmt_object_query_request;
+@@ -7083,6 +7098,7 @@
+     struct set_keyboard_repeat_reply set_keyboard_repeat_reply;
+     struct get_inproc_sync_fd_reply get_inproc_sync_fd_reply;
+     struct get_inproc_alert_fd_reply get_inproc_alert_fd_reply;
++    struct close_msync_reply close_msync_reply;
+     struct d3dkmt_object_create_reply d3dkmt_object_create_reply;
+     struct d3dkmt_object_update_reply d3dkmt_object_update_reply;
+     struct d3dkmt_object_query_reply d3dkmt_object_query_reply;
+@@ -7093,6 +7109,6 @@
      struct d3dkmt_mutex_release_reply d3dkmt_mutex_release_reply;
  };
  
 -#define SERVER_PROTOCOL_VERSION 930
-+#define SERVER_PROTOCOL_VERSION 931
++#define SERVER_PROTOCOL_VERSION 932
  
  #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
 diff --git a/server/Makefile.in b/server/Makefile.in
@@ -1423,7 +1480,7 @@ diff --git a/server/inproc_sync.c b/server/inproc_sync.c
  
  #ifdef HAVE_LINUX_NTSYNC_H
  # include <linux/ntsync.h>
-@@ -240,6 +241,193 @@
+@@ -240,6 +241,195 @@
      return fd;
  }
  
@@ -1605,9 +1662,11 @@ diff --git a/server/inproc_sync.c b/server/inproc_sync.c
 +    if (sync->ops == &inproc_sync_ops)
 +    {
 +        struct inproc_sync *inproc = (struct inproc_sync *)sync;
-+        msync_grab_object( inproc->msync );
-+        *type = inproc->type;
-+        shm_idx = (int)inproc->msync->shm_idx;
++        if (msync_grab_object( inproc->msync, current->process ))
++        {
++            *type = inproc->type;
++            shm_idx = (int)inproc->msync->shm_idx;
++        }
 +    }
 +
 +    release_object( sync );
@@ -1617,11 +1676,16 @@ diff --git a/server/inproc_sync.c b/server/inproc_sync.c
  #else /* NTSYNC_IOC_EVENT_READ */
  
  int get_inproc_device_fd(void)
-@@ -301,7 +489,11 @@
+@@ -300,8 +490,15 @@
+ 
      reply->access = get_handle_access( current->process, req->handle );
  
-     if ((fd = get_obj_inproc_sync( obj, &reply->type )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
+-    if ((fd = get_obj_inproc_sync( obj, &reply->type )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
 -    else send_client_fd( current->process, fd, req->handle );
++    if ((fd = get_obj_inproc_sync( obj, &reply->type )) < 0)
++    {
++        if (!get_error()) set_error( STATUS_NOT_IMPLEMENTED );
++    }
 +    else
 +    {
 +        if (do_msync()) reply->shm_idx = (unsigned int)fd;
@@ -1654,7 +1718,7 @@ diff --git a/server/main.c b/server/main.c
 diff --git a/server/msync.c b/server/msync.c
 --- /dev/null
 +++ b/server/msync.c
-@@ -0,0 +1,825 @@
+@@ -0,0 +1,972 @@
 +/*
 + * mach semaphore-based synchronization objects
 + *
@@ -1697,6 +1761,7 @@ diff --git a/server/msync.c b/server/msync.c
 +#include <mach/message.h>
 +#include <mach/port.h>
 +#include <mach/task.h>
++#include <mach/task_info.h>
 +#include <mach/semaphore.h>
 +#include <mach/mach_error.h>
 +#include <mach/thread_act.h>
@@ -1715,6 +1780,8 @@ diff --git a/server/msync.c b/server/msync.c
 +#include "handle.h"
 +#include "request.h"
 +#include "msync.h"
++#include "process.h"
++#include "wine/rbtree.h"
 +
 +#define UL_COMPARE_AND_WAIT_SHARED  0x3
 +#define ULF_WAKE_ALL                0x00000100
@@ -1802,6 +1869,7 @@ diff --git a/server/msync.c b/server/msync.c
 +}
 +
 +static mach_port_name_t receive_port;
++static audit_token_t server_audit_token;
 +
 +struct tid_node
 +{
@@ -1923,7 +1991,7 @@ diff --git a/server/msync.c b/server/msync.c
 +{
 +    mach_msg_header_t header;
 +    unsigned int shm_idx[MAXIMUM_WAIT_OBJECTS + 1];
-+    mach_msg_trailer_t trailer;
++    mach_msg_audit_trailer_t trailer;
 +} mach_register_message_t;
 +
 +typedef struct
@@ -1939,6 +2007,12 @@ diff --git a/server/msync.c b/server/msync.c
 +    mach_msg_body_t body;
 +    mach_msg_port_descriptor_t descriptor;
 +} mach_map_message_reply_t;
++
++typedef struct
++{
++    mach_msg_header_t header;
++    unsigned int count;
++} mach_release_message_t;
 +
 +static void **shm_addrs;
 +static int shm_addrs_size;  /* length of the allocated shm_addrs array */
@@ -1957,9 +2031,9 @@ diff --git a/server/msync.c b/server/msync.c
 +        offset = (memory_object_offset_t)shm_tid_map;
 +        entry_size = shm_tid_size;
 +    }
-+    else if (message->entry < shm_addrs_size)
++    else if (message->entry >= 0 && message->entry < shm_addrs_size)
 +    {
-+        offset = (memory_object_offset_t)shm_addrs[message->entry];
++        offset = (memory_object_offset_t)__atomic_load_n( &shm_addrs[message->entry], __ATOMIC_ACQUIRE );
 +        entry_size = pagesize;
 +    }
 +    else
@@ -2028,44 +2102,65 @@ diff --git a/server/msync.c b/server/msync.c
 +{
 +    int low;
 +    int high;
-+    unsigned short msync_type;
-+    unsigned short refcount;
++    unsigned int msync_type;
++    unsigned int refcount;
 +    int multiple_waiters;
++    int reserved[3];
 +};
++C_ASSERT(sizeof(struct msync_shm) == MSYNC_SHM_SIZE);
 +
-+static unsigned int last_allocated_idx = 1;
-+static unsigned int last_destroyed_idx = UINT32_MAX;
++static unsigned int last_allocated_idx;
++/* One producer (message pump), one consumer (main thread); no ABA is possible
++ * because only the consumer can remove a node and only the producer can free it. */
++static unsigned int free_shm_head;
 +
-+static inline void destroy_all_internal( unsigned int shm_idx )
++static void destroy_all_internal( unsigned int shm_idx, unsigned int count )
 +{
 +    struct msync_shm *obj = get_shm( shm_idx );
-+    unsigned short refcount = __atomic_load_n( &obj->refcount, __ATOMIC_SEQ_CST );
++    unsigned int head, refcount = __atomic_load_n( &obj->refcount, __ATOMIC_SEQ_CST );
 +
-+    if (!refcount)
++    if (!count || count > refcount)
++        fatal_error( "msync: invalid release count %u for shared index %u (refs %u)\n",
++                     count, shm_idx, refcount );
++    if (__atomic_sub_fetch( &obj->refcount, count, __ATOMIC_SEQ_CST )) return;
++
++    /* A zero-reference slot has no live waiters. Discard registrations left
++     * behind by a terminated process before publishing the reusable index. */
 +    {
-+        fprintf( stderr, "msync: error: destroy_all on already destroyed shm idx %u with refcount %d\n", shm_idx, refcount );
-+        return;
++        struct tid_list *list = get_tid_list( shm_idx );
++        struct tid_node *node;
++        while ((node = list->head))
++        {
++            list->head = node->next;
++            pool_free( node );
++        }
 +    }
-+
-+    refcount = __atomic_sub_fetch( &obj->refcount, 1, __ATOMIC_SEQ_CST );
-+
-+    if (!refcount) last_destroyed_idx = shm_idx;
++    head = __atomic_load_n( &free_shm_head, __ATOMIC_ACQUIRE );
++    do
++    {
++        __atomic_store_n( &obj->low, head, __ATOMIC_RELAXED );
++    } while (!__atomic_compare_exchange_n( &free_shm_head, &head, shm_idx, 0,
++                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ));
 +}
 +
 +/*
 + * thread-safe sequentially consistent guarantees relative to register/unregister
 + * client-side are made by the mach messaging queue
 + */
-+static inline mach_msg_return_t destroy_all( unsigned int shm_idx )
++static void destroy_all( unsigned int shm_idx, unsigned int count )
 +{
-+    static mach_msg_header_t send_header;
-+    send_header.msgh_bits = MACH_MSGH_BITS_REMOTE(MACH_MSG_TYPE_COPY_SEND);
-+    send_header.msgh_id = shm_idx | (1 << 28);
-+    send_header.msgh_size = sizeof(send_header);
-+    send_header.msgh_remote_port = receive_port;
++    mach_release_message_t message = {0};
++    mach_msg_return_t ret;
 +
-+    return mach_msg2( &send_header, MACH_SEND_MSG, send_header.msgh_size,
-+                0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, 0);
++    message.header.msgh_bits = MACH_MSGH_BITS_REMOTE(MACH_MSG_TYPE_COPY_SEND);
++    message.header.msgh_id = shm_idx | (1u << 28);
++    message.header.msgh_size = sizeof(message);
++    message.header.msgh_remote_port = receive_port;
++    message.count = count;
++    ret = mach_msg2( &message.header, MACH_SEND_MSG, sizeof(message),
++                     0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, 0 );
++    if (ret != MACH_MSG_SUCCESS)
++        fatal_error( "msync: cannot queue shared object release: %#x\n", ret );
 +}
 +
 +static inline mach_msg_return_t signal_all( unsigned int shm_idx, int *shm )
@@ -2088,7 +2183,9 @@ diff --git a/server/msync.c b/server/msync.c
 +
 +static inline mach_msg_return_t receive_mach_msg( mach_register_message_t *buffer )
 +{
-+    return mach_msg2( (mach_msg_header_t *)buffer, MACH_RCV_MSG, 0,
++    return mach_msg2( (mach_msg_header_t *)buffer,
++            MACH_RCV_MSG | MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
++            MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT), 0,
 +            sizeof(*buffer), receive_port, MACH_MSG_TIMEOUT_NONE, 0 );
 +}
 +
@@ -2125,6 +2222,9 @@ diff --git a/server/msync.c b/server/msync.c
 +            fprintf( stderr, "msync: failed to receive message\n");
 +            continue;
 +        }
++        if (receive_message.header.msgh_size < sizeof(mach_msg_header_t) ||
++            receive_message.header.msgh_size > offsetof(mach_register_message_t, trailer))
++            continue;
 +
 +        /*
 +         * A complex mach message, where the client expects a reply,
@@ -2136,17 +2236,27 @@ diff --git a/server/msync.c b/server/msync.c
 +            continue;
 +        }
 +
-+        /*
-+         * A message with no body is a signal_all or destroy_all operation where the shm_idx
-+         * is the msgh_id and the type of operation is decided by the 29th bit.
-+         * (The shared memory index is only a 28-bit integer at max)
-+         * See signal_all( unsigned int shm_idx ) and destroy_all( unsigned int shm_idx )above.
-+         */
++        /* Only wineserver may decrement shared references. The kernel supplies
++         * this trailer; an untrusted client cannot impersonate the server by
++         * putting a PID or release count in its message payload. */
++        if (receive_message.header.msgh_size == sizeof(mach_release_message_t) &&
++            ((unsigned int)receive_message.header.msgh_id & (1u << 28)))
++        {
++            mach_msg_audit_trailer_t *trailer = (void *)((char *)&receive_message +
++                                                       round_msg(receive_message.header.msgh_size));
++            if (trailer->msgh_trailer_type == MACH_MSG_TRAILER_FORMAT_0 &&
++                trailer->msgh_trailer_size >= sizeof(*trailer) &&
++                !memcmp( &trailer->msgh_audit, &server_audit_token, sizeof(server_audit_token) ))
++            {
++                mach_release_message_t *message = (void *)&receive_message;
++                destroy_all_internal( message->header.msgh_id & (MSYNC_MAX_OBJECTS - 1), message->count );
++                continue;
++            }
++        }
++
 +        if (receive_message.header.msgh_size == sizeof(mach_msg_header_t))
 +        {
-+            if (check_bit( 28, (unsigned int *)&receive_message.header.msgh_id ))
-+                destroy_all_internal( receive_message.header.msgh_id );
-+            else
++            if ((unsigned int)receive_message.header.msgh_id < MSYNC_MAX_OBJECTS)
 +                signal_all_internal( receive_message.header.msgh_id );
 +            continue;
 +        }
@@ -2155,6 +2265,9 @@ diff --git a/server/msync.c b/server/msync.c
 +         * Finally server_register_wait and server_unregister_wait
 +         */
 +        decode_msgh_id( receive_message.header.msgh_id, &tid, &count );
++        if (!count || count > MAXIMUM_WAIT_OBJECTS + 1 ||
++            receive_message.header.msgh_size != sizeof(mach_msg_header_t) + count * sizeof(unsigned int))
++            continue;
 +        for (i = 0; i < count; i++)
 +        {
 +            if (i == 0 && check_bit( 29, receive_message.shm_idx + i ))
@@ -2239,8 +2352,9 @@ diff --git a/server/msync.c b/server/msync.c
 +
 +    pagesize = (long)vm_kernel_page_size;
 +
-+    shm_addrs = calloc( 128, sizeof(shm_addrs[0]) );
-+    shm_addrs_size = 128;
++    shm_addrs_size = MSYNC_MAX_OBJECTS >> (vm_kernel_page_shift - MSYNC_SHM_SHIFT);
++    if (!(shm_addrs = calloc( shm_addrs_size, sizeof(*shm_addrs) )))
++        fatal_error( "msync: cannot reserve shared page table\n" );
 +
 +    kr = mach_vm_map( mach_task_self(), (mach_vm_address_t *)&shm_tid_map, shm_tid_size, 0, VM_FLAGS_ANYWHERE,
 +                      MACH_PORT_NULL, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_DEFAULT, VM_INHERIT_SHARE );
@@ -2260,9 +2374,12 @@ diff --git a/server/msync.c b/server/msync.c
 +    void *dlhandle;
 +    pthread_t message_thread;
 +    char message_port_name[28];
++    mach_msg_type_number_t audit_count = TASK_AUDIT_TOKEN_COUNT;
 +
 +    if (!do_msync()) return;
 +    dlhandle = dlopen( NULL, RTLD_NOW );
++    MACH_CHECK_ERROR( task_info( mach_task_self(), TASK_AUDIT_TOKEN,
++                                (task_info_t)&server_audit_token, &audit_count ), "TASK_AUDIT_TOKEN" );
 +
 +    if (fstat( config_dir_fd, &st ) == -1)
 +        fatal_error( "cannot stat config dir\n" );
@@ -2320,72 +2437,65 @@ diff --git a/server/msync.c b/server/msync.c
 +        list_remove( &msync->mutex_entry );
 +    if (!msync->shm_idx) return;
 +
-+    destroy_all( msync->shm_idx );
++    destroy_all( msync->shm_idx, 1 );
 +    free( msync );
 +}
 +
 +static void *get_shm( unsigned int idx )
 +{
-+    int entry  = (idx * 16) / pagesize;
-+    int offset = (idx * 16) % pagesize;
++    unsigned int entry = idx >> (vm_kernel_page_shift - MSYNC_SHM_SHIFT);
++    unsigned int offset = (idx << MSYNC_SHM_SHIFT) & vm_kernel_page_mask;
++    void *addr;
 +
-+    if (entry >= shm_addrs_size)
++    if (idx >= MSYNC_MAX_OBJECTS)
++        fatal_error( "msync: invalid shared object index %u\n", idx );
++    if (!(addr = __atomic_load_n( &shm_addrs[entry], __ATOMIC_ACQUIRE )))
 +    {
-+        int new_size = max(shm_addrs_size * 2, entry + 1);
-+
-+        if (!(shm_addrs = realloc( shm_addrs, new_size * sizeof(shm_addrs[0]) )))
-+            fprintf( stderr, "msync: couldn't expand shm_addrs array to size %d\n", entry + 1 );
-+
-+        memset( shm_addrs + shm_addrs_size, 0, (new_size - shm_addrs_size) * sizeof(shm_addrs[0]) );
-+
-+        shm_addrs_size = new_size;
++        mach_vm_address_t address = 0;
++        void *expected = NULL;
++        MACH_CHECK_ERROR( mach_vm_map( mach_task_self(), &address, pagesize, 0, VM_FLAGS_ANYWHERE,
++                                      MACH_PORT_NULL, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_DEFAULT,
++                                      VM_INHERIT_SHARE ), "mach_vm_map" );
++        addr = (void *)address;
++        if (!__atomic_compare_exchange_n( &shm_addrs[entry], &expected, addr, 0,
++                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ))
++        {
++            mach_vm_deallocate( mach_task_self(), address, pagesize );
++            addr = expected;
++        }
++        if (debug_level) fprintf( stderr, "msync: Mapping page %u at %p.\n", entry, addr );
 +    }
-+
-+    if (!shm_addrs[entry])
-+    {
-+        kern_return_t kr;
-+        mach_vm_address_t address;
-+
-+        kr = mach_vm_map( mach_task_self(), (mach_vm_address_t *)&address, (mach_vm_size_t)pagesize, 0, VM_FLAGS_ANYWHERE,
-+                          MACH_PORT_NULL, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_DEFAULT, VM_INHERIT_SHARE );
-+        MACH_CHECK_ERROR( kr, "mach_vm_map" );
-+        memset( (void *)address, 0, pagesize );
-+
-+        if (debug_level)
-+            fprintf( stderr, "msync: Mapping page %d at %llu.\n", entry, address );
-+
-+        if (__sync_val_compare_and_swap( &shm_addrs[entry], 0, (void *)address ))
-+            mach_vm_deallocate( mach_task_self(), address, pagesize ); /* someone beat us to it */
-+    }
-+
-+    return (void *)((unsigned long)shm_addrs[entry] + offset);
++    return (char *)addr + offset;
 +}
 +
 +static unsigned int msync_alloc_shm( int low, int high, enum msync_type type )
 +{
-+    unsigned int shm_idx;
++    unsigned int shm_idx = __atomic_load_n( &free_shm_head, __ATOMIC_ACQUIRE );
 +    struct msync_shm *shm;
 +
-+    shm_idx = min( last_destroyed_idx, last_allocated_idx + 1 );
-+
-+    for(;;)
++    while (shm_idx)
 +    {
++        unsigned int next;
 +        shm = get_shm( shm_idx );
-+        if (!__atomic_load_n( &shm->refcount, __ATOMIC_SEQ_CST ))
-+            break;
-+
-+        shm_idx++;
++        next = __atomic_load_n( &shm->low, __ATOMIC_RELAXED );
++        if (__atomic_compare_exchange_n( &free_shm_head, &shm_idx, next, 0,
++                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE )) break;
 +    }
-+
-+    last_allocated_idx = shm_idx;
-+
-+    assert(shm);
++    if (!shm_idx)
++    {
++        if (last_allocated_idx == MSYNC_MAX_OBJECTS - 1)
++        {
++            set_error( STATUS_NO_MEMORY );
++            return 0;
++        }
++        shm_idx = ++last_allocated_idx;
++        shm = get_shm( shm_idx );
++    }
 +    shm->low = low;
 +    shm->high = high;
 +    shm->msync_type = type;
 +    shm->multiple_waiters = 0;
 +    __atomic_store_n( &shm->refcount, 1, __ATOMIC_SEQ_CST );
-+
 +    return shm_idx;
 +}
 +
@@ -2395,7 +2505,11 @@ diff --git a/server/msync.c b/server/msync.c
 +
 +    if (msync)
 +    {
-+        msync->shm_idx = msync_alloc_shm( low, high, type );
++        if (!(msync->shm_idx = msync_alloc_shm( low, high, type )))
++        {
++            free( msync );
++            return NULL;
++        }
 +        if (type == MSYNC_MUTEX)
 +            list_add_tail( &mutex_list, &msync->mutex_entry );
 +    }
@@ -2408,10 +2522,12 @@ diff --git a/server/msync.c b/server/msync.c
 +{
 +    int signaled;
 +    int unused;
-+    unsigned short msync_type;
-+    unsigned short refcount;
++    unsigned int msync_type;
++    unsigned int refcount;
 +    int multiple_waiters;
++    int reserved[3];
 +};
++C_ASSERT(sizeof(struct msync_event) == MSYNC_SHM_SIZE);
 +
 +void msync_set_event( struct msync *msync )
 +{
@@ -2432,10 +2548,12 @@ diff --git a/server/msync.c b/server/msync.c
 +{
 +    int tid;
 +    int count;  /* recursion count */
-+    unsigned short msync_type;
-+    unsigned short refcount;
++    unsigned int msync_type;
++    unsigned int refcount;
 +    int multiple_waiters;
++    int reserved[3];
 +};
++C_ASSERT(sizeof(struct mutex) == MSYNC_SHM_SIZE);
 +
 +void msync_abandon_mutexes( thread_id_t tid )
 +{
@@ -2457,14 +2575,98 @@ diff --git a/server/msync.c b/server/msync.c
 +    }
 +}
 +
-+void msync_grab_object( struct msync *msync )
++struct msync_ref
++{
++    struct rb_entry entry;
++    unsigned int shm_idx;
++    unsigned int count;
++};
++
++static int compare_msync_ref( const void *key, const struct rb_entry *entry )
++{
++    const struct msync_ref *ref = RB_ENTRY_VALUE( entry, struct msync_ref, entry );
++    unsigned int idx = *(const unsigned int *)key;
++    return idx < ref->shm_idx ? -1 : idx > ref->shm_idx;
++}
++
++int msync_grab_object( struct msync *msync, struct process *process )
 +{
 +    struct msync_shm *obj = get_shm( msync->shm_idx );
++    struct rb_entry *entry;
++    struct msync_ref *ref;
 +
++    /* Only the main server thread increments references; the pump only drops
++     * them. This checked increment cannot wrap while the pump runs. */
++    if (__atomic_load_n( &obj->refcount, __ATOMIC_SEQ_CST ) == UINT_MAX)
++    {
++        set_error( STATUS_TOO_MANY_OPENED_FILES );
++        return 0;
++    }
++    if (!process->msync_refs)
++    {
++        if (!(process->msync_refs = mem_alloc( sizeof(*process->msync_refs) ))) return 0;
++        rb_init( process->msync_refs, compare_msync_ref );
++    }
++    if ((entry = rb_get( process->msync_refs, &msync->shm_idx )))
++        ref = RB_ENTRY_VALUE( entry, struct msync_ref, entry );
++    else
++    {
++        if (!(ref = mem_alloc( sizeof(*ref) ))) return 0;
++        ref->shm_idx = msync->shm_idx;
++        ref->count = 0;
++        rb_put( process->msync_refs, &ref->shm_idx, &ref->entry );
++    }
++    ref->count++;
 +    __atomic_fetch_add( &obj->refcount, 1, __ATOMIC_SEQ_CST );
++    return 1;
++}
++
++DECL_HANDLER(close_msync)
++{
++    struct process *process = current->process;
++    struct rb_entry *entry;
++    struct msync_ref *ref;
++
++    if (!process->msync_refs || !(entry = rb_get( process->msync_refs, &req->shm_idx )))
++    {
++        set_error( STATUS_INVALID_HANDLE );
++        return;
++    }
++    ref = RB_ENTRY_VALUE( entry, struct msync_ref, entry );
++    destroy_all( ref->shm_idx, 1 );
++    if (!--ref->count)
++    {
++        rb_remove( process->msync_refs, entry );
++        free( ref );
++    }
++}
++
++static void release_process_ref( struct rb_entry *entry, void *context )
++{
++    struct msync_ref *ref = RB_ENTRY_VALUE( entry, struct msync_ref, entry );
++    destroy_all( ref->shm_idx, ref->count );
++    free( ref );
++}
++
++void msync_release_process( struct process *process )
++{
++    if (!process->msync_refs) return;
++    rb_destroy( process->msync_refs, release_process_ref, NULL );
++    free( process->msync_refs );
++    process->msync_refs = NULL;
 +}
 +
 +#else /* __APPLE__ */
++
++#include "config.h"
++#include <stdarg.h>
++#include <stdio.h>
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winternl.h"
++#include "request.h"
++#include "msync.h"
 +
 +int do_msync(void)
 +{
@@ -2479,11 +2681,20 @@ diff --git a/server/msync.c b/server/msync.c
 +{
 +}
 +
++void msync_release_process( struct process *process )
++{
++}
++
++DECL_HANDLER(close_msync)
++{
++    set_error( STATUS_NOT_IMPLEMENTED );
++}
++
 +#endif /* __APPLE__ */
 diff --git a/server/msync.h b/server/msync.h
 --- /dev/null
 +++ b/server/msync.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,58 @@
 +/*
 + * mach semaphore-based synchronization objects
 + *
@@ -2508,6 +2719,13 @@ diff --git a/server/msync.h b/server/msync.h
 +extern int do_msync(void);
 +extern void msync_init_shm(void);
 +extern void msync_init(void);
++struct process;
++extern void msync_release_process( struct process *process );
++
++/* Index bits 28 and 29 are reserved by the Mach message protocol. */
++#define MSYNC_MAX_OBJECTS (1u << 28)
++#define MSYNC_SHM_SHIFT 5
++#define MSYNC_SHM_SIZE (1u << MSYNC_SHM_SHIFT)
 +
 +#ifdef __APPLE__
 +
@@ -2528,13 +2746,67 @@ diff --git a/server/msync.h b/server/msync.h
 +};
 +
 +extern struct msync *create_msync( int low, int high, enum msync_type type );
-+extern void msync_grab_object( struct msync *msync );
++extern int msync_grab_object( struct msync *msync, struct process *process );
 +extern void msync_destroy( struct msync *msync );
 +extern void msync_set_event( struct msync *msync );
 +extern void msync_reset_event( struct msync *msync );
 +extern void msync_abandon_mutexes( thread_id_t tid );
 +
 +#endif /* __APPLE__ */
+diff --git a/server/process.c b/server/process.c
+--- a/server/process.c
++++ b/server/process.c
+@@ -64,6 +64,7 @@
+ #include "request.h"
+ #include "user.h"
+ #include "security.h"
++#include "msync.h"
+ 
+ /* process object */
+ 
+@@ -610,6 +611,7 @@
+ static void process_died( struct process *process )
+ {
+     if (debug_level) fprintf( stderr, "%04x: *process killed*\n", process->id );
++    msync_release_process( process );
+     if (!process->is_system)
+     {
+         if (!--user_processes && !shutdown_stage && master_socket_timeout != TIMEOUT_INFINITE)
+@@ -692,6 +694,7 @@
+     process->idle_event      = NULL;
+     process->peb             = 0;
+     process->dir_cache       = NULL;
++    process->msync_refs      = NULL;
+     process->winstation      = 0;
+     process->desktop         = 0;
+     process->token           = NULL;
+@@ -785,6 +788,7 @@
+     assert( !process->sigkill_timeout );  /* timeout should hold a reference to the process */
+ 
+     close_process_handles( process );
++    msync_release_process( process );
+     set_process_startup_state( process, STARTUP_ABORTED );
+ 
+     if (process->job)
+diff --git a/server/process.h b/server/process.h
+--- a/server/process.h
++++ b/server/process.h
+@@ -27,6 +27,7 @@
+ struct handle_table;
+ struct startup_info;
+ struct job;
++struct rb_tree;
+ 
+ /* process startup state */
+ enum startup_state { STARTUP_IN_PROGRESS, STARTUP_DONE, STARTUP_ABORTED };
+@@ -81,6 +82,7 @@
+     struct list          views;           /* list of memory views */
+     client_ptr_t         peb;             /* PEB address in client address space */
+     struct dir_cache    *dir_cache;       /* map of client-side directory cache */
++    struct rb_tree      *msync_refs;      /* process-owned shared sync references */
+     unsigned int         trace_data;      /* opaque data used by the process tracing mechanism */
+     struct rawinput_device *rawinput_devices;     /* list of registered rawinput devices */
+     unsigned int         rawinput_device_count;   /* number of registered rawinput devices */
 diff --git a/server/protocol.def b/server/protocol.def
 --- a/server/protocol.def
 +++ b/server/protocol.def
@@ -2546,10 +2818,38 @@ diff --git a/server/protocol.def b/server/protocol.def
  @END
  
  
+@@ -4178,6 +4179,11 @@
+ @REQ(get_inproc_alert_fd)
+ @REPLY
+     obj_handle_t handle;        /* alert fd is in flight with this handle */
++@END
++
++/* Release one process-owned in-process synchronization cache reference. */
++@REQ(close_msync)
++    unsigned int shm_idx;       /* authenticated by the request connection */
+ @END
+ 
+ 
 diff --git a/server/request_handlers.h b/server/request_handlers.h
 --- a/server/request_handlers.h
 +++ b/server/request_handlers.h
-@@ -2316,7 +2316,8 @@
+@@ -305,6 +305,7 @@
+ DECL_HANDLER(set_keyboard_repeat);
+ DECL_HANDLER(get_inproc_sync_fd);
+ DECL_HANDLER(get_inproc_alert_fd);
++DECL_HANDLER(close_msync);
+ DECL_HANDLER(d3dkmt_object_create);
+ DECL_HANDLER(d3dkmt_object_update);
+ DECL_HANDLER(d3dkmt_object_query);
+@@ -615,6 +616,7 @@
+     (req_handler)req_set_keyboard_repeat,
+     (req_handler)req_get_inproc_sync_fd,
+     (req_handler)req_get_inproc_alert_fd,
++    (req_handler)req_close_msync,
+     (req_handler)req_d3dkmt_object_create,
+     (req_handler)req_d3dkmt_object_update,
+     (req_handler)req_d3dkmt_object_query,
+@@ -2316,10 +2318,13 @@
  C_ASSERT( sizeof(struct get_inproc_sync_fd_request) == 16 );
  C_ASSERT( offsetof(struct get_inproc_sync_fd_reply, type) == 8 );
  C_ASSERT( offsetof(struct get_inproc_sync_fd_reply, access) == 12 );
@@ -2559,6 +2859,11 @@ diff --git a/server/request_handlers.h b/server/request_handlers.h
  C_ASSERT( sizeof(struct get_inproc_alert_fd_request) == 16 );
  C_ASSERT( offsetof(struct get_inproc_alert_fd_reply, handle) == 8 );
  C_ASSERT( sizeof(struct get_inproc_alert_fd_reply) == 16 );
++C_ASSERT( offsetof(struct close_msync_request, shm_idx) == 12 );
++C_ASSERT( sizeof(struct close_msync_request) == 16 );
+ C_ASSERT( offsetof(struct d3dkmt_object_create_request, type) == 12 );
+ C_ASSERT( offsetof(struct d3dkmt_object_create_request, fd) == 16 );
+ C_ASSERT( offsetof(struct d3dkmt_object_create_request, value) == 20 );
 diff --git a/server/request_trace.h b/server/request_trace.h
 --- a/server/request_trace.h
 +++ b/server/request_trace.h
@@ -2570,6 +2875,42 @@ diff --git a/server/request_trace.h b/server/request_trace.h
  }
  
  static void dump_get_inproc_alert_fd_request( const struct get_inproc_alert_fd_request *req )
+@@ -3404,6 +3405,11 @@
+ static void dump_get_inproc_alert_fd_reply( const struct get_inproc_alert_fd_reply *req )
+ {
+     fprintf( stderr, " handle=%04x", req->handle );
++}
++
++static void dump_close_msync_request( const struct close_msync_request *req )
++{
++    fprintf( stderr, " shm_idx=%08x", req->shm_idx );
+ }
+ 
+ static void dump_d3dkmt_object_create_request( const struct d3dkmt_object_create_request *req )
+@@ -3810,6 +3816,7 @@
+     (dump_func)dump_set_keyboard_repeat_request,
+     (dump_func)dump_get_inproc_sync_fd_request,
+     (dump_func)dump_get_inproc_alert_fd_request,
++    (dump_func)dump_close_msync_request,
+     (dump_func)dump_d3dkmt_object_create_request,
+     (dump_func)dump_d3dkmt_object_update_request,
+     (dump_func)dump_d3dkmt_object_query_request,
+@@ -4120,6 +4127,7 @@
+     (dump_func)dump_set_keyboard_repeat_reply,
+     (dump_func)dump_get_inproc_sync_fd_reply,
+     (dump_func)dump_get_inproc_alert_fd_reply,
++    NULL,
+     (dump_func)dump_d3dkmt_object_create_reply,
+     NULL,
+     (dump_func)dump_d3dkmt_object_query_reply,
+@@ -4430,6 +4438,7 @@
+     "set_keyboard_repeat",
+     "get_inproc_sync_fd",
+     "get_inproc_alert_fd",
++    "close_msync",
+     "d3dkmt_object_create",
+     "d3dkmt_object_update",
+     "d3dkmt_object_query",
 diff --git a/server/thread.c b/server/thread.c
 --- a/server/thread.c
 +++ b/server/thread.c

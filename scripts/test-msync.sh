@@ -60,7 +60,7 @@ def terminate_group(process):
     process.wait(timeout=10)
 
 
-def run(command, env, log, timeout, show=False):
+def run(command, env, log, timeout, show=False, expect_failure=False):
     print("+ " + " ".join(map(str, command)), flush=True)
     with log.open("wb") as output:
         process = subprocess.Popen(list(map(str, command)), env=env, stdout=output,
@@ -73,7 +73,9 @@ def run(command, env, log, timeout, show=False):
     text = log.read_text(errors="replace")
     if show or result:
         print(text[-65536:], end="" if text.endswith("\n") else "\n", flush=True)
-    if result:
+    if expect_failure and result == 0:
+        raise RuntimeError(f"command unexpectedly succeeded; log: {log.name}")
+    if not expect_failure and result:
         raise RuntimeError(f"command exited {result}; log: {log.name}")
     return text
 
@@ -109,13 +111,22 @@ def session(work, bits, mode):
         command = [wine, work / f"msync{bits}.exe"]
         if args.benchmark:
             command.append("--benchmark")
-        output = run(command, env, test_log, 300 if args.benchmark else 180, show=True)
+        output = run(command, env, test_log, 240, show=True)
         expected = f"PASS: MagicWine MSync synchronization regression ({bits}-bit)"
         if expected not in output:
             raise RuntimeError("test executable did not report completion for the requested ABI")
         require_backend(mode, (server_log, boot_log, test_log))
         print(f"PASS backend startup evidence: WINEMSYNC={mode}, marker "
               + ("present" if mode else "absent"), flush=True)
+        mismatch_log = directory / "mismatch.log"
+        mismatched_env = dict(env, WINEMSYNC=str(1 - mode))
+        mismatch = run([wine, "cmd", "/c", "exit", "0"], mismatched_env, mismatch_log, 30,
+                       expect_failure=True)
+        if "WINEMSYNC mismatch" not in mismatch:
+            raise RuntimeError("opposite-mode client failed without the required WINEMSYNC mismatch diagnostic")
+        run([wine, "cmd", "/c", "exit", "0"], env, directory / "after-mismatch.log", 30)
+        require_backend(mode, (server_log, boot_log, test_log, mismatch_log))
+        print(f"PASS live-server mode mismatch rejection and original WINEMSYNC={mode} recovery", flush=True)
     except BaseException:
         failed = True
         raise
