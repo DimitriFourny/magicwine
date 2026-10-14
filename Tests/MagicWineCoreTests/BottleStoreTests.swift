@@ -323,6 +323,49 @@ struct BottleStoreTests {
         #expect(try await BottleStore(paths: paths).list().first?.programs == expected)
     }
 
+    @Test func legacyDisplayMigrationPreservesExplicitSettingsAndUpgradesUnconfiguredBottles() async throws {
+        let (paths, store) = try fixture()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let cases: [(String, DisplayConfiguration)] = [
+            ("", .init()),
+            ("[Software\\\\Wine\\\\Mac Driver]\n\"RetinaMode\"=\"n\"\n", .init(retinaEnabled: false)),
+            ("[Control Panel\\\\Desktop]\n\"LogPixels\"=dword:00000090\n",
+             .init(retinaEnabled: false, dpi: 144))
+        ]
+        for (registry, expected) in cases {
+            let bottle = try await store.create(name: "Legacy", runtime: runtime)
+            let prefix = store.prefixURL(for: bottle)
+            let metadata = prefix.deletingLastPathComponent().appendingPathComponent("bottle.json")
+            var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: metadata)) as? [String: Any])
+            json.removeValue(forKey: "display")
+            try JSONSerialization.data(withJSONObject: json).write(to: metadata, options: .atomic)
+            try Data(("WINE REGISTRY Version 2\n\n" + registry).utf8).write(to: prefix.appendingPathComponent("user.reg"))
+            let migrated = try await store.current(bottle)
+            #expect(migrated.display == expected)
+            _ = try await store.prepareDisplay(migrated)
+            let reopened = BottleStore(paths: paths)
+            #expect(try await reopened.current(bottle).display == expected)
+            #expect(try !BottleDisplay.needsUpdate(expected, prefix: prefix))
+        }
+    }
+
+    @Test func unrelatedStaleSavesCannotReenableDisabledRetina() async throws {
+        let (paths, store) = try fixture()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let original = try await store.create(name: "Display", runtime: runtime)
+        let disabled = try await store.prepareDisplay(original, configuration: .init(retinaEnabled: false))
+        var stale = original
+        stale.name = "Stale rename"
+        await #expect(throws: MagicWineError.self) { try await store.save(stale) }
+        let loaded = try await store.current(original)
+        #expect(loaded.name == original.name)
+        #expect(loaded.display == disabled.display)
+        var renamed = loaded
+        renamed.name = "Fresh rename"
+        try await store.save(renamed)
+        #expect(try await BottleStore(paths: paths).current(original).display.retinaEnabled == false)
+    }
+
     @Test func alteredBottleIdentityIsRejectedInsteadOfOverwritingMetadata() async throws {
         let (paths, store) = try fixture()
         defer { try? FileManager.default.removeItem(at: paths.root) }

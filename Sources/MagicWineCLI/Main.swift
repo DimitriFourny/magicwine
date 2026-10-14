@@ -52,7 +52,7 @@ struct MagicWineCLI {
             bottle.isInitialized = true
             try await store.save(bottle)
             print("Ready. Log: \(result.logURL.path)")
-        case "initialize", "install", "add", "refresh", "apps", "launch", "stop", "configure", "graphics", "exec":
+        case "initialize", "install", "add", "refresh", "apps", "launch", "stop", "configure", "graphics", "retina", "exec":
             guard let identifier = values.first else { throw argumentError("\(command) <bottle-UUID> …") }
             let bottle = try await findBottle(identifier, store: store)
             let rest = Array(values.dropFirst())
@@ -81,6 +81,17 @@ struct MagicWineCLI {
                 print("Log: \(try await runtime.launch(program, in: bottle).logURL.path)")
             case "stop": print("Log: \(try await runtime.stop(bottle).logURL.path)")
             case "configure": print("Log: \(try await runtime.configure(bottle).logURL.path)")
+            case "retina":
+                guard rest.isEmpty || (rest.count == 1 && ["on", "off"].contains(rest[0])) else {
+                    throw argumentError("retina <bottle-UUID> [on|off]")
+                }
+                let updated: Bottle
+                if let setting = rest.first {
+                    updated = try await runtime.configureDisplay(retinaEnabled: setting == "on", in: bottle)
+                } else {
+                    updated = bottle
+                }
+                print("Retina \(updated.display.retinaEnabled ? "on" : "off")\t\(updated.display.dpi) DPI")
             case "graphics":
                 if rest.isEmpty {
                     print("\(bottle.graphics.backend.rawValue)\t\(bottle.graphics.componentID ?? "Wine default")\tHUD \(bottle.graphics.showHUD ? "on" : "off")")
@@ -160,6 +171,9 @@ struct MagicWineCLI {
       graphics <bottle-UUID> [standard|dxvk|dxmt|d3dmetal]
         Third-party backends require --accept-experimental; optional --hud or --no-hud
         D3DMetal finds local Wine/CrossOver libraries; --import <library-folder> overrides discovery
+      retina <bottle-UUID> [on|off]              Read or change Retina / HiDPI (default on)
+        On sets 200% scaling (192 DPI); off sets 100% (96 DPI)
+        Bottle-wide changes affect games too and stop this bottle’s Windows processes
       exec <bottle-UUID> <wine-arguments…>       Run Wine with isolated prefix
     """
 }

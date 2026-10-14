@@ -85,6 +85,17 @@ struct GraphicsSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Toggle("Retina / HiDPI", isOn: Binding(
+                get: { currentBottle.display.retinaEnabled },
+                set: { enabled in
+                    guard !unavailable else { return }
+                    model.setRetinaEnabled(enabled, in: currentBottle)
+                }
+            ))
+            .disabled(unavailable)
+            Text("Enabled by default for sharper desktop apps. Turning Retina on sets 200% scaling; turning it off sets 100%. This bottle-wide setting affects games too and requires stopping Windows programs.")
+                .font(.caption).foregroundStyle(.secondary)
+
             if !currentBottle.isInitialized {
                 Text("Finish bottle setup before changing graphics.")
                     .font(.caption).foregroundStyle(.secondary)

@@ -62,6 +62,9 @@ public actor BottleStore {
             guard bottle.graphics == current.graphics else {
                 throw MagicWineError.setup("Graphics settings must be changed through WineRuntime.configureGraphics.")
             }
+            guard bottle.display == current.display else {
+                throw MagicWineError.setup("Display settings must be changed through WineRuntime.configureDisplay.")
+            }
             var normalized = bottle
             _ = normalizePrograms(in: &normalized)
             try saveUnlocked(normalized)
@@ -97,6 +100,38 @@ public actor BottleStore {
                                       bottleDirectory: directory, previousMetadata: previousData,
                                       nextMetadata: nextData) {
                 try nextData.write(to: metadata, options: .atomic)
+            }
+            return current
+        }
+    }
+
+    internal func displayNeedsUpdate(_ bottle: Bottle) throws -> Bool {
+        try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
+            let current = try loadUnlocked(bottle)
+            return try BottleDisplay.needsUpdate(current.display, prefix: prefixURL(for: current))
+        }
+    }
+
+    /// The runtime holds exclusive launch/lifetime leases and has waited for Wine to exit.
+    internal func prepareDisplay(_ bottle: Bottle, configuration: DisplayConfiguration? = nil) throws -> Bottle {
+        try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
+            var current = try loadUnlocked(bottle)
+            if let configuration { current.display = configuration }
+            let prefix = prefixURL(for: current)
+            // Validate before retaining the original bytes for a failed metadata commit.
+            _ = try BottleDisplay.needsUpdate(current.display, prefix: prefix)
+            let registry = prefix.appendingPathComponent("user.reg")
+            let previous = FileManager.default.fileExists(atPath: registry.path) ? try Data(contentsOf: registry) : nil
+            try BottleDisplay.apply(current.display, prefix: prefix)
+            do {
+                try saveUnlocked(current)
+            } catch {
+                if let previous {
+                    try previous.write(to: registry, options: .atomic)
+                } else {
+                    try FileManager.default.removeItem(at: registry)
+                }
+                throw error
             }
             return current
         }
@@ -213,6 +248,9 @@ public actor BottleStore {
         try validateOwnership(bottle)
         try GraphicsPrefix.recover(bottleDirectory: directoryURL(for: bottle))
         var current = try decoder.decode(Bottle.self, from: Data(contentsOf: directoryURL(for: bottle).appendingPathComponent("bottle.json")))
+        if !current.hasDisplayConfiguration {
+            current.display = try BottleDisplay.existingConfiguration(prefix: prefixURL(for: current)) ?? .init()
+        }
         if shouldNormalize { _ = normalizePrograms(in: &current) }
         return current
     }

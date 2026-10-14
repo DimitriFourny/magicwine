@@ -43,6 +43,16 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public struct DisplayConfiguration: Codable, Hashable, Sendable {
+    public var retinaEnabled: Bool
+    public var dpi: UInt32
+
+    public init(retinaEnabled: Bool = true, dpi: UInt32? = nil) {
+        self.retinaEnabled = retinaEnabled
+        self.dpi = dpi ?? (retinaEnabled ? 192 : 96)
+    }
+}
+
 public struct Bottle: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public var name: String
@@ -51,9 +61,16 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
     public var isInitialized: Bool
     public var programs: [WindowsProgram]
     public var graphics: GraphicsConfiguration
+    private var displayPreference: DisplayConfiguration?
+    public var display: DisplayConfiguration {
+        get { displayPreference ?? .init() }
+        set { displayPreference = newValue }
+    }
+    internal var hasDisplayConfiguration: Bool { displayPreference != nil }
 
     public init(id: UUID = UUID(), name: String, createdAt: Date = Date(), runtime: RuntimeDescriptor,
-                isInitialized: Bool = false, programs: [WindowsProgram] = [], graphics: GraphicsConfiguration = .init()) {
+                isInitialized: Bool = false, programs: [WindowsProgram] = [], graphics: GraphicsConfiguration = .init(),
+                display: DisplayConfiguration = .init()) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
@@ -61,10 +78,12 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
         self.isInitialized = isInitialized
         self.programs = programs
         self.graphics = graphics
+        self.displayPreference = display
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, createdAt, runtime, isInitialized, programs, graphics
+        case displayPreference = "display"
     }
 
     public init(from decoder: Decoder) throws {
@@ -80,6 +99,8 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
         } else {
             graphics = .init()
         }
+        displayPreference = container.contains(.displayPreference)
+            ? try container.decode(DisplayConfiguration.self, forKey: .displayPreference) : nil
     }
 }
 

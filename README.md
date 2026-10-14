@@ -34,6 +34,10 @@ The dark wine-themed library has a searchable bottle sidebar and dedicated **Gam
 
 **Bottle-local Desktop:** New bottles create a real Windows Desktop directory instead of linking to macOS Desktop. Existing bottles replace Desktop symlinks when refreshing shortcuts or before starting a Windows process. Only the link is removed: files on its former target are not moved, copied, or deleted, and existing bottle-local Desktop files are preserved. Other Wine folder mappings remain unchanged. Wine initialization and later `wineboot -u` retain the local Desktop.
 
+**Retina / HiDPI:** Each bottle's Graphics card has a backend-independent toggle, enabled by default for new bottles. On enables Wine's Retina mode with 200% Windows scaling (192 DPI); off uses non-Retina mode with 100% scaling (96 DPI). This lets desktop interfaces such as Steam render sharply on a Retina display without shrinking their controls. It applies to the whole bottle, including games; games that automatically select a higher resolution can increase GPU load.
+
+Existing bottles without an explicit Retina setting or non-default DPI adopt the new default before their next idle launch. Explicit Retina choices and custom DPI are preserved. Settings cannot change from the dashboard while Windows programs are running; exit them or use **Stop** first. Automatic migration never terminates running programs. MagicWine writes both registry values together only after Wine exits, retains the bottle's selected display configuration on subsequent launches, and leaves graphics backends, HUD settings, and DLLs unchanged.
+
 Only the current managed Wine is selected automatically. Discovery excludes obsolete managed installations. If a saved managed preference points to an older build, MagicWine selects the current build when installed; otherwise bottle creation asks you to **Install Wine** first. Other discovered Wine installations require an explicit choice under Advanced. An unavailable custom preference is not silently replaced with a different Wine.
 
 Managed Wine downloads show a progress bar, percentage, received/total size, and recent download speed. If the server does not supply a total size, the bar stays indeterminate while received bytes and speed still update. Checksum verification, extraction, preparation, and runtime inspection have separate status messages. An already-installed runtime is reused without displaying a fictitious download.
@@ -224,6 +228,16 @@ Graphics commands use the same reversible setup:
 ./dist/magicwine graphics <bottle-UUID> d3dmetal --accept-experimental --no-hud
 ./dist/magicwine graphics <bottle-UUID> standard
 ```
+
+Read or change display scaling independently of the graphics backend:
+
+```sh
+./dist/magicwine retina <bottle-UUID>
+./dist/magicwine retina <bottle-UUID> on
+./dist/magicwine retina <bottle-UUID> off
+```
+
+The read command shows the selected configuration, including a pending legacy default migration. Changes stop the bottle's Windows processes. Core clients use `WineRuntime.configureDisplay(retinaEnabled:in:)`; ordinary bottle saves cannot overwrite display settings.
 
 Core clients install with `WineRuntime.installRuntime(acceptUnsigned:progress:)`. The single managed runtime includes the DXMT driver bridge. Consent is required before filesystem changes; enabling DXMT separately validates its host and graphics requirements.
 

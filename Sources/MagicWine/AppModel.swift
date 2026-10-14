@@ -368,6 +368,26 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func setRetinaEnabled(_ enabled: Bool, in bottle: Bottle) {
+        guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
+              bottle.isInitialized else { return }
+        let state = activity(for: bottle)
+        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
+        let dpi: UInt32 = enabled ? 192 : 96
+        guard bottle.display.retinaEnabled != enabled || bottle.display.dpi != dpi else { return }
+
+        perform(in: bottle, title: "Changing display settings…") {
+            do {
+                let updated = try await self.wine.configureDisplay(retinaEnabled: enabled, in: bottle)
+                self.replace(updated)
+                return nil
+            } catch {
+                self.report(error, title: "Could Not Change Display Settings")
+                throw error
+            }
+        }
+    }
+
     // The graphics view asks for consent before enabling third-party backends.
     func setGraphics(_ backend: GraphicsBackend, in bottle: Bottle, showHUD: Bool = false,
                      componentSource: URL? = nil) {

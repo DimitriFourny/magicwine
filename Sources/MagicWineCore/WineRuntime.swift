@@ -9,7 +9,7 @@ public actor WineRuntime {
     private let store: BottleStore
     private var active: [UUID: [UUID: ProcessOperation]] = [:]
     private var installing = false
-    private var graphicsChanging: Set<UUID> = []
+    private var settingsChanging: Set<UUID> = []
     private var pendingLaunches: [UUID: [UUID: Task<GraphicsOperationLease, Error>]] = [:]
     private var installingGraphics: Set<GraphicsBackend> = []
 
@@ -200,6 +200,30 @@ public actor WineRuntime {
         try await execute(arguments: arguments, bottle: bottle, directory: nil, timeout: timeout)
     }
 
+    public func configureDisplay(retinaEnabled: Bool, in bottle: Bottle) async throws -> Bottle {
+        guard !settingsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Graphics or display setup is already in progress for this bottle.")
+        }
+        settingsChanging.insert(bottle.id)
+        defer { settingsChanging.remove(bottle.id) }
+        try paths.prepare()
+        let launch = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                              kind: .launch, exclusive: true)
+        defer { launch.release() }
+        let current = try await store.current(bottle)
+        guard current.isInitialized else {
+            throw MagicWineError.setup("Initialize this bottle before changing its display settings.")
+        }
+        let configuration = DisplayConfiguration(retinaEnabled: retinaEnabled)
+        if current.display == configuration, try await !store.displayNeedsUpdate(current) { return current }
+        _ = try await stopProcesses(current)
+        let lifetime = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                                kind: .lifetime, exclusive: true, timeout: .seconds(15))
+        defer { lifetime.release() }
+        try Task.checkCancellation()
+        return try await store.prepareDisplay(current, configuration: configuration)
+    }
+
     public func configureGraphics(_ backend: GraphicsBackend, in bottle: Bottle,
                                   showHUD: Bool = false, acceptExperimental: Bool = false,
                                   componentSource: URL? = nil,
@@ -210,16 +234,16 @@ public actor WineRuntime {
         guard componentSource == nil || backend == .d3dmetal else {
             throw MagicWineError.setup("A graphics library import folder is only supported for D3DMetal.")
         }
-        guard !graphicsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Graphics setup is already in progress for this bottle.")
+        guard !settingsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Graphics or display setup is already in progress for this bottle.")
         }
         guard backend == .standard || !installingGraphics.contains(backend) else {
             throw MagicWineError.setup("Another \(backend.displayName) installation is in progress. Wait for it to finish before configuring another bottle.")
         }
-        graphicsChanging.insert(bottle.id)
+        settingsChanging.insert(bottle.id)
         if backend != .standard { installingGraphics.insert(backend) }
         defer {
-            graphicsChanging.remove(bottle.id)
+            settingsChanging.remove(bottle.id)
             installingGraphics.remove(backend)
         }
         try paths.prepare()
@@ -284,13 +308,13 @@ public actor WineRuntime {
 
     private func execute(arguments: [String], bottle: Bottle, directory: URL?, timeout: TimeInterval?,
                          server: Bool = false, tracked: Bool = true) async throws -> OperationResult {
-        guard server || !graphicsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Wait for this bottle's graphics setup to finish before running Windows programs.")
+        guard server || !settingsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
         }
         try paths.prepare()
         let handoffID = UUID()
         let launchTask: Task<GraphicsOperationLease, Error>? = server ? nil : Task {
-            try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id, kind: .launch, exclusive: false)
+            try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id, kind: .launch, exclusive: true)
         }
         if let launchTask { pendingLaunches[bottle.id, default: [:]][handoffID] = launchTask }
         defer {
@@ -309,14 +333,11 @@ public actor WineRuntime {
             throw try pendingStop(bottle)
         }
         defer { launch?.release() }
-        let lifetime = server ? nil : try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
-                                                                               kind: .lifetime, exclusive: false)
-        defer { lifetime?.release() }
         let current = server ? bottle : try await store.current(bottle)
         try Task.checkCancellation()
         if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
-        guard server || !graphicsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Wait for this bottle's graphics setup to finish before running Windows programs.")
+        guard server || !settingsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
         }
         let prefix = try prefixURL(for: current)
         // The descriptor is pinned, never fall back to whichever Wine is in PATH today.
@@ -326,6 +347,27 @@ public actor WineRuntime {
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(executable.path). Select an intact Wine distribution; this bottle was not migrated.")
         }
+        if !server, try await store.displayNeedsUpdate(current) {
+            // Never rewrite a live wineserver's registry or terminate a game merely
+            // to adopt the new default. Explicit setting changes use Stop above.
+            do {
+                let displayLifetime = try await GraphicsOperationLease.acquire(
+                    paths: paths, bottleID: bottle.id, kind: .lifetime, exclusive: true, timeout: .seconds(1))
+                defer { displayLifetime.release() }
+                _ = try await execute(arguments: ["-w"], bottle: current, directory: nil,
+                                      timeout: 15, server: true, tracked: false)
+                try Task.checkCancellation()
+                if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
+                _ = try await store.prepareDisplay(current)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw MagicWineError.setup("Could not apply this bottle's Retina / HiDPI settings. Close its Windows programs or use Stop, then retry. \(error.localizedDescription)")
+            }
+        }
+        let lifetime = server ? nil : try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                                               kind: .lifetime, exclusive: false)
+        defer { lifetime?.release() }
         if !server {
             try GraphicsPrefix.withLock(bottleDirectory: prefix.deletingLastPathComponent()) {
                 try BottleDesktop.prepare(prefix: prefix)
