@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 exec python3 - "$ROOT" <<'PY'
 import gzip, hashlib, json, os, pathlib, shutil, subprocess, sys, tarfile, tempfile, zlib
 root = pathlib.Path(sys.argv[1])
-component = 'winemac-wine11.0-metal.4'
+component = 'winemac-wine11.0-metal.5'
 output = root / 'Sources/MagicWineCore/Resources'
 local = root / '.local'
 local.mkdir(exist_ok=True)
@@ -77,7 +77,7 @@ wpad_patch = root / 'patches/wine-wpad-macos.patch'
 wpad_patch_hash = '4742d98e57e4c61c0fe42dc8f5a3db52efa265c0c14f1b917b7f325ccd1e7a20'
 verify(wpad_patch,wpad_patch_hash)
 remote_patch = root / 'patches/wine-remote-metal.patch'
-remote_patch_hash = '043803695990c3bca11762edbe04f2ff025c426840222a0df21a1e6eee5ee689'
+remote_patch_hash = '8735c193f469dc9532e39d6f1df11b13c3fefb0be754ffc9a554a32ddaf652d4'
 verify(remote_patch,remote_patch_hash)
 inputs = work / 'source-inputs'
 inputs.mkdir()
