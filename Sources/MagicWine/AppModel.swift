@@ -144,8 +144,22 @@ final class AppModel: ObservableObject {
         Task { await discoverRuntimes() }
     }
 
-    func installWine() {
-        guard runtimeActivity == nil else { return }
+    // Call only after the view's unsigned-runtime trust confirmation.
+    func installWine(upgrading requestedBottle: Bottle? = nil) {
+        guard !isLoading, runtimeActivity == nil else { return }
+        let bottle: Bottle?
+        if let requestedBottle {
+            guard let current = bottles.first(where: { $0.id == requestedBottle.id }),
+                  canUpgradeRuntime(current) else { return }
+            var state = activity(for: current)
+            guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
+            state.title = "Updating Wine…"
+            state.error = nil
+            activities[current.id] = state
+            bottle = current
+        } else {
+            bottle = nil
+        }
         let installationID = UUID()
         self.installationID = installationID
         updateInstallationProgress(.preparing)
@@ -155,6 +169,11 @@ final class AppModel: ObservableObject {
                 self.installationID = nil
                 installationProgress = nil
                 runtimeActivity = nil
+                if let bottle {
+                    var state = activity(for: bottle)
+                    state.title = nil
+                    activities[bottle.id] = state
+                }
             }
             do {
                 let installed = try await wine.installRuntime(acceptUnsigned: true) { [weak self] progress in
@@ -164,10 +183,16 @@ final class AppModel: ObservableObject {
                     }
                 }
                 addRuntime(installed)
-                var updated = settings
-                updated.preferredRuntimePath = installed.executableURL.path
-                try await store.saveSettings(updated)
-                settings = updated
+                if let bottle {
+                    runtimeActivity = "Switching bottle to updated Wine…"
+                    let updated = try await wine.upgradeRuntime(in: bottle)
+                    replace(updated)
+                } else {
+                    var updated = settings
+                    updated.preferredRuntimePath = installed.executableURL.path
+                    try await store.saveSettings(updated)
+                    settings = updated
+                }
             } catch {
                 runtimeError = error.localizedDescription
             }
@@ -385,24 +410,6 @@ final class AppModel: ObservableObject {
                 return nil
             } catch {
                 self.report(error, title: "Could Not Change Synchronization")
-                throw error
-            }
-        }
-    }
-
-    func upgradeRuntime(in bottle: Bottle) {
-        guard !isLoading, runtimeActivity == nil,
-              let bottle = bottles.first(where: { $0.id == bottle.id }),
-              canUpgradeRuntime(bottle) else { return }
-        let state = activity(for: bottle)
-        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
-        perform(in: bottle, title: "Using updated Wine…") {
-            do {
-                let updated = try await self.wine.upgradeRuntime(in: bottle)
-                self.replace(updated)
-                return nil
-            } catch {
-                self.report(error, title: "Could Not Use Updated Wine")
                 throw error
             }
         }

@@ -116,12 +116,11 @@ struct GraphicsSettingsView: View {
             }
             if !model.supportsMSync(currentBottle) {
                 if model.canUpgradeRuntime(currentBottle) {
-                    Text("This bottle is pinned to older Wine without MSync. Install / Update Wine first, then choose Use Updated Wine below. Installing alone does not change this bottle.")
+                    Text("Update this bottle’s Wine to enable MSync. Downloads Wine if needed, then switches only this bottle; its files and settings are kept. Close Windows programs or use Stop first.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Use Updated Wine") { model.upgradeRuntime(in: currentBottle) }
-                        .disabled(synchronizationUnavailable || model.runtimeActivity != nil)
+                    WineInstallationView(model: model, bottle: currentBottle)
                 } else {
-                    Text("MSync is unavailable for this custom Wine runtime. Its synchronization settings are unchanged. To use MSync, install MagicWine’s updated managed Wine and create a bottle with it.")
+                    Text("MSync is unavailable for this custom Wine runtime. Its synchronization settings are unchanged. To use MSync, choose Install / Update Wine in Downloads and create a bottle with it.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

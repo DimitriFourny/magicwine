@@ -159,7 +159,7 @@ private struct LibraryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Downloads").font(.system(size: 32, weight: .semibold, design: .serif))
-                Text("Install and manage the Wine runtime for your next bottle.")
+                Text("Install Wine for new bottles. To update an existing bottle, use Update Wine in its dashboard.")
                     .foregroundStyle(WineTheme.muted)
                 WineCard(title: "Wine Runtime", icon: "arrow.down.to.line") {
                     RuntimeSetupView(model: model)
@@ -377,15 +377,10 @@ private struct WineSettingsView: View {
 
 private struct RuntimeSetupView: View {
     @ObservedObject var model: AppModel
-    @State private var showsTrustConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Button("Install Wine…") {
-                showsTrustConfirmation = true
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.runtimeActivity != nil)
+            WineInstallationView(model: model)
             Text("Downloads Wine from Gcenx/macOS_Wine_builds with MagicWine’s bundled, pinned source-built Metal driver bridge. DXMT is also bundled—no additional download is needed to enable it.")
                 .font(.callout).foregroundStyle(.secondary)
             Text("Standard graphics is the default. DXMT is optional on Apple Silicon with macOS 15 or newer. D3DMetal uses the same Wine and requires locally installed Apple libraries.")
@@ -397,21 +392,6 @@ private struct RuntimeSetupView: View {
                     Link("Download GStreamer", destination: URL(string: "https://gstreamer.freedesktop.org/download/")!)
                 }
                 .font(.callout).padding(.top, 8)
-            }
-            if case let .downloading(progress) = model.installationProgress {
-                WineDownloadProgressView(progress: progress)
-            } else if let activity = model.runtimeActivity {
-                ProgressView(activity)
-                    .controlSize(.small)
-            }
-            if let error = model.runtimeError {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Wine Setup Failed", systemImage: "exclamationmark.triangle").font(.headline)
-                    Text(error).textSelection(.enabled)
-                    Button("Reveal Logs") { model.revealLogs() }
-                }
-                .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             }
             #if arch(arm64)
             DisclosureGroup("Rosetta on Apple Silicon") {
@@ -427,11 +407,56 @@ private struct RuntimeSetupView: View {
             }
             #endif
         }
-        .confirmationDialog("Trust Wine?", isPresented: $showsTrustConfirmation, titleVisibility: .visible) {
-            Button("Trust and Install Wine") { model.installWine() }
+    }
+}
+
+struct WineInstallationView: View {
+    @ObservedObject var model: AppModel
+    var bottle: Bottle? = nil
+    @State private var showsTrustConfirmation = false
+
+    private var unavailable: Bool {
+        if model.isLoading || model.runtimeActivity != nil { return true }
+        guard let bottle else { return false }
+        let state = model.activity(for: bottle)
+        return state.title != nil || state.hasRunningPrograms || state.isStopping
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button(bottle == nil ? "Install / Update Wine…" : "Update Wine…") {
+                showsTrustConfirmation = true
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(unavailable)
+            if case let .downloading(progress) = model.installationProgress {
+                WineDownloadProgressView(progress: progress)
+            } else if let activity = model.runtimeActivity {
+                ProgressView(activity)
+                    .controlSize(.small)
+            }
+            if let error = model.runtimeError {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Wine Setup Failed", systemImage: "exclamationmark.triangle").font(.headline)
+                    Text(error).textSelection(.enabled)
+                    Button("Reveal Logs") { model.revealLogs() }
+                }
+                .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .confirmationDialog(bottle.map { "Update Wine for \($0.name)?" } ?? "Trust Wine?",
+                            isPresented: $showsTrustConfirmation, titleVisibility: .visible) {
+            Button(bottle == nil ? "Trust and Install Wine" : "Trust and Update Wine") {
+                model.installWine(upgrading: bottle)
+            }
+            .disabled(unavailable)
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This Wine build is unsigned and not notarized by Apple. MagicWine checks the Gcenx download’s checksum, installs its bundled source-built DXMT driver bridge, and removes only this managed Wine bundle’s quarantine to let it run. DXMT is included and needs no additional download. This is not a malware check; system-wide security settings are unchanged.")
+            Text("This Wine build is unsigned and not notarized by Apple. MagicWine checks the Gcenx download’s checksum, installs its bundled source-built DXMT driver bridge, and removes only this managed Wine bundle’s quarantine to let it run. DXMT is included and needs no additional download. This is not a malware check; system-wide security settings are unchanged."
+                 + (bottle == nil
+                    ? "\n\nExisting bottles keep their current Wine. Use Update Wine in a bottle’s dashboard to switch it."
+                    : "\n\nDownloads Wine if needed, then switches only this bottle to the current managed runtime with MSync support. Its files, settings, and previous Wine installation are kept. If switching fails, the bottle keeps its current Wine."))
         }
     }
 }
