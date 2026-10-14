@@ -25,6 +25,7 @@ handoffs keep retired NSView identities alive until explicit release, while
 presentation contexts and process watches are detached promptly.
 Visible-region masks integrate remote layers with GDI/GL/Metal sibling occlusion.
 Cocoa Retina transitions update detached producer layers and hosted masks.
+Attach/release notifications are queued; GPU startup never waits for HWND owners.
 No retirement timer, fixed-size registry, HWND-owner spoof, or server change.
 
 diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
@@ -596,7 +597,7 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
  #undef PTR
 --- a/dlls/winemac.drv/metal_remote.c
 +++ b/dlls/winemac.drv/metal_remote.c
-@@ -0,0 +1,509 @@
+@@ -0,0 +1,516 @@
 +/*
 + * Cross-process Metal presentation for the historical winemac bridge.
 + * Copyright 2026 MagicWine contributors
@@ -722,7 +723,7 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +    producer->dead = TRUE;
 +    ++producer->pins;
 +    if (producer->context_id && producer->root)
-+        send_message(producer->root, WM_MACDRV_RELEASE_REMOTE_LAYER,
++        NtUserPostMessage(producer->root, WM_MACDRV_RELEASE_REMOTE_LAYER,
 +                     (WPARAM)service_window, producer->context_id);
 +    --producer->pins;
 +    finish_dead_producer(producer);
@@ -879,14 +880,20 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +    HWND hwnd;
 +    DWORD pid;
 +    if (!context_id || window_pid(root) != GetCurrentProcessId() || !(pid = window_pid(source))) return FALSE;
-+    LIST_FOR_EACH_ENTRY(host, &hosts, struct remote_host, entry)
-+        if (host->producer == source && host->context_id == context_id)
-+            return host->root == root && update_host(host);
-+
-+    /* QUERY returns only a HWND, never a producer-local pointer. The producer
-+     * publishes its context before CREATE and pins it across this nested send. */
++    /* The owner may have been blocked in CEF while CREATE was queued. Query
++     * the producer service, never the application's window thread, and reject
++     * an attachment whose target has since moved or been destroyed. */
 +    hwnd = (HWND)send_message(source, WM_MACDRV_QUERY_REMOTE_LAYER, 0, context_id);
 +    if (!hwnd || NtUserGetAncestor(hwnd, GA_ROOT) != root) return FALSE;
++    LIST_FOR_EACH_ENTRY(host, &hosts, struct remote_host, entry)
++        if (host->producer == source && host->context_id == context_id)
++        {
++            if (host->root == root) return update_host(host);
++            /* Different root threads may drain their queues in either order.
++             * A late old-root RELEASE cannot remove this new-root host. */
++            remove_host(host);
++            break;
++        }
 +    if (!(host = calloc(1, sizeof(*host)))) return FALSE;
 +    host->hwnd = hwnd;
 +    host->root = root;
@@ -916,10 +923,11 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +    if (root != producer->root || pid != producer->root_pid)
 +    {
 +        if (!(watch = watch_process(pid))) return FALSE;
-+        /* Complete detachment before reusing this context in another root.
-+         * An asynchronous old release could erase a later A -> B -> A host. */
++        /* Messages to each root remain FIFO, including A -> B -> A. Never
++         * wait for an application thread that may itself be waiting for GPU
++         * initialization. Host lookup validates the current root on receipt. */
 +        if (producer->root && producer->context_id)
-+            send_message(producer->root, WM_MACDRV_RELEASE_REMOTE_LAYER,
++            NtUserPostMessage(producer->root, WM_MACDRV_RELEASE_REMOTE_LAYER,
 +                         (WPARAM)service_window, producer->context_id);
 +        if (producer->dead) { unwatch_process(watch); return FALSE; }
 +        unwatch_process(producer->root_watch);
@@ -927,7 +935,7 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +        producer->root_pid = pid;
 +        producer->root_watch = watch;
 +    }
-+    result = send_message(root, WM_MACDRV_CREATE_REMOTE_LAYER,
++    result = NtUserPostMessage(root, WM_MACDRV_CREATE_REMOTE_LAYER,
 +                          (WPARAM)service_window, producer->context_id);
 +    return result && !producer->dead && NtUserGetAncestor(producer->hwnd, GA_ROOT) == root;
 +}

@@ -136,9 +136,11 @@ static void render(HWND window, const char *label, bool expect_foreign_root)
     fflush(stdout);
 }
 
-static void worker(HWND root, HWND child)
+static void worker(HWND root, HWND child, HANDLE first_frame)
 {
     render(root, "foreign root", true);
+    SetEvent(first_frame);
+    CloseHandle(first_frame);
     render(child, "foreign inset child", true);
     HWND local_child = create_window("Renderer-owned child", root, 80, 60, 301, 199);
     check(local_child != nullptr, "CreateWindow under foreign root: %lu", GetLastError());
@@ -170,10 +172,11 @@ int main(int argc, char **argv)
     cls.hInstance = GetModuleHandleA(nullptr);
     cls.lpszClassName = window_class;
     check(RegisterClassA(&cls) != 0, "window class registration failed");
-    if (argc == 5 && !strcmp(argv[1], "--worker")) {
+    if (argc == 6 && !strcmp(argv[1], "--worker")) {
         visual_hold_ms = static_cast<unsigned>(strtoul(argv[4], nullptr, 10));
         worker(reinterpret_cast<HWND>(strtoull(argv[2], nullptr, 16)),
-               reinterpret_cast<HWND>(strtoull(argv[3], nullptr, 16)));
+               reinterpret_cast<HWND>(strtoull(argv[3], nullptr, 16)),
+               reinterpret_cast<HANDLE>(strtoull(argv[5], nullptr, 16)));
     } else {
         if (argc == 2 && !strcmp(argv[1], "--visual")) visual_hold_ms = 5000;
         else if (argc != 1) return 2;
@@ -183,11 +186,16 @@ int main(int argc, char **argv)
         check(control && root && child, "owner window creation failed");
         if (!control || !root || !child) return 1;
         render(control, "same-process root", false);
-        char executable[MAX_PATH], command[MAX_PATH + 100];
+        char executable[MAX_PATH], command[MAX_PATH + 140];
+        SECURITY_ATTRIBUTES security = {sizeof(security), nullptr, TRUE};
+        HANDLE first_frame = CreateEventA(&security, TRUE, FALSE, nullptr);
+        check(first_frame != nullptr, "first-frame event creation failed");
+        if (!first_frame) return 1;
         GetModuleFileNameA(nullptr, executable, sizeof(executable));
-        snprintf(command, sizeof(command), "\"%s\" --worker %llx %llx %u", executable,
+        snprintf(command, sizeof(command), "\"%s\" --worker %llx %llx %u %llx", executable,
                  static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(root)),
-                 static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(child)), visual_hold_ms);
+                 static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(child)), visual_hold_ms,
+                 static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(first_frame)));
         STARTUPINFOA startup = {};
         startup.cb = sizeof(startup);
         PROCESS_INFORMATION process = {};
@@ -195,6 +203,10 @@ int main(int argc, char **argv)
         check(started, "worker creation failed: %lu", GetLastError());
         if (started) {
             CloseHandle(process.hThread);
+            /* CEF's browser thread can wait for GPU initialization without
+             * pumping window messages. Rendering must not wait for that HWND. */
+            check(WaitForSingleObject(first_frame, 15000) == WAIT_OBJECT_0,
+                  "renderer blocked on the non-pumping window owner");
             ULONGLONG deadline = GetTickCount64() + 60000;
             while (WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT && GetTickCount64() < deadline) pump(10);
             DWORD code = STILL_ACTIVE;
@@ -203,6 +215,7 @@ int main(int argc, char **argv)
             if (code == STILL_ACTIVE) TerminateProcess(process.hProcess, 2);
             CloseHandle(process.hProcess);
         }
+        CloseHandle(first_frame);
         /* Owner remains responsive and reusable after renderer teardown. */
         pump(100);
         render(root, "owner after renderer exit", false);

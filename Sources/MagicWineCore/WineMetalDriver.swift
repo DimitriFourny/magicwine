@@ -5,7 +5,7 @@ import Foundation
 /// Installed only in a fresh, private managed Wine staging tree.
 /// Never modifies a selected, user-provided, or shared runtime.
 enum WineMetalDriver {
-    static let componentID = "winemac-wine11.0-metal.4"
+    static let componentID = "winemac-wine11.0-metal.5"
     static let sourceName = componentID + "-source.tar.gz"
     static let licenseName = "LICENSE-WINE-METAL.txt"
     static let provenanceName = componentID + "-provenance.json"
@@ -24,8 +24,8 @@ enum WineMetalDriver {
     static let images = [
         Image(relativePath: "x86_64-unix/winemac.so", resourceSuffix: ".so.deflate",
               originalDigest: "7687c4095ea6dba1761052ac19d46db3409a36f2bc827b79c6e32bf779df59f4",
-              digest: "407fdd69559745dc48fd9145c049b9dc291fd1d0037244e8d3e86c285e438316",
-              compressedDigest: "a820ba257f31ee704f460f13fb51ea615ca2fea13f747be7658ce3e6ceddf66b"),
+              digest: "de85deaac706e1af3d309804caae77de61e34840969f67883ef96f697f2b4eee",
+              compressedDigest: "5beb5b2db11e3af4717108db78f0969c60a6e77b76b8c4748a2b3dd7598a6f8d"),
         Image(relativePath: "x86_64-windows/winemac.drv", resourceSuffix: "-x86_64.drv.deflate",
               originalDigest: "9c52f24507b692ef0fcc0dc5439b8bee63f869f04ef38494bf52e52ddfbfecf0",
               digest: "502443bcc71715b173391e52eb0277b53595e6090fbb3792bb06616b909344b3",
@@ -90,9 +90,9 @@ enum WineMetalDriver {
             (componentID + $0.resourceSuffix, $0.compressedDigest, nativeMaximum, $0)
         }
         pins += [
-            (sourceName, "065432da2c0fc4bec24196d40ae7ad0b12ed7d6603e451c459aa3b9787c02fad", sourceMaximum, nil),
+            (sourceName, "80aab66e05036980ed4c2c9e46368371b700a51b7f371633bd7976e8c50aa865", sourceMaximum, nil),
             (licenseName, "88c17983299ff2954674c19e1983eb455338dc545e772c42607816f756392103", textMaximum, nil),
-            (provenanceName, "1e34883223a811b2db2605fe0aa1882f4b74f94c8a94c42c121a3b5419248d22", textMaximum, nil)
+            (provenanceName, "a9bd7aa8cfcd46e06b6fbf6c39a3ee2340a1d5a28541366f54e1dc8a4c5e4974", textMaximum, nil)
         ]
         return try pins.map { name, digest, maximum, image in
             guard let url = Bundle.module.url(forResource: name, withExtension: nil) else {
