@@ -111,6 +111,7 @@ struct WineStatus: View {
         if state.isStopping { return "Stopping…" }
         if state.title != nil { return "Busy" }
         if state.error != nil { return "Needs attention" }
+        if state.hasRunningPrograms { return "Running" }
         return bottle.isInitialized ? "Ready" : "Setup needed"
     }
     private var color: Color {

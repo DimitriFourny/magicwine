@@ -127,7 +127,7 @@ struct LibrarySidebarView: View {
 
     private func bottleRow(_ bottle: Bottle) -> some View {
         let activity = model.activity(for: bottle)
-        let busy = activity.title != nil || activity.isStopping
+        let busy = activity.title != nil || activity.hasRunningPrograms || activity.isStopping
         let selected = destination == .bottles && model.selectedBottleID == bottle.id
         return Button {
             model.selectedBottleID = bottle.id
@@ -145,6 +145,8 @@ struct LibrarySidebarView: View {
                         rowSubtitle("Stopping Windows processes…")
                     } else if let title = activity.title {
                         rowSubtitle(title)
+                    } else if activity.hasRunningPrograms {
+                        rowSubtitle("Windows programs running")
                     } else if !bottle.isInitialized {
                         rowSubtitle("Setup needed")
                     }
@@ -168,7 +170,7 @@ struct LibrarySidebarView: View {
             Button("Reveal Logs") { model.revealLogs(for: bottle) }
             Button("Move Bottle to Trash…", role: .destructive) {
                 let current = model.activity(for: bottle)
-                guard current.title == nil, !current.isStopping else { return }
+                guard current.title == nil, !current.hasRunningPrograms, !current.isStopping else { return }
                 trash(bottle)
             }
             .disabled(busy)

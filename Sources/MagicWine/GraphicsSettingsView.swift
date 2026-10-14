@@ -18,7 +18,7 @@ struct GraphicsSettingsView: View {
 
     private var state: BottleActivity { model.activity(for: currentBottle) }
     private var unavailable: Bool {
-        busy || model.isLoading || state.title != nil || state.isStopping || !currentBottle.isInitialized
+        busy || model.isLoading || state.title != nil || state.hasRunningPrograms || state.isStopping || !currentBottle.isInitialized
     }
 
     private func backendNotice(_ backend: GraphicsBackend) -> String {

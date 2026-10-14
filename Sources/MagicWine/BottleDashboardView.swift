@@ -12,8 +12,9 @@ struct BottleDashboardView: View {
     }
 
     private var activity: BottleActivity { model.activity(for: currentBottle) }
-    private var busy: Bool { activity.title != nil || activity.isStopping }
+    private var busy: Bool { activity.title != nil || activity.hasRunningPrograms || activity.isStopping }
     private var operationUnavailable: Bool { busy || !currentBottle.isInitialized }
+    private var launchUnavailable: Bool { activity.title != nil || activity.isStopping || !currentBottle.isInitialized }
     private var bottleURL: URL {
         model.paths.bottlesDirectory.appendingPathComponent(currentBottle.id.uuidString, isDirectory: true)
     }
@@ -176,7 +177,7 @@ struct BottleDashboardView: View {
 
     @ViewBuilder
     private var operationFeedback: some View {
-        if activity.graphicsProgress == nil, busy {
+        if activity.graphicsProgress == nil, activity.title != nil || activity.isStopping {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
                 Text(activity.isStopping ? "Stopping Windows processes…" : (activity.title ?? "Working…"))
@@ -185,6 +186,14 @@ struct BottleDashboardView: View {
             }
             .accessibilityElement(children: .combine)
             .padding(.horizontal, 4)
+        }
+        if activity.hasRunningPrograms, activity.title == nil, !activity.isStopping {
+            Label("Windows programs are running. Launch again to reopen a background app. Use its Exit command to quit; Stop ends all programs in this bottle.",
+                  systemImage: "play.circle")
+                .font(.callout)
+                .foregroundStyle(WineTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
         }
 
         if let error = activity.error {
@@ -322,7 +331,7 @@ struct BottleDashboardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Button("Launch") { model.launch(program, in: currentBottle) }
                 .buttonStyle(WineButtonStyle(prominent: true))
-                .disabled(operationUnavailable)
+                .disabled(launchUnavailable)
                 .accessibilityLabel("Launch \(program.name)")
             Menu {
                 Button("Remove from MagicWine", role: .destructive) {
@@ -341,7 +350,7 @@ struct BottleDashboardView: View {
         .padding(.vertical, 10)
         .contextMenu {
             Button("Launch") { model.launch(program, in: currentBottle) }
-                .disabled(operationUnavailable)
+                .disabled(launchUnavailable)
             Button("Remove from MagicWine", role: .destructive) {
                 model.removeProgram(program, in: currentBottle)
             }

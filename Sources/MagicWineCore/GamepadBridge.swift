@@ -198,6 +198,23 @@ enum GamepadBridge {
     private static let bundledX8664SHA256 = "7c4e6876e9a1b165286a9c09118e12f30cb98d004237161a1cbe1bd38379190d"
     private static let bundledSourceSHA256 = "e1a49ce8166f21203f11d7dcdcf5da4a6590db0885bfc341c60a266c29a5af20"
     private static let bundledLicenseSHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    // Microsoft DirectX End-User Runtimes (June 2010): https://www.microsoft.com/en-us/download/details.aspx?id=8109
+    // Independently extracted from directx_Jun2010_redist.exe, SHA-256:
+    // 053f76dcbb28802e23341b6a787e3b0791c0fa5c8d4d011b1044172dbf89c73b.
+    // Apr2006/AUG2006/APR2007/Oct2005_xinput_{x64,x86}.cab respectively.
+    // Steam's redistributable installer can replace a previously installed bridge.
+    // Leave these exact native DLLs in place; they use Microsoft's XInput, not
+    // MagicWine's controller profiles. Neither version strings nor receipts confer trust.
+    private static let redistributableSHA256 = [
+        "system32/xinput1_1.dll": "87c7f921bbf171fa04f7c2adaf8b25d4bf152d12c6b99771da42f3af07f78987",
+        "syswow64/xinput1_1.dll": "69cd725c53e0302e75db20e9a3e4b33f58dceaa2e6ea4938b2733df8bc289a71",
+        "system32/xinput1_2.dll": "77055b6a144c4017acd0a8b34520cf9a84be6b9c75db40f7a708b9f4e38aa138",
+        "syswow64/xinput1_2.dll": "9714d146a785d458f0de8fef387d82c9f8e101c02407a0cbeb06f02a69518eec",
+        "system32/xinput1_3.dll": "756cad002e1553cfa1a91ebe8c1b9380ffabe0b4b1916c4a4db802396ddfbef8",
+        "syswow64/xinput1_3.dll": "8d540d484ea41e374fd0107d55d253f87ded4ce780d515d8fd59bbe8c98970a7",
+        "system32/xinput9_1_0.dll": "81c6dfcd7bcb4f2b2580a98c8e66a3eb624b44f48b80f42a1f8134e448171cc9",
+        "syswow64/xinput9_1_0.dll": "9c14c5afd282be3e16117ff35d9896a96bdef497c45da950a730d279bd0e0cf6"
+    ]
     private static let dllMaximum = 16 * 1_048_576
     private static let sourceMaximum = 16 * 1_048_576
     private static let licenseMaximum = 1_048_576
@@ -212,6 +229,7 @@ enum GamepadBridge {
         let x8664SHA256: String
         let sourceSHA256: String
         let licenseSHA256: String
+        var redistributableSHA256: [String: String] = [:]
     }
 
     private struct Original: Codable, Equatable {
@@ -229,10 +247,12 @@ enum GamepadBridge {
         let machine: UInt16
         let resource: URL
         let digest: String
+        let redistributableDigest: String?
     }
-    private struct Inspection {
+    private struct Inspection: Equatable {
         let original: Original?
         let content: URL?
+        var preservesNative = false
     }
 
     static func prepare(prefix: URL, bottleDirectory: URL) throws -> String {
@@ -245,7 +265,8 @@ enum GamepadBridge {
         return try install(prefix: prefix, bottleDirectory: bottleDirectory,
                            payload: Payload(i686: i686, x8664: x8664, source: source, license: license,
                                             i686SHA256: bundledI686SHA256, x8664SHA256: bundledX8664SHA256,
-                                            sourceSHA256: bundledSourceSHA256, licenseSHA256: bundledLicenseSHA256))
+                                            sourceSHA256: bundledSourceSHA256, licenseSHA256: bundledLicenseSHA256,
+                                            redistributableSHA256: redistributableSHA256))
     }
 
     /// Explicit payload pins permit isolated filesystem tests without Wine. No
@@ -272,7 +293,8 @@ enum GamepadBridge {
                 Destination(path: directory + "/" + name + ".dll",
                             machine: directory == "system32" ? 0x8664 : 0x014c,
                             resource: directory == "system32" ? payload.x8664 : payload.i686,
-                            digest: directory == "system32" ? payload.x8664SHA256 : payload.i686SHA256)
+                            digest: directory == "system32" ? payload.x8664SHA256 : payload.i686SHA256,
+                            redistributableDigest: payload.redistributableSHA256[directory + "/" + name + ".dll"])
             }
         }
         let windows = prefix.appendingPathComponent("drive_c/windows", isDirectory: true)
@@ -335,7 +357,8 @@ enum GamepadBridge {
 
         var staged: [(URL, Destination)] = []
         defer { for (file, _) in staged { try? manager.removeItem(at: file) } }
-        for (destination, inspection) in zip(destinations, inspections) where inspection.original != nil {
+        for (destination, inspection) in zip(destinations, inspections)
+            where inspection.original != nil && !inspection.preservesNative {
             let target = windows.appendingPathComponent(destination.path)
             let temporary = target.deletingLastPathComponent().appendingPathComponent(".gamepad-" + UUID().uuidString + ".dll")
             try manager.copyItem(at: destination.resource, to: temporary)
@@ -347,6 +370,9 @@ enum GamepadBridge {
         _ = try validateBackup(backup, destinations: destinations, payload: payload)
         let finalInspections = try destinations.map { try inspect(windows.appendingPathComponent($0.path), destination: $0) }
         try matchOriginals(finalInspections, receipt: receipt)
+        guard finalInspections == inspections else {
+            throw MagicWineError.setup("An XInput DLL changed during preparation. No replacement was installed.")
+        }
         for (temporary, destination) in staged {
             // Never truncate a loaded DLL or follow a destination symlink.
             let target = windows.appendingPathComponent(destination.path)
@@ -378,6 +404,11 @@ enum GamepadBridge {
         let data = try readFile(content, maximum: dllMaximum)
         let digest = sha256(data)
         if link == nil, digest == destination.digest { return Inspection(original: nil, content: nil) }
+        if link == nil, digest == destination.redistributableDigest {
+            try validatePE(data, machine: destination.machine, builtin: false)
+            return Inspection(original: Original(path: destination.path, kind: "file", digest: digest, link: nil),
+                              content: content, preservesNative: true)
+        }
         do { try validatePE(data, machine: destination.machine, builtin: true) }
         catch { throw MagicWineError.setup("The bottle has a custom or invalid \(destination.path). MagicWine will not overwrite it.") }
         return Inspection(original: Original(path: destination.path, kind: link == nil ? "file" : "link",
@@ -387,7 +418,9 @@ enum GamepadBridge {
     private static func matchOriginals(_ inspections: [Inspection], receipt: Receipt) throws {
         guard inspections.count == receipt.originals.count else { throw MagicWineError.setup("The XInput backup is incomplete.") }
         for (inspection, original) in zip(inspections, receipt.originals) {
-            if let current = inspection.original, current != original {
+            // A pinned Microsoft redistributable may have replaced our bridge
+            // since the original was saved. Preserve both it and the old backup.
+            if !inspection.preservesNative, let current = inspection.original, current != original {
                 throw MagicWineError.setup("The original XInput DLL changed after backup: \(original.path). No custom file was overwritten.")
             }
         }
@@ -433,8 +466,10 @@ enum GamepadBridge {
             default: throw MagicWineError.setup("The XInput backup contains an unknown original type.")
             }
             let data = try readFile(content, maximum: dllMaximum)
-            guard sha256(data) == original.digest else { throw MagicWineError.setup("The preserved XInput original failed its SHA-256 check.") }
-            try validatePE(data, machine: destination.machine, builtin: true)
+            let digest = sha256(data)
+            guard digest == original.digest else { throw MagicWineError.setup("The preserved XInput original failed its SHA-256 check.") }
+            let native = original.kind == "file" && digest == destination.redistributableDigest
+            try validatePE(data, machine: destination.machine, builtin: !native)
         }
         for directory in ["system32", "syswow64"] {
             let url = backup.appendingPathComponent(directory, isDirectory: true)

@@ -12,6 +12,8 @@ struct BottleActivity {
     var logURL: URL?
     var graphicsProgress: GraphicsSetupProgress?
     var graphicsSetupID: UUID?
+    var runningLaunches: Set<UUID> = []
+    var hasRunningPrograms: Bool { !runningLaunches.isEmpty }
 }
 
 struct AppNotice: Identifiable {
@@ -80,7 +82,7 @@ final class AppModel: ObservableObject {
     func refreshBottles() {
         guard !isLoading else { return }
         // Do not replace metadata while an operation is saving the same bottle.
-        guard !activities.values.contains(where: { $0.title != nil }) else {
+        guard !activities.values.contains(where: { $0.title != nil || $0.hasRunningPrograms }) else {
             notice = AppNotice(title: "A Bottle Is Busy", message: "Wait for bottle operations to finish before reloading the library. Other bottles are still available.")
             return
         }
@@ -296,7 +298,7 @@ final class AppModel: ObservableObject {
             notice = AppNotice(title: "Set Up This Bottle First", message: "Use Retry Setup for \(bottle.name), then open the installer again.")
             return
         }
-        guard activity(for: bottle).title == nil else {
+        guard activity(for: bottle).title == nil, !activity(for: bottle).hasRunningPrograms else {
             notice = AppNotice(title: "Bottle Is Busy", message: "Wait for the operation in \(bottle.name) to finish, or stop the bottle, before opening another installer.")
             return
         }
@@ -337,8 +339,26 @@ final class AppModel: ObservableObject {
     }
 
     func launch(_ program: WindowsProgram, in bottle: Bottle) {
-        perform(in: bottle, title: "Running \(program.name)…", canStop: true) {
-            try await self.wine.launch(program, in: bottle)
+        let bottle = current(bottle)
+        var state = activity(for: bottle)
+        guard bottle.isInitialized, state.title == nil, !state.isStopping else { return }
+        // A launcher may stay alive in the Windows tray. Its lifetime must not
+        // prevent another launch from reopening it or starting a game.
+        let launchID = UUID()
+        state.runningLaunches.insert(launchID)
+        state.error = nil
+        activities[bottle.id] = state
+        Task {
+            do {
+                let result = try await wine.launch(program, in: bottle)
+                recordLog(result.logURL, for: bottle.id)
+            } catch {
+                recordError(error, for: bottle.id)
+            }
+            guard bottles.contains(where: { $0.id == bottle.id }) else { return }
+            var latest = activity(for: bottle)
+            latest.runningLaunches.remove(launchID)
+            activities[bottle.id] = latest
         }
     }
 
@@ -354,7 +374,7 @@ final class AppModel: ObservableObject {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
               bottle.isInitialized else { return }
         var state = activity(for: bottle)
-        guard state.title == nil, !state.isStopping else { return }
+        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
         let showHUD = backend != .standard && showHUD
         guard bottle.graphics.backend != backend || bottle.graphics.showHUD != showHUD || componentSource != nil else { return }
 
@@ -402,7 +422,7 @@ final class AppModel: ObservableObject {
     func importD3DMetal(in bottle: Bottle) {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
               bottle.isInitialized, activity(for: bottle).title == nil,
-              !activity(for: bottle).isStopping else { return }
+              !activity(for: bottle).hasRunningPrograms, !activity(for: bottle).isStopping else { return }
         if let source = WineRuntime.discoverD3DMetalSource(executable: bottle.runtime.executableURL) {
             setGraphics(.d3dmetal, in: bottle, showHUD: bottle.graphics.showHUD, componentSource: source)
             return
@@ -475,7 +495,7 @@ final class AppModel: ObservableObject {
     private func perform(in bottle: Bottle, title: String, canStop: Bool = false,
                          operation: @escaping @MainActor () async throws -> OperationResult?) {
         var state = activity(for: bottle)
-        guard state.title == nil, !state.isStopping else { return }
+        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
         state.title = title
         state.canStop = canStop
         state.error = nil

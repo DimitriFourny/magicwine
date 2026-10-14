@@ -8,6 +8,9 @@
 - Verify actual Wine URL protocol dispatch, a Windows-created Desktop shortcut, manual URL registration, fresh initialization, and repeated `wineboot -u` before/after existing-link migration. Render the native dashboard with a real Steam URL and icon, and exercise Add Program's native URL file filter.
 - Deduplicate installed launchers by resolved executable, exact arguments, effective working directory, and launch options, or by the full Internet Shortcut URL. Preserve the first saved entry's identity and name across reload, refresh, and manual registration; leave uncertain targets separate and all shortcut files untouched.
 - Verify the three real Steam shortcuts collapse to one in the CLI and native dashboard, while a `-silent` variant remains separate. Repeated refresh and manual re-add stay stable. All 181 Swift regression tests pass.
+- Recognize independently pinned Microsoft June 2010 XInput redistributables in both architectures and preserve them in place instead of blocking Steam bottle launches. Keep existing original backups intact and fully validated; reject unknown/custom replacements, wrong-name/architecture payloads, links, and damaged backups.
+- Separate running program sessions from exclusive bottle operations. Keep Launch available to reopen tray-hidden Steam or start another program, retain per-launch completion/error tracking, and show Running rather than an indefinite Busy spinner. Keep Stop and exclusive-operation guards; do not kill games or downloads when a window closes.
+- Verify real Steam launch, window close with the client still alive, reopening without Stop, normal shutdown returning to Ready, overlapping launch failure isolation, and explicit Stop in the native dashboard. All 23 XInput DLL/backup hashes remain unchanged; the packaged CLI executes successfully in the affected bottle and all 186 Swift release tests pass.
 
 ## Unreleased — 2026-10-13
 
