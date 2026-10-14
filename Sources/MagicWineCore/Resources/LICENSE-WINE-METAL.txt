@@ -1,5 +1,5 @@
-MagicWine Metal, mouse-pointer and macOS WPAD Wine support: public Wine 11 native and PE
-winemac/ntdll/win32u/user32/wow64win/winhttp modules with the public Unix-call entry
+MagicWine Metal, mouse-pointer, macOS WPAD and MSync Wine support: public Wine 11 native and PE
+winemac/ntdll/win32u/user32/wow64win/winhttp modules and matching wineserver with the public Unix-call entry
 point, native pthread TLS, D3DMetal Nt ABI, mouse-pointer input support,
 remote root/child Metal layer hosting, and macOS proxy autodiscovery policy.
 The MagicWine D3DMetal/DXMT client-surface bridge is LGPL-2.1-or-later.
@@ -10,6 +10,12 @@ Marc-Aurel Zent / CodeWeavers (LGPL-2.1-or-later), adapted to Wine 11 and child 
 Native ABI source references: CodeWeavers CrossOver 26.1 public source mirror,
 rnowak/wine-crossover-sources b4f3c510a1808e6e32fb99e9bc11fa46ccc207dc;
 Alien4042x/WineForge a342f4aeb23d719339f444b9e94e06ecf0ff1a14 (LGPL-2.1-or-later).
+MSync: Marc-Aurel Zent and Zebediah Figura (LGPL-2.1-or-later),
+https://github.com/marzent/wine-msync; Wine 11 inproc-sync integration from
+the pinned public CrossOver source above. Original files and COPYING.LIB
+are preserved under source-inputs/msync-upstream; the attributed backport
+and generated protocol are included. WINEMSYNC=1 uses Mach messages,
+shared memory and Darwin ulocks; WINEMSYNC=0 uses normal server sync.
 No proprietary CrossOver or Apple binaries are included.
 Original Wine file copyright notices are retained in the corresponding source.
 Rebuild offline: extract the adjacent -source.tar.gz and run bash scripts/build-metal-wine.sh.

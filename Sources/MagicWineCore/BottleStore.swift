@@ -65,6 +65,12 @@ public actor BottleStore {
             guard bottle.display == current.display else {
                 throw MagicWineError.setup("Display settings must be changed through WineRuntime.configureDisplay.")
             }
+            guard bottle.msyncEnabled == current.msyncEnabled else {
+                throw MagicWineError.setup("Synchronization settings must be changed through WineRuntime.configureSynchronization.")
+            }
+            guard bottle.runtime == current.runtime else {
+                throw MagicWineError.setup("The pinned runtime must be changed through WineRuntime.upgradeRuntime.")
+            }
             var normalized = bottle
             _ = normalizePrograms(in: &normalized)
             try saveUnlocked(normalized)
@@ -81,6 +87,26 @@ public actor BottleStore {
     internal func current(_ bottle: Bottle) throws -> Bottle {
         try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
             try loadUnlocked(bottle)
+        }
+    }
+
+    /// The runtime holds exclusive launch/lifetime leases and has verified Wine is idle.
+    internal func setSynchronization(msyncEnabled: Bool, in bottle: Bottle) throws -> Bottle {
+        try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
+            var current = try loadUnlocked(bottle)
+            current.msyncEnabled = msyncEnabled
+            try saveUnlocked(current)
+            return current
+        }
+    }
+
+    /// Only explicit, validated managed-runtime upgrades may replace the pinned descriptor.
+    internal func setRuntime(_ runtime: RuntimeDescriptor, in bottle: Bottle) throws -> Bottle {
+        try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
+            var current = try loadUnlocked(bottle)
+            current.runtime = runtime
+            try saveUnlocked(current)
+            return current
         }
     }
 

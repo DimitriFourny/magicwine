@@ -39,9 +39,16 @@ struct MagicWineCLI {
             }
             let installed = try await runtime.installRuntime(acceptUnsigned: true)
             print("\(installed.version)\t\(installed.executableURL.path)")
+        case "runtime":
+            guard values.count == 2, values[0] == "upgrade" else {
+                throw argumentError("runtime upgrade <bottle-UUID>")
+            }
+            let bottle = try await findBottle(values[1], store: store)
+            let updated = try await runtime.upgradeRuntime(in: bottle)
+            print("\(updated.runtime.version)\t\(updated.runtime.executableURL.path)")
         case "list":
             for bottle in try await store.list() {
-                print("\(bottle.id)\t\(bottle.name)\t\(bottle.isInitialized ? "ready" : "setup required")\t\(bottle.runtime.version)\t\(bottle.graphics.backend.rawValue)")
+                print("\(bottle.id)\t\(bottle.name)\t\(bottle.isInitialized ? "ready" : "setup required")\t\(bottle.runtime.version)\t\(bottle.graphics.backend.rawValue)\t\(synchronizationDescription(bottle, runtime: runtime))")
             }
         case "create":
             guard values.count == 2 else { throw argumentError("create <name> <wine-executable>") }
@@ -52,7 +59,7 @@ struct MagicWineCLI {
             bottle.isInitialized = true
             try await store.save(bottle)
             print("Ready. Log: \(result.logURL.path)")
-        case "initialize", "install", "add", "refresh", "apps", "launch", "stop", "configure", "graphics", "retina", "exec":
+        case "initialize", "install", "add", "refresh", "apps", "launch", "stop", "configure", "graphics", "retina", "synchronization", "exec":
             guard let identifier = values.first else { throw argumentError("\(command) <bottle-UUID> …") }
             let bottle = try await findBottle(identifier, store: store)
             let rest = Array(values.dropFirst())
@@ -81,6 +88,17 @@ struct MagicWineCLI {
                 print("Log: \(try await runtime.launch(program, in: bottle).logURL.path)")
             case "stop": print("Log: \(try await runtime.stop(bottle).logURL.path)")
             case "configure": print("Log: \(try await runtime.configure(bottle).logURL.path)")
+            case "synchronization":
+                guard rest.isEmpty || (rest.count == 1 && ["msync", "server"].contains(rest[0])) else {
+                    throw argumentError("synchronization <bottle-UUID> [msync|server]")
+                }
+                let updated: Bottle
+                if let setting = rest.first {
+                    updated = try await runtime.configureSynchronization(msyncEnabled: setting == "msync", in: bottle)
+                } else {
+                    updated = bottle
+                }
+                print(synchronizationDescription(updated, runtime: runtime))
             case "retina":
                 guard rest.isEmpty || (rest.count == 1 && ["on", "off"].contains(rest[0])) else {
                     throw argumentError("retina <bottle-UUID> [on|off]")
@@ -146,6 +164,13 @@ struct MagicWineCLI {
         for program in bottle.programs { print("\(program.id)\t\(program.name)\t\(program.executablePath)") }
     }
 
+    private static func synchronizationDescription(_ bottle: Bottle, runtime: WineRuntime) -> String {
+        guard runtime.supportsMSync(bottle.runtime) else {
+            return "MSync unavailable (preference \(bottle.msyncEnabled ? "on" : "off"); pinned Wine unchanged)"
+        }
+        return bottle.msyncEnabled ? "msync" : "server"
+    }
+
     private static func argumentError(_ detail: String) -> MagicWineError { .setup("\(detail)\nRun magicwine --help for usage.") }
 
     private static let graphicsUsage = "graphics <bottle-UUID> standard|dxvk|dxmt|d3dmetal [--accept-experimental] [--hud|--no-hud] [--import <D3DMetal-library-folder>]"
@@ -174,6 +199,10 @@ struct MagicWineCLI {
       retina <bottle-UUID> [on|off]              Read or change Retina / HiDPI (default on)
         On sets 200% scaling (192 DPI); off sets 100% (96 DPI)
         Bottle-wide changes affect games too and stop this bottle’s Windows processes
+      synchronization <bottle-UUID> [msync|server]
+        Read or change synchronization (default MSync); requires idle updated managed Wine
+      runtime upgrade <bottle-UUID>             Explicitly adopt installed updated Wine for an old managed bottle
+        Install / Update Wine first; does not download Wine or change custom runtime bottles
       exec <bottle-UUID> <wine-arguments…>       Run Wine with isolated prefix
     """
 }
