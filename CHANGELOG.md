@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 2026-10-14
+
+- Discover, register, and launch Windows `.url` Internet Shortcuts alongside LNK shortcuts, including Steam game URLs. Dispatch through the selected bottle's Wine shell; load local ICO/PE artwork using case-insensitive Internet Shortcut fields and Windows text encodings.
+- Keep Windows Desktop bottle-local before initial Wine setup and later launches. Refreshing shortcuts also replaces existing Desktop symlinks without importing or changing their host targets; preserve local contents and other shell-folder mappings.
+- Use directory-enumerator depth for per-user shortcut traversal, avoiding macOS temporary-path aliases hiding Start Menu and Desktop entries.
+- Verify actual Wine URL protocol dispatch, a Windows-created Desktop shortcut, manual URL registration, fresh initialization, and repeated `wineboot -u` before/after existing-link migration. Render the native dashboard with a real Steam URL and icon, and exercise Add Program's native URL file filter.
+- Deduplicate installed launchers by resolved executable, exact arguments, effective working directory, and launch options, or by the full Internet Shortcut URL. Preserve the first saved entry's identity and name across reload, refresh, and manual registration; leave uncertain targets separate and all shortcut files untouched.
+- Verify the three real Steam shortcuts collapse to one in the CLI and native dashboard, while a `-silent` variant remains separate. Repeated refresh and manual re-add stay stable. All 181 Swift regression tests pass.
+
 ## Unreleased — 2026-10-13
 
 - Remove only `com.apple.quarantine` from managed Wine bundles after consent, using native no-follow filesystem APIs; preserve other attributes and reject escaping paths.

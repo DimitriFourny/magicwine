@@ -23,7 +23,7 @@ struct WindowsProgramIconView: View {
                     .scaledToFit()
                     .frame(width: 32, height: 32)
             } else {
-                Image(systemName: (executablePath as NSString).pathExtension.lowercased() == "lnk" ? "link" : "app")
+                Image(systemName: ["lnk", "url"].contains((executablePath as NSString).pathExtension.lowercased()) ? "link" : "app")
                     .font(.system(size: 20))
                     .foregroundStyle(WineTheme.muted)
             }

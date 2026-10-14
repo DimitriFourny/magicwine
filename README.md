@@ -26,7 +26,13 @@ The dark wine-themed library has a searchable bottle sidebar and dedicated **Gam
 1. Open **Downloads**, click **Install Wine…**, and confirm **Trust and Install Wine**. The single managed Wine includes MagicWine's bundled DXMT-compatible driver; DXMT itself is also bundled.
 2. Create a bottle. MagicWine uses your preferred Wine automatically and initializes its Windows environment with **Standard** graphics. Custom Wine selection is optional under **Advanced** in Settings and bottle creation.
 3. Select **Install EXE/MSI** and choose the application's Windows installer. Complete the actual Windows installer normally.
-4. Launch its discovered Start Menu shortcut. Use **Refresh Shortcuts** if necessary, or **Add Program** to select an EXE or LNK manually.
+4. Launch its discovered Start Menu shortcut. Use **Refresh Shortcuts** if necessary, or **Add Program** to select an EXE, LNK, or URL Internet Shortcut manually.
+
+**Steam games:** Installed Programs discovers `.lnk` and `.url` files in the bottle's Start Menu and Desktop folders; it does not scan Steam's game inventory. Steam game shortcuts such as `steam://rungameid/…` launch through the selected bottle's Wine shell and registered Steam handler, not macOS Steam. Local `IconFile`/`IconIndex` fields supply shortcut artwork without fetching icons from the network. URL shortcuts to support websites can also appear.
+
+**Duplicate launchers:** Installed Programs shows one entry for shortcuts resolving to the same executable, exact command arguments, working directory, and launch options. URL shortcuts match only when their full target URL matches, including game IDs and query parameters. The first saved entry keeps its name and ID; existing duplicates collapse when the bottle reloads or shortcuts refresh. Different launch configurations and shortcuts whose targets cannot be safely resolved remain separate. Shortcut files are never deleted.
+
+**Bottle-local Desktop:** New bottles create a real Windows Desktop directory instead of linking to macOS Desktop. Existing bottles replace Desktop symlinks when refreshing shortcuts or before starting a Windows process. Only the link is removed: files on its former target are not moved, copied, or deleted, and existing bottle-local Desktop files are preserved. Other Wine folder mappings remain unchanged. Wine initialization and later `wineboot -u` retain the local Desktop.
 
 Only the current managed Wine is selected automatically. Discovery excludes obsolete managed installations. If a saved managed preference points to an older build, MagicWine selects the current build when installed; otherwise bottle creation asks you to **Install Wine** first. Other discovered Wine installations require an explicit choice under Advanced. An unavailable custom preference is not silently replaced with a different Wine.
 

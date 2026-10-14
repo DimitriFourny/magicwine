@@ -310,7 +310,7 @@ final class AppModel: ObservableObject {
     }
 
     func chooseProgram(in bottle: Bottle) {
-        chooseFile(title: "Add a Windows Program", message: "Choose an EXE or LNK shortcut. Removing it from MagicWine does not delete the file.", extensions: ["exe", "lnk"]) { [weak self] url in
+        chooseFile(title: "Add a Windows Program", message: "Choose an EXE, LNK shortcut, or URL Internet Shortcut. Removing it from MagicWine does not delete the file.", extensions: ["exe", "lnk", "url"]) { [weak self] url in
             guard let self else { return }
             self.perform(in: bottle, title: "Adding program…") {
                 let updated = try await self.store.registerProgram(in: self.current(bottle), executableURL: url)

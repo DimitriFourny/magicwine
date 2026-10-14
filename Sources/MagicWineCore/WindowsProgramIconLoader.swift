@@ -24,8 +24,8 @@ public actor WindowsProgramIconLoader {
 
     public func image(for executableURL: URL, prefix: URL) -> CGImage? {
         guard executableURL.isFileURL, prefix.isFileURL, !Task.isCancelled else { return nil }
-        let sources = executableURL.pathExtension.lowercased() == "lnk"
-            ? WindowsShortcutIconSources.candidates(for: executableURL, prefix: prefix)
+        let sources = ["lnk", "url"].contains(executableURL.pathExtension.lowercased())
+            ? WindowsShortcut.candidates(for: executableURL, prefix: prefix)
             : [WindowsIconSource(url: executableURL, index: 0)]
         for source in sources {
             guard !Task.isCancelled else { return nil }
