@@ -1,14 +1,14 @@
 #!/bin/bash
-# Rebuild Wine 11's Metal presentation, mouse-pointer and macOS WPAD modules.
+# Rebuild Wine 11's Metal, mouse-pointer, macOS WPAD and MSync modules/server.
 # Requires Apple clang 21.0.0 (clang-2100.3.34.2), macOS SDK 26.5, make,
-# flex, Python 3 and both x86_64/i686-w64-mingw32 GCC toolchains.
+# flex, Perl, Python 3 and both x86_64/i686-w64-mingw32 GCC toolchains.
 # The shipped corresponding-source archive supports the same command offline.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 exec python3 - "$ROOT" <<'PY'
 import gzip, hashlib, json, os, pathlib, shutil, subprocess, sys, tarfile, tempfile, zlib
 root = pathlib.Path(sys.argv[1])
-component = 'winemac-wine11.0-metal.6'
+component = 'winemac-wine11.0-metal.7'
 output = root / 'Sources/MagicWineCore/Resources'
 local = root / '.local'
 local.mkdir(exist_ok=True)
@@ -30,6 +30,7 @@ original_wow64win_hashes = {'x86_64':'9b87f84fb9320cb100f94b562fa15cbcbc9d84b29a
 original_winhttp_hashes = {'x86_64':'297679186e7cb8f82e559c02dbd4f40a6b2457e3ac32460f061d142f25f5a857',
                           'i386':'e1690fcfa7aff4d5add9645bb6b86c1a0a68debdcac75ea2ae55e7a43b7e32da'}
 original_native_ntdll_hash = 'dfb9d4d4d6e7fd3dc537c1bacd69cb3a6bb46ae98311bb5358df3c4eab470c3f'
+original_wineserver_hash = '6da7d389c5a35687e580c4988e03f830a73786cf13aba6761e4791ab74aeea2e'
 original_hash = '7687c4095ea6dba1761052ac19d46db3409a36f2bc827b79c6e32bf779df59f4'
 original_pe_hashes = {'x86_64':'9c52f24507b692ef0fcc0dc5439b8bee63f869f04ef38494bf52e52ddfbfecf0',
                       'i386':'200a8cd50084d1bd70511681082fbe152a585a8638e84a5aafe8148a8248cda5'}
@@ -38,7 +39,7 @@ original_ntdll_hashes = {'x86_64':'d63d10c77a55105d68bf1935ff10137d2ab5e8a4c6ae3
 epoch = 1768262400
 sdk = pathlib.Path('/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk')
 if not sdk.is_dir(): raise SystemExit('macOS SDK 26.5 is required; no SDK/toolchain is installed by this script')
-for tool in ('clang', 'make', 'bison', 'flex', 'patch', 'nm', 'otool', 'file', 'install_name_tool', 'x86_64-w64-mingw32-gcc', 'i686-w64-mingw32-gcc'):
+for tool in ('clang', 'make', 'bison', 'flex', 'perl', 'patch', 'nm', 'otool', 'file', 'install_name_tool', 'x86_64-w64-mingw32-gcc', 'i686-w64-mingw32-gcc'):
     if not shutil.which(tool): raise SystemExit('Missing prerequisite: ' + tool)
 clang_version = subprocess.check_output(['clang', '--version'], text=True)
 if 'clang-2100.3.34.2' not in clang_version: raise SystemExit('Pinned Apple clang-2100.3.34.2 is required')
@@ -79,9 +80,39 @@ verify(wpad_patch,wpad_patch_hash)
 remote_patch = root / 'patches/wine-remote-metal.patch'
 remote_patch_hash = '373a97240b94902a8fa89b1afe89d138fd87c4d09a4d378f94a1d6faa9fb7809'
 verify(remote_patch,remote_patch_hash)
+msync_patch = root / 'patches/wine-msync.patch'
+msync_patch_hash = 'ce6cf894bfda48df5616e75852d7005e49c03dbc45aca83d381e7795ed08df16'
+verify(msync_patch,msync_patch_hash)
+msync_commit = 'b4f3c510a1808e6e32fb99e9bc11fa46ccc207dc'
+msync_source_url = 'https://raw.githubusercontent.com/rnowak/wine-crossover-sources/' + msync_commit + '/wine/'
+msync_inputs = {
+    'COPYING.LIB':'e237fa56668030e928551ddd60f05df5fe957f75eab874bbd017e085ed722e7c',
+    'dlls/ntdll/Makefile.in':'70b869abb93b8e402b28543f30aca31f23eceebefd2b602c2aab695fe3b72b99',
+    'dlls/ntdll/unix/loader.c':'451eb34296572d19e072b7399f5e4d6b053a0e809ccb0dedfe18da7c523703b2',
+    'dlls/ntdll/unix/msync.c':'30dd83ed51240bfaf206bd16a6b765c6dfe748fba10265306a122c3281588cda',
+    'dlls/ntdll/unix/msync.h':'82b8d07b239ef764369d3288e5dde899174f6142b8781c53a7200badf59aa642',
+    'dlls/ntdll/unix/sync.c':'005810749de981c2dcd056d72696b14edd60c9b7549a2bf80b0e07ee1d211374',
+    'server/Makefile.in':'28dbdf0bc9d72590ab82a48ffb04fedace86f9a1b1f3b75c0b15b872968491c4',
+    'server/main.c':'e0ebac36730e92ee0f6ecae4c69a04bb56434739149cd13253f37db9d995bbd2',
+    'server/inproc_sync.c':'79009f53d087430a5b41efbc9e5b645f5ec55cf1438bebd260a7ed756f14899f',
+    'server/msync.c':'75b0e6780381c9ecbb8efd0e34f6e3d127c7de9c09937e6009ba3b8332d7b8a1',
+    'server/msync.h':'9ba0838d6c801a908f846bd0e324ac65db8d0fc628cebc2b8fa204534c8b0d6d',
+    'server/protocol.def':'efcfc4fef3a0e2c02ada7eeae79a32cc947b1537d4f218caad220b2a6bac3c2b',
+    'server/thread.c':'ad946fe2e7d12245d11005b07ceaa806339a53729c4afb391d93bf8fa6f5d971'}
 inputs = work / 'source-inputs'
 inputs.mkdir()
 offline = root / 'source-inputs'
+# Retain the exact public LGPL implementation and integration references for
+# attribution/review; the final backport itself is fully contained in the patch.
+for name,digest in msync_inputs.items():
+    cached = local / 'msync-upstream' / msync_commit / name
+    cached.parent.mkdir(parents=True,exist_ok=True)
+    original = offline / 'msync-upstream' / name if offline.is_dir() else fetch(
+        msync_source_url + name,cached,digest)
+    verify(original,digest)
+    target = inputs / 'msync-upstream' / name
+    target.parent.mkdir(parents=True,exist_ok=True)
+    shutil.copyfile(original,target)
 # Use architecture-independent headers from a pinned public source release, not
 # whichever Homebrew architecture/version happens to be installed on the host.
 freetype_archive = offline / 'freetype-2.13.3.tar.xz' if offline.is_dir() else fetch(
@@ -115,6 +146,9 @@ else:
     shutil.copyfile(archive,source)
     stock = fetch(stock_url,local / 'wine-stable-11.0_1-osx64.tar.xz',stock_hash)
     with tarfile.open(stock) as tar:
+        member = tar.getmember('Wine Stable.app/Contents/Resources/wine/bin/wineserver')
+        if not member.isfile() or not member.mode & 0o111 or hashlib.sha256(tar.extractfile(member).read()).hexdigest() != original_wineserver_hash:
+            raise SystemExit('Stock wineserver SHA-256/file-type/mode mismatch')
         for name,digest in link_hashes.items():
             member = tar.getmember('Wine Stable.app/Contents/Resources/wine/lib/' + name)
             if not member.isfile(): raise SystemExit('Link input is not a regular file')
@@ -136,6 +170,12 @@ run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(patch)],src)
 run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(pointer_patch)],src)
 run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(wpad_patch)],src)
 run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(remote_patch)],src)
+run(['patch','--batch','--forward','--fuzz=0','-p1','-i',str(msync_patch)],src)
+# Regenerate the client and server from the same protocol. Generated results
+# are also present in the patch so the offline source contains the exact ABI.
+run(['perl','tools/make_requests'],src)
+if '#define SERVER_PROTOCOL_VERSION 931' not in (src / 'include/wine/server_protocol.h').read_text():
+    raise SystemExit('Unexpected MSync client/server protocol version')
 build = work / 'build'
 build.mkdir()
 # FreeType is dlopened, not linked into win32u. Keep configure's link checks
@@ -169,7 +209,8 @@ objects = ['dlls/winemac.drv/' + unit + '.o' for unit in units]
 native_ntdll = build / 'dlls/ntdll/ntdll.so'
 native_win32u = build / 'dlls/win32u/win32u.so'
 native_winhttp = build / 'dlls/winhttp/winhttp.so'
-run(['make','-j4',*objects,'dlls/ntdll/ntdll.so','dlls/win32u/win32u.so','dlls/winhttp/winhttp.so'],build)
+wineserver = build / 'server/wineserver'
+run(['make','-j4',*objects,'dlls/ntdll/ntdll.so','dlls/win32u/win32u.so','dlls/winhttp/winhttp.so','server/wineserver'],build)
 frameworks = ['AppKit','Carbon','CoreVideo','Foundation','IOKit','Metal','OpenGL','QuartzCore','Security']
 link = ['clang','-arch','x86_64','-isysroot',str(sdk),'-mmacosx-version-min=10.15','-dynamiclib',
         '-Wl,-headerpad_max_install_names','-Wl,-install_name,winemac.so','-o','winemac.so',*objects,
@@ -215,6 +256,15 @@ winhttp_exports = subprocess.check_output(['nm','-gU',str(native_winhttp)],text=
 for name in ('__wine_unix_call_funcs','__wine_unix_call_wow64_funcs'):
     if not any(line.endswith(' _'+name) for line in winhttp_exports.splitlines()):
         raise SystemExit('Missing native winhttp export: ' + name)
+wineserver_linkage = subprocess.check_output(['otool','-L',str(wineserver)],text=True)
+wineserver_architecture = subprocess.check_output(['file',str(wineserver)],text=True)
+if 'Mach-O 64-bit executable x86_64' not in wineserver_architecture:
+    raise SystemExit('Wrong wineserver architecture')
+if not os.access(wineserver,os.X_OK): raise SystemExit('Rebuilt wineserver is not executable')
+for dependency in wineserver_linkage.splitlines()[1:]:
+    name = dependency.strip().split(' (',1)[0]
+    if not name.startswith(('/usr/lib/','/System/Library/')):
+        raise SystemExit('Non-system wineserver dependency: ' + name)
 for module,module_linkage in ((driver,linkage),(native_win32u,win32u_linkage),(native_winhttp,winhttp_linkage)):
     for dependency in module_linkage.splitlines()[1:]:
         name = dependency.strip().split(' (',1)[0]
@@ -224,7 +274,8 @@ payload = work / (component + '-source')
 payload.mkdir()
 shutil.copytree(inputs,payload / 'source-inputs')
 for name in ('scripts/build-metal-wine.sh','patches/wine-metal-driver.patch','patches/wine-mouse-pointer.patch',
-             'patches/wine-wpad-macos.patch','patches/wine-remote-metal.patch',
+             'patches/wine-wpad-macos.patch','patches/wine-remote-metal.patch','patches/wine-msync.patch',
+             'Tests/WineMSyncTests.c','scripts/test-msync.sh',
              'Tests/WineProxyTests.c','Tests/WineProxyPolicyTests.c','scripts/test-wine-proxy.sh',
              'Tests/WineRemotePresentationTests.cpp','scripts/test-remote-presentation.sh'):
     target = payload / name
@@ -232,10 +283,13 @@ for name in ('scripts/build-metal-wine.sh','patches/wine-metal-driver.patch','pa
     shutil.copyfile(root / name,target)
 shutil.copytree(src / 'dlls/winemac.drv',payload / 'patched-driver')
 shutil.copytree(src / 'dlls/ntdll',payload / 'patched-ntdll')
+shutil.copytree(src / 'server',payload / 'patched-server')
+(payload / 'patched-include/wine').mkdir(parents=True)
+shutil.copyfile(src / 'include/wine/server_protocol.h',payload / 'patched-include/wine/server_protocol.h')
 for module in ('win32u','user32','wow64win','winhttp'):
     shutil.copytree(src / 'dlls' / module,payload / ('patched-' + module))
-license_text = ('MagicWine Metal, mouse-pointer and macOS WPAD Wine support: public Wine 11 native and PE\n'
-                'winemac/ntdll/win32u/user32/wow64win/winhttp modules with the public Unix-call entry\n'
+license_text = ('MagicWine Metal, mouse-pointer, macOS WPAD and MSync Wine support: public Wine 11 native and PE\n'
+                'winemac/ntdll/win32u/user32/wow64win/winhttp modules and matching wineserver with the public Unix-call entry\n'
                 'point, native pthread TLS, D3DMetal Nt ABI, mouse-pointer input support,\n'
                 'remote root/child Metal layer hosting, and macOS proxy autodiscovery policy.\n'
                 'The MagicWine D3DMetal/DXMT client-surface bridge is LGPL-2.1-or-later.\n'
@@ -246,6 +300,12 @@ license_text = ('MagicWine Metal, mouse-pointer and macOS WPAD Wine support: pub
                 'Native ABI source references: CodeWeavers CrossOver 26.1 public source mirror,\n'
                 'rnowak/wine-crossover-sources b4f3c510a1808e6e32fb99e9bc11fa46ccc207dc;\n'
                 'Alien4042x/WineForge a342f4aeb23d719339f444b9e94e06ecf0ff1a14 (LGPL-2.1-or-later).\n'
+                'MSync: Marc-Aurel Zent and Zebediah Figura (LGPL-2.1-or-later),\n'
+                'https://github.com/marzent/wine-msync; Wine 11 inproc-sync integration from\n'
+                'the pinned public CrossOver source above. Original files and COPYING.LIB\n'
+                'are preserved under source-inputs/msync-upstream; the attributed backport\n'
+                'and generated protocol are included. WINEMSYNC=1 uses Mach messages,\n'
+                'shared memory and Darwin ulocks; WINEMSYNC=0 uses normal server sync.\n'
                 'No proprietary CrossOver or Apple binaries are included.\n'
                 'Original Wine file copyright notices are retained in the corresponding source.\n'
                 'Rebuild offline: extract the adjacent -source.tar.gz and run bash scripts/build-metal-wine.sh.\n'
@@ -266,6 +326,9 @@ compressed_driver.write_bytes(compressor.compress(driver.read_bytes()) + compres
 compressed_native_ntdll = work / (component + '-ntdll.so.deflate')
 compressor = zlib.compressobj(wbits=-15)
 compressed_native_ntdll.write_bytes(compressor.compress(native_ntdll.read_bytes()) + compressor.flush())
+compressed_wineserver = work / (component + '-wineserver.deflate')
+compressor = zlib.compressobj(wbits=-15)
+compressed_wineserver.write_bytes(compressor.compress(wineserver.read_bytes()) + compressor.flush())
 compressed_pe = {}
 for arch, path in pe_drivers.items():
     compressed_pe[arch] = work / (component + '-' + arch + '.drv.deflate')
@@ -301,6 +364,7 @@ metadata = {'component':component,'source':{'url':source_url,'sha256':source_has
             'stock':{'url':stock_url,'sha256':stock_hash,'original_driver_sha256':original_hash,
                      'original_pe_sha256':original_pe_hashes,'original_ntdll_sha256':original_ntdll_hashes,
                      'original_native_ntdll_sha256':original_native_ntdll_hash,
+                     'original_wineserver_sha256':original_wineserver_hash,
                      'original_native_win32u_sha256':original_native_win32u_hash,
                      'original_user32_sha256':original_user32_hashes,
                      'original_wow64win_sha256':original_wow64win_hashes,
@@ -308,6 +372,11 @@ metadata = {'component':component,'source':{'url':source_url,'sha256':source_has
             'patch_sha256':patch_hash,'mouse_pointer_patch_sha256':pointer_patch_hash,
             'wpad_macos_patch_sha256':wpad_patch_hash,
             'remote_metal_patch_sha256':remote_patch_hash,
+            'msync_patch_sha256':msync_patch_hash,
+            'msync':{'url':msync_source_url,'commit':msync_commit,'inputs_sha256':msync_inputs,
+                     'design_url':'https://github.com/marzent/wine-msync',
+                     'license':'LGPL-2.1-or-later','protocol_version':931,
+                     'environment':'WINEMSYNC=1/0','startup_marker':'msync: up and running.'},
             'link_inputs_sha256':link_hashes,
             'freetype':{'url':freetype_url,'sha256':freetype_hash,'version':'2.13.3',
                         'runtime_soname':'@loader_path/../../libfreetype.6.dylib',
@@ -337,6 +406,10 @@ metadata = {'component':component,'source':{'url':source_url,'sha256':source_has
             'source_date_epoch':epoch,'driver_sha256':sha(driver),
             'native_ntdll_sha256':sha(native_ntdll),
             'compressed_native_ntdll_sha256':sha(compressed_native_ntdll),
+            'wineserver_sha256':sha(wineserver),
+            'compressed_wineserver_sha256':sha(compressed_wineserver),
+            'wineserver_linkage':wineserver_linkage.replace(str(wineserver),'wineserver'),
+            'wineserver_mode':'0755','wineserver_install_path':'bin/wineserver',
             'native_ntdll_exports':ntdll_exports.replace(str(native_ntdll),'ntdll.so'),
             'compressed_driver_sha256':sha(compressed_driver),
             'commands':[[arg.replace(str(work),'.').replace(str(root),'${ROOT}') for arg in cmd] for cmd in commands],
@@ -361,6 +434,7 @@ with archive.open('wb') as raw, gzip.GzipFile(filename='',mode='wb',fileobj=raw,
 for path,name in [(archive,archive.name),(payload / 'LICENSE-WINE-METAL.txt','LICENSE-WINE-METAL.txt'),
                   (payload / 'provenance.json',component+'-provenance.json'),(compressed_driver,compressed_driver.name),
                   (compressed_native_ntdll,compressed_native_ntdll.name),
+                  (compressed_wineserver,compressed_wineserver.name),
                   (compressed_native_win32u,compressed_native_win32u.name),
                   (compressed_native_winhttp,compressed_native_winhttp.name),
                   *[(path,path.name) for path in [*compressed_pe.values(), *compressed_ntdll.values(),
