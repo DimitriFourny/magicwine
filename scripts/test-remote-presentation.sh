@@ -49,11 +49,16 @@ else
     echo "No bottle identifier returned." >&2
     exit 1
 fi
-"$CLI" --root "$WORK/library" graphics "$BOTTLE" "$BACKEND" --accept-experimental
-for bits in "${BITS[@]}"; do
-    if [[ $# -eq 4 ]]; then
-        "$CLI" --root "$WORK/library" exec "$BOTTLE" "$WORK/remote$bits.exe" --visual
-    else
-        "$CLI" --root "$WORK/library" exec "$BOTTLE" "$WORK/remote$bits.exe"
-    fi
+# HUD initialization exercises the remote layer's AppKit ownership as well as
+# presentation. It must work without a producer-local NSWindow (Steam CEF).
+for hud in --no-hud --hud; do
+    "$CLI" --root "$WORK/library" graphics "$BOTTLE" "$BACKEND" --accept-experimental "$hud"
+    for bits in "${BITS[@]}"; do
+        if [[ $# -eq 4 ]]; then
+            "$CLI" --root "$WORK/library" exec "$BOTTLE" "$WORK/remote$bits.exe" --visual
+        else
+            "$CLI" --root "$WORK/library" exec "$BOTTLE" "$WORK/remote$bits.exe"
+        fi
+    done
+    "$CLI" --root "$WORK/library" stop "$BOTTLE"
 done

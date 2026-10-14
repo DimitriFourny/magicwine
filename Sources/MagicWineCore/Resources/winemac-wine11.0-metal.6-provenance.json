@@ -174,8 +174,8 @@
     ]
   ],
   "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
-  "component": "winemac-wine11.0-metal.5",
-  "compressed_driver_sha256": "5beb5b2db11e3af4717108db78f0969c60a6e77b76b8c4748a2b3dd7598a6f8d",
+  "component": "winemac-wine11.0-metal.6",
+  "compressed_driver_sha256": "111c327476cf5c3749af306972788dc41315123a03bda3316fb4e78678bf5e93",
   "compressed_native_ntdll_sha256": "92c99a44c743ef31db90ca8886640df4818d9a60dce5e64e6bf7385bf47ec2fd",
   "compressed_native_win32u_sha256": "e078529ec968140f738d689447e8a05d77e80a5bf7317720e3e0b8d269804533",
   "compressed_native_winhttp_sha256": "7d9ae18a200d62d6ad9ceef26e5804ff73b4d7393dcfa0be711d15e023041892",
@@ -199,12 +199,12 @@
     "x86_64": "060824be0a7eddb5e727904cb7a4cdf8e5b4b76c0c23132697318e703f20c6d4"
   },
   "deployment_target": "10.15",
-  "driver_sha256": "de85deaac706e1af3d309804caae77de61e34840969f67883ef96f697f2b4eee",
+  "driver_sha256": "a2fe10bf083d7199acf1d996a79c89c83be2fcb41bc7c510d0f2d1c99cc812fd",
   "dxmt_contract": {
     "consumed_table_prefix_slots": 10,
     "url": "https://github.com/3Shain/dxmt/blob/v0.80/src/winemetal/unix/winemetal_unix.c"
   },
-  "exports": "00000000000587a0 S ___wine_unix_call_funcs\n00000000000587d0 S ___wine_unix_call_wow64_funcs\n00000000000587f8 S _macdrv_functions\n0000000000048b80 S _magicwine_metal_bridge_v1\n0000000000032020 T _magicwine_metal_remote_copy_layer\n0000000000048b84 S _magicwine_metal_remote_v1\n",
+  "exports": "00000000000587a0 S ___wine_unix_call_funcs\n00000000000587d0 S ___wine_unix_call_wow64_funcs\n00000000000587f8 S _macdrv_functions\n0000000000048b30 S _magicwine_metal_bridge_v1\n0000000000031fd0 T _magicwine_metal_remote_copy_layer\n0000000000048b34 S _magicwine_metal_remote_v1\n",
   "freetype": {
     "link_input_stock_member": "Wine Stable.app/Contents/Resources/wine/lib/libfreetype.6.dylib",
     "runtime_soname": "@loader_path/../../libfreetype.6.dylib",
@@ -233,7 +233,7 @@
     "patched-driver/cocoa_opengl.m": "8e01a5804fa5e6655b5e6a3b36e6e29235d57c88ce5cb2c81e18e6a66188c9a1",
     "patched-driver/cocoa_status_item.m": "ae3d0b54ba46785539d1ec7c61870fc01056475f9a0c39d44f5f69c01dab5bc0",
     "patched-driver/cocoa_window.h": "8c68789694202a79eed8ce6b16993dedcdfb82eb0c3b36a9d68b3cbd2ce720e1",
-    "patched-driver/cocoa_window.m": "4846d44903bce6f41476f53179cbe68bf5ef1296adc070fa832bcb0755601eed",
+    "patched-driver/cocoa_window.m": "63919082309020107e00727c8d28d6dd67eda0a2cab7e9471d6c3bf7d22649a9",
     "patched-driver/display.c": "7883b39066ab9706aabd84273a8cd1e64db4d915cfa5799fab1e78c95ce94221",
     "patched-driver/dllmain.c": "95908db7fbcb8d95b20ce4842c75666d8e0234a19d2b4a5fac1f3cb8b16be247",
     "patched-driver/event.c": "5dbc7976247f0be6c3b8a21bf8320364f12f72d0deca5c0013f7a978e207abf3",
@@ -607,10 +607,10 @@
     "patched-wow64win/wow64win_private.h": "56b7236fce6eeff8e4a5c766f14f31919301cdcf1742f8ceb2eeeddd35cecee3",
     "patches/wine-metal-driver.patch": "64babc5970dcdc39e0e22120deaffe3de1dffabd6a4c9c5de4cda88b2ae7f59b",
     "patches/wine-mouse-pointer.patch": "309c602a281e65c62f71d9e69b19bb270c0e2fa982af4312b2a4a4ebe65536d9",
-    "patches/wine-remote-metal.patch": "8735c193f469dc9532e39d6f1df11b13c3fefb0be754ffc9a554a32ddaf652d4",
+    "patches/wine-remote-metal.patch": "373a97240b94902a8fa89b1afe89d138fd87c4d09a4d378f94a1d6faa9fb7809",
     "patches/wine-wpad-macos.patch": "4742d98e57e4c61c0fe42dc8f5a3db52efa265c0c14f1b917b7f325ccd1e7a20",
-    "scripts/build-metal-wine.sh": "e09d1aa29e89edba53fbaeef9c8079fcf6306717c4a2634e4d4906381f880771",
-    "scripts/test-remote-presentation.sh": "0d84133ef346182bc135f1890ae5318e209964afa5d831ac1b0c9efe02526896",
+    "scripts/build-metal-wine.sh": "a4dc514030ac525d2f235cb6218f3e2002b4edb6ab9e9ad9bd4777ef5ac48946",
+    "scripts/test-remote-presentation.sh": "84ec86d9204e405e5277b10073c78bf3593ff762ac765da6dc4056c602657cfa",
     "scripts/test-wine-proxy.sh": "527278e63bde277e02149a6ab470d7dd6fccd370aae16d90cfbdf8c43d594e4e",
     "source-inputs/bison-3.8.2.tar.gz": "06c9e13bdf7eb24d4ceb6b59205a4f67c2c7e7213119644430fe82fbd14a0abb",
     "source-inputs/freetype-2.13.3.tar.xz": "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289",
@@ -643,7 +643,7 @@
     "i386": "9682b258d67d16c63ca7c1fa666280a494fd450fb5ae9730906effb701fa5ca7",
     "x86_64": "502443bcc71715b173391e52eb0277b53595e6090fbb3792bb06616b909344b3"
   },
-  "remote_metal_patch_sha256": "8735c193f469dc9532e39d6f1df11b13c3fefb0be754ffc9a554a32ddaf652d4",
+  "remote_metal_patch_sha256": "373a97240b94902a8fa89b1afe89d138fd87c4d09a4d378f94a1d6faa9fb7809",
   "sdk": "26.5",
   "source": {
     "sha256": "f09e8153aa46a581d2b56a5b1363b04832070b9409d9244a68cf482b243ff14a",

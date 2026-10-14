@@ -10,8 +10,10 @@ Child geometry/lifetime design informed by the public Neutron 89084b1 report
 and DXMT issue 141; no MIT patch implementation is incorporated here.
 
 The historical 120-byte window record and 24-entry bridge table are unchanged.
-Remote create returns a genuine detached producer-local NSView hosting the
-exported layer; only HWNDs and CAContext IDs cross scalar driver messages.
+Remote create returns a genuine detached producer-local NSView for geometry;
+CAContext alone owns the exported layer. Only HWNDs and CAContext IDs cross
+scalar driver messages. The layer must not acquire AppKit's NS_view association:
+Metal HUD assumes that an associated view has a window when querying safe areas.
 Geometry enters Cocoa in raw pixels. Metadata acquisition pins the native
 handoff until release_win_data, including D3DMetal's direct NSView frame reads.
 A lazy Wine PE service serializes native state and owns WinEvent/process waits.
@@ -94,7 +96,7 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
      return (macdrv_metal_layer)layer;
  }
  
-@@ -4135,3 +4161,272 @@
+@@ -4135,3 +4161,269 @@
              [[window contentView] clearMarkedText];
      });
  }
@@ -127,8 +129,9 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +
 +/* The historical Metal bridge returns an actual NSView. D3DMetal sends
 + * -frame directly, in addition to using the driver get-layer callback.
-+ * This detached, layer-hosting view owns the exported tree; it has no
-+ * NSWindow and does not pretend to own the destination HWND. */
++ * This detached view supplies geometry, while CAContext owns the exported
++ * layer. Never make it an AppKit backing layer: Metal HUD follows NS_view to
++ * a window and calls its screen IMP without checking for a nil window. */
 +@interface WineRemoteMetalView : WineBaseView
 +{
 +    CAContext *_remoteContext;
@@ -176,9 +179,6 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +        }
 +        if ((view = [[WineRemoteMetalView alloc] initWithFrame:cgrect_mac_from_win(bounds)]))
 +        {
-+            view.layer = layer;
-+            view.wantsLayer = YES;
-+            layer.contentsScale = retina_on ? 2.0 : 1.0;
 +            view.remoteContext = context;
 +            context.layer = layer;
 +            [remote_context_views addObject:view];
@@ -194,7 +194,7 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +{
 +    __block CAMetalLayer *layer = nil;
 +    OnMainThread(^{
-+        layer = (CAMetalLayer *)[(WineRemoteMetalView *)opaque layer];
++        layer = (CAMetalLayer *)[(WineRemoteMetalView *)opaque remoteContext].layer;
 +        if (device) layer.device = (id<MTLDevice>)device;
 +        if (retain) [layer retain];
 +    });
@@ -205,7 +205,7 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +{
 +    OnMainThread(^{
 +        WineRemoteMetalView *view = opaque;
-+        CAMetalLayer *layer = (CAMetalLayer *)view.layer;
++        CAMetalLayer *layer = (CAMetalLayer *)view.remoteContext.layer;
 +        CGSize pixels = layer.drawableSize;
 +        view.frame = cgrect_mac_from_win(bounds);
 +        layer.contentsScale = retina_on ? 2.0 : 1.0;
@@ -221,7 +221,6 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +        [remote_context_views removeObject:view];
 +        view.remoteContext.layer = nil;
 +        view.remoteContext = nil;
-+        view.layer = nil;
 +    });
 +}
 +
@@ -341,7 +340,7 @@ diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
 +    [CATransaction setDisableActions:YES];
 +    for (WineRemoteMetalView *view in remote_context_views)
 +    {
-+        CAMetalLayer *layer = (CAMetalLayer *)view.layer;
++        CAMetalLayer *layer = (CAMetalLayer *)view.remoteContext.layer;
 +        CGSize pixels = layer.drawableSize;
 +        CGFloat ratio = layer.contentsScale / scale;
 +        view.frame = CGRectApplyAffineTransform(view.frame, CGAffineTransformMakeScale(ratio, ratio));
