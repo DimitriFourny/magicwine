@@ -18,6 +18,8 @@ if [[ -n "${MAGICWINE_BUNDLE_ID:-}" ]]; then
 fi
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$ROOT/LICENSE" "$ROOT/dist/LICENSE"
+cp "$ROOT/THIRD_PARTY_NOTICES.md" "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
+cp "$ROOT/THIRD_PARTY_NOTICES.md" "$ROOT/dist/THIRD_PARTY_NOTICES.md"
 cp "$BIN_DIR/magicwine-cli" "$ROOT/dist/magicwine"
 RESOURCE_BUNDLE="MagicWine_MagicWineCore.bundle"
 rm -rf "$APP/Contents/Resources/$RESOURCE_BUNDLE" "$ROOT/dist/$RESOURCE_BUNDLE"

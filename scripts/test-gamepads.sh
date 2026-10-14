@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Exercise the real native XInput APIs in both Windows ABIs without physical hardware.
 set -euo pipefail
 if [[ $# -ne 1 ]]; then
