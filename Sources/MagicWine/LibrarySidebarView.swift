@@ -209,6 +209,7 @@ struct LibrarySidebarView: View {
                         in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityValue(active ? "Download activity in progress" : "")
     }

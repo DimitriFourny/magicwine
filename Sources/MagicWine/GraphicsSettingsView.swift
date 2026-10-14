@@ -58,7 +58,7 @@ struct GraphicsSettingsView: View {
                 }
             )) {
                 ForEach(GraphicsBackend.allCases, id: \.self) { backend in
-                    Text(backend.displayName + (backend == .standard ? "" : " — Experimental")).tag(backend)
+                    Text(backend.displayName).tag(backend)
                 }
             }
             .pickerStyle(.menu)
@@ -72,44 +72,48 @@ struct GraphicsSettingsView: View {
                     Text("This bottle uses an unsupported component. Choose Standard to restore its original graphics files before enabling a current component.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Toggle("Show Graphics HUD", isOn: Binding(
-                    get: { currentBottle.graphics.showHUD },
-                    set: { showHUD in
-                        guard !unavailable, currentBottle.graphics.usesCurrentComponent else { return }
-                        model.setGraphics(currentBottle.graphics.backend, in: currentBottle, showHUD: showHUD)
-                    }
-                ))
-                .disabled(unavailable || !currentBottle.graphics.usesCurrentComponent)
-                Text("Selected: \(currentBottle.graphics.componentID ?? "unspecified component")")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("Choose Standard to restore this bottle’s original graphics files.")
-                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Toggle("Show Graphics HUD", isOn: Binding(
+                        get: { currentBottle.graphics.showHUD },
+                        set: { showHUD in
+                            guard !unavailable, currentBottle.graphics.usesCurrentComponent else { return }
+                            model.setGraphics(currentBottle.graphics.backend, in: currentBottle, showHUD: showHUD)
+                        }
+                    ))
+                    .disabled(unavailable || !currentBottle.graphics.usesCurrentComponent)
+                    SettingsInfoButton(title: "Show Graphics HUD",
+                                       message: "Show the selected graphics backend’s performance overlay.\n\nSelected: \(currentBottle.graphics.componentID ?? "unspecified component")\n\nChoose Standard to restore this bottle’s original graphics files.")
+                }
             } else {
                 Text("DXVK supports Direct3D 9/10/11, DXMT supports 10/11, and imported D3DMetal supports 64-bit 11/12. Metal backends require Apple Silicon and compatible Wine; DXMT needs macOS 15+, D3DMetal needs macOS 14+ or its library’s higher minimum.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Toggle("Retina / HiDPI", isOn: Binding(
-                get: { currentBottle.display.retinaEnabled },
-                set: { enabled in
-                    guard !unavailable else { return }
-                    model.setRetinaEnabled(enabled, in: currentBottle)
-                }
-            ))
-            .disabled(unavailable)
-            Text("Enabled by default for sharper desktop apps. Turning Retina on sets 200% scaling; turning it off sets 100%. This bottle-wide setting affects games too and requires stopping Windows programs.")
-                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Toggle("Retina / HiDPI", isOn: Binding(
+                    get: { currentBottle.display.retinaEnabled },
+                    set: { enabled in
+                        guard !unavailable else { return }
+                        model.setRetinaEnabled(enabled, in: currentBottle)
+                    }
+                ))
+                .disabled(unavailable)
+                SettingsInfoButton(title: "Retina / HiDPI",
+                                   message: "Enabled by default for sharper desktop apps. Turning Retina on sets 200% scaling; turning it off sets 100%. This bottle-wide setting affects games too and requires stopping Windows programs.")
+            }
 
-            Toggle("MSync", isOn: Binding(
-                get: { model.supportsMSync(currentBottle) && currentBottle.msyncEnabled },
-                set: { enabled in
-                    guard !synchronizationUnavailable, model.supportsMSync(currentBottle) else { return }
-                    model.setMSyncEnabled(enabled, in: currentBottle)
-                }
-            ))
-            .disabled(synchronizationUnavailable || !model.supportsMSync(currentBottle))
-            Text("MSync uses macOS synchronization to reduce Wine server overhead. It works with every graphics backend. Turn it off to use Wine server synchronization. Close Windows programs or use Stop before changing it.")
-                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Toggle("MSync", isOn: Binding(
+                    get: { model.supportsMSync(currentBottle) && currentBottle.msyncEnabled },
+                    set: { enabled in
+                        guard !synchronizationUnavailable, model.supportsMSync(currentBottle) else { return }
+                        model.setMSyncEnabled(enabled, in: currentBottle)
+                    }
+                ))
+                .disabled(synchronizationUnavailable || !model.supportsMSync(currentBottle))
+                SettingsInfoButton(title: "MSync",
+                                   message: "MSync uses macOS synchronization to reduce Wine server overhead. It works with every graphics backend. Turn it off to use Wine server synchronization. Close Windows programs or use Stop before changing it.")
+            }
             if !model.supportsMSync(currentBottle) {
                 if model.canUpgradeRuntime(currentBottle) {
                     Text("This bottle is pinned to older Wine without MSync. Install / Update Wine first, then choose Use Updated Wine below. Installing alone does not change this bottle.")
@@ -135,7 +139,7 @@ struct GraphicsSettingsView: View {
                     .controlSize(.small)
             }
         }
-        .alert("Enable \(pendingSelection?.backend.displayName ?? "") — Experimental?",
+        .alert("Enable \(pendingSelection?.backend.displayName ?? "")?",
                isPresented: Binding(
                    get: { pendingSelection != nil },
                    set: { if !$0 { pendingSelection = nil } }
@@ -152,6 +156,35 @@ struct GraphicsSettingsView: View {
             Button("Cancel", role: .cancel) { }
         } message: { selection in
             Text(backendNotice(selection.backend) + "\n\nChanging graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files. In-place component updates are not supported.")
+        }
+    }
+}
+
+private struct SettingsInfoButton: View {
+    let title: String
+    let message: String
+    @State private var isPresented = false
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("About \(title)")
+        .help("About \(title)")
+        .popover(isPresented: $isPresented) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.headline)
+                Text(message)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding()
+            .frame(width: 320, alignment: .leading)
         }
     }
 }

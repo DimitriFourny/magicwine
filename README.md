@@ -174,11 +174,13 @@ Every new bottle defaults to **Standard**. Enable another backend explicitly in 
 | Backend | Translation provided | Component and requirements |
 | --- | --- | --- |
 | Standard | Wine's built-in graphics | Depends on the bottle's pinned Wine runtime |
-| DXVK — Experimental | 32/64-bit Direct3D 9/10/11 → Vulkan/MoltenVK | Bundled macOS fork; supported by managed Wine |
-| DXMT — Experimental | 32/64-bit Direct3D 10/11 → Metal | Bundled DXMT v0.80; Apple Silicon, macOS 15+, managed Wine or compatible native custom Wine |
-| D3DMetal — Experimental | 64-bit Direct3D 11/12 → Metal | Locally imported Apple libraries; Apple Silicon, macOS 14+ or the library's higher minimum, managed Wine or compatible native custom Wine |
+| DXVK | 32/64-bit Direct3D 9/10/11 → Vulkan/MoltenVK | Bundled macOS fork; supported by managed Wine |
+| DXMT | 32/64-bit Direct3D 10/11 → Metal | Bundled DXMT v0.80; Apple Silicon, macOS 15+, managed Wine or compatible native custom Wine |
+| D3DMetal | 64-bit Direct3D 11/12 → Metal | Locally imported Apple libraries; Apple Silicon, macOS 14+ or the library's higher minimum, managed Wine or compatible native custom Wine |
 
 Select an initialized bottle and choose a backend in **Graphics**. Nonstandard backends require experimental/third-party consent. Setup validates compatibility, stops only this bottle, and saves the selection after successful installation. Direct backend switches preserve the complete original DLL set, including different 32/64-bit footprints. **Standard** restores original files, links, or absence even if the selected component is missing; displaced user replacements go to `graphics/recovered/`. Keep these backups intact. Errors do not silently select another backend.
+
+Click the small info icon beside **Show Graphics HUD**, **Retina / HiDPI**, or **MSync** to read its description. Help remains available when the setting is disabled.
 
 ### DXVK
 
@@ -188,7 +190,7 @@ The component is pinned to `1.10.3-magicwine.2` with archive SHA-256 `c06d15ed8b
 
 This build matches CrossOver's observed compatibility behavior for unsupported pipeline-statistics queries: creation succeeds, but `GetData` returns `S_FALSE` (results unavailable), without writing counters or allocating an unsupported Vulkan query pool. Query lifecycle validation is preserved, and drivers with real counter support retain it. This avoids Tropics' D3D10 null dereference after a rejected query; applications that wait indefinitely for statistics may still stall. No CrossOver binaries or proprietary components are included. D3D10 device creation lets DXVK validate the requested adapter and feature level instead of rejecting it based on WineD3D's unrelated capabilities.
 
-Existing bottles are not automatically migrated, and direct in-place DXVK component replacement is not supported. To adopt the current component in an existing bottle, first choose **Standard** to restore its original graphics files, then enable **DXVK — Experimental** again. This retains the installed applications and launchers; game compatibility still requires testing. A new bottle remains an option for an isolated installation. Existing bottles and programs are never deleted automatically.
+Existing bottles are not automatically migrated, and direct in-place DXVK component replacement is not supported. To adopt the current component in an existing bottle, first choose **Standard** to restore its original graphics files, then enable **DXVK** again. This retains the installed applications and launchers; game compatibility still requires testing. A new bottle remains an option for an isolated installation. Existing bottles and programs are never deleted automatically.
 
 Only native `d3d9.dll`, `d3d10core.dll`, and `d3d11.dll` are installed in the selected prefix's `system32`/`syswow64`; Wine's built-in DXGI stays selected. **Standard** restores the original files, symbolic links, or absence without another download, even if the shared DXVK package is missing. User-modified replacement DLLs are retained in the bottle's `graphics/recovered/` directory instead of silently discarded. Keep the bottle's graphics backups intact.
 

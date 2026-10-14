@@ -23,6 +23,8 @@
 - Correct imported MSync mapping-table growth races, shared-reference overflow, process-exit reference reclamation, and native mutant release-state semantics. Authenticate reference-release requests and preserve ordered destruction; reject live client/server mode mismatches instead of falling back silently.
 - Pass all 205 Swift release tests and real 32/64-bit synchronization regressions with MSync off/on, including 65,568 duplicated handles, 135,168 live objects, APCs, process termination, and contention. Reproduce the mutant-state failure before the fix and pass afterward. Verify MSync-enabled mouse input, WinHTTP, DXMT 32/64-bit and D3DMetal 64-bit cross-process presentation with HUD off/on, native checkbox persistence, explicit upgrade preservation, and non-destructive live-session rejection.
 - Measure isolated 20,000-round-trip handoff medians over ten samples per mode: 64-bit server 292.02 ms versus MSync 100.27 ms; 32-bit server 296.54 ms versus MSync 127.18 ms. These measurements do not establish game-FPS improvements. Rebuild/sign the app and CLI, verify fresh managed installation and all-backend launch policy, and reproduce all bundled artifact hashes with the offline source recipe.
+- Move Graphics HUD, Retina / HiDPI, and MSync descriptions into clickable info popovers beside their toggles; keep help available while settings are disabled. Simplify graphics picker labels and confirmation titles by removing the Experimental suffix.
+- Disable the extra native focus rectangle on sidebar navigation buttons, including Gamepads, while retaining the existing selected-item highlight and button interaction.
 
 ## Unreleased — 2026-10-13
 
