@@ -10,7 +10,7 @@ enum WineTheme {
     static let border = Color.white.opacity(0.09)
     static let accent = Color(red: 0.65, green: 0.18, blue: 0.37)
     static let text = Color(red: 0.96, green: 0.94, blue: 0.96)
-    static let muted = Color(red: 0.69, green: 0.64, blue: 0.70)
+    static let muted = Color(red: 0.74, green: 0.69, blue: 0.75)
     static let success = Color(red: 0.34, green: 0.83, blue: 0.48)
 }
 
@@ -33,12 +33,13 @@ enum WineArtwork {
 struct WineButtonStyle: ButtonStyle {
     var prominent = false
     @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .foregroundStyle(WineTheme.text)
             .background {
                 RoundedRectangle(cornerRadius: 8)
@@ -47,12 +48,17 @@ struct WineButtonStyle: ButtonStyle {
                             ? [WineTheme.accent, WineTheme.accent.opacity(0.62)]
                             : [WineTheme.elevated, WineTheme.elevated.opacity(0.72)],
                         startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white.opacity(isEnabled && isHovered ? 0.08 : 0))
+                    }
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(Color.white.opacity(prominent ? 0.13 : 0.07))
+                    .strokeBorder(Color.white.opacity(isEnabled && isHovered ? 0.24 : (prominent ? 0.13 : 0.07)))
             }
             .opacity(isEnabled ? (configuration.isPressed ? 0.72 : 1) : 0.4)
+            .onHover { isHovered = $0 }
     }
 }
 
@@ -81,7 +87,7 @@ struct WineCard<Content: View>: View {
                 Spacer(minLength: 8)
                 if let trailing {
                     Text(trailing)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(WineTheme.muted)
                         .padding(.horizontal, 9).padding(.vertical, 5)
                         .background(WineTheme.elevated, in: RoundedRectangle(cornerRadius: 7))

@@ -17,7 +17,11 @@ The script builds the native app for your Mac, creates an ad-hoc-signed developm
 
 ## Native interface
 
-The dark wine-themed library has a searchable bottle sidebar and dedicated **Gamepads**, **Downloads**, **Settings**, and **Documentation** pages. Search filters bottle names, not installed programs. Select a bottle to open its dashboard: pinned runtime and status, installed-program launchers, installer and shortcut actions, graphics controls, logs, and confirmed Trash. Dashboard cards switch from two columns to one in narrower windows.
+The dark wine-themed library has bottle search above the sidebar list and dedicated **Gamepads**, **Downloads**, **Settings**, and **Documentation** pages. Search filters bottle names, not installed programs. A compact bottle header contains **Install EXE/MSI**, **Add Program**, and **Refresh**, with live status, pinned Wine version, and graphics backend. **Installed Programs** comes first, with compact launch rows, truncated paths, and contextual actions; long lists scroll. **Settings** in the header jumps to the Runtime section.
+
+Program rows use 56-point icon tiles and larger Launch buttons. The graphics dropdown has a bordered surface, and HUD, Retina / HiDPI, and MSync switches align on the right with their help buttons beside the labels.
+
+**Tools** sits directly below Installed Programs. In wider windows, **Runtime** and **Bottle Details** form the right column; in narrow windows they stack below Tools. The compact header retains its cellar background artwork. Runtime retains graphics selection, HUD, Retina / HiDPI, MSync, update warnings, and **Configure Runtime** (Wine configuration). **Advanced compatibility** expands the general backend requirements. Bottle Details shows the name, creation date, status, and a truncated path with Copy and Reveal in Finder controls; **Advanced Details** expands the bottle ID and Wine executable path. Tools exposes **Reveal C: Drive**, **Reveal Logs**, and a separately placed confirmed Trash action without expanding a disclosure. Sidebar navigation keeps its pink selection highlight without the extra native blue focus rectangle. The header shows **Stop** only for a tracked running session, a stoppable operation, or stopping in progress; the existing Bottle menu remains available for stopping external Wine processes.
 
 **Downloads** manages Wine installation and displays installed runtimes. **Settings** chooses the default for new bottles or an existing Wine executable; existing bottles retain their pinned runtime. The sidebar **+** button and **Command-N** open bottle creation. Native file pickers, installer URL handling, Wine trust confirmation, and bottle-specific busy/stop guards remain in place.
 
@@ -26,7 +30,7 @@ The dark wine-themed library has a searchable bottle sidebar and dedicated **Gam
 1. Open **Downloads**, click **Install / Update Wine…**, and confirm **Trust and Install Wine**. The single managed Wine includes MagicWine's bundled DXMT-compatible driver; DXMT itself is also bundled.
 2. Create a bottle. MagicWine uses your preferred Wine automatically and initializes its Windows environment with **Standard** graphics. Custom Wine selection is optional under **Advanced** in Settings and bottle creation.
 3. Select **Install EXE/MSI** and choose the application's Windows installer. Complete the actual Windows installer normally.
-4. Launch its discovered Start Menu shortcut. Use **Refresh Shortcuts** if necessary, or **Add Program** to select an EXE, LNK, or URL Internet Shortcut manually.
+4. Launch its discovered Start Menu shortcut. Use **Refresh** if necessary, or **Add Program** to select an EXE, LNK, or URL Internet Shortcut manually.
 
 **Steam games:** Installed Programs discovers `.lnk` and `.url` files in the bottle's Start Menu and Desktop folders; it does not scan Steam's game inventory. Steam game shortcuts such as `steam://rungameid/…` launch through the selected bottle's Wine shell and registered Steam handler, not macOS Steam. Local `IconFile`/`IconIndex` fields supply shortcut artwork without fetching icons from the network. URL shortcuts to support websites can also appear.
 
@@ -34,7 +38,7 @@ The dark wine-themed library has a searchable bottle sidebar and dedicated **Gam
 
 **Bottle-local Desktop:** New bottles create a real Windows Desktop directory instead of linking to macOS Desktop. Existing bottles replace Desktop symlinks when refreshing shortcuts or before starting a Windows process. Only the link is removed: files on its former target are not moved, copied, or deleted, and existing bottle-local Desktop files are preserved. Other Wine folder mappings remain unchanged. Wine initialization and later `wineboot -u` retain the local Desktop.
 
-**Retina / HiDPI:** Each bottle's Graphics card has a backend-independent toggle, enabled by default for new bottles. On enables Wine's Retina mode with 200% Windows scaling (192 DPI); off uses non-Retina mode with 100% scaling (96 DPI). This lets desktop interfaces such as Steam render sharply on a Retina display without shrinking their controls. It applies to the whole bottle, including games; games that automatically select a higher resolution can increase GPU load.
+**Retina / HiDPI:** Each bottle's Runtime section has a backend-independent toggle, enabled by default for new bottles. On enables Wine's Retina mode with 200% Windows scaling (192 DPI); off uses non-Retina mode with 100% scaling (96 DPI). This lets desktop interfaces such as Steam render sharply on a Retina display without shrinking their controls. It applies to the whole bottle, including games; games that automatically select a higher resolution can increase GPU load.
 
 Existing bottles without an explicit Retina setting or non-default DPI adopt the new default before their next idle launch. Explicit Retina choices and custom DPI are preserved. Settings cannot change from the dashboard while Windows programs are running; exit them or use **Stop** first. Automatic migration never terminates running programs. MagicWine writes both registry values together only after Wine exits, retains the bottle's selected display configuration on subsequent launches, and leaves graphics backends, HUD settings, and DLLs unchanged.
 
@@ -42,7 +46,7 @@ Only the current managed Wine is selected automatically. Discovery excludes obso
 
 Managed Wine downloads show a progress bar, percentage, received/total size, and recent download speed. If the server does not supply a total size, the bar stays indeterminate while received bytes and speed still update. Checksum verification, extraction, preparation, and runtime inspection have separate status messages. An already-installed runtime is reused without displaying a fictitious download.
 
-**Stop** terminates the selected bottle's Windows processes, not other bottles. **Wine Configuration** opens Wine's settings. **Reveal C: Drive** opens the bottle's Windows files. Errors retain their operation logs; **Reveal Logs** makes them accessible.
+**Stop** terminates the selected bottle's Windows processes, not other bottles. **Configure Runtime** opens Wine's settings. **Reveal C: Drive** opens the bottle's Windows files. Errors retain their operation logs; **Reveal Logs** makes them accessible.
 
 **Steam and background launchers:** Closing Steam's window can hide it in the Windows tray without quitting the client. MagicWine keeps the session marked **Running**, but **Launch** stays available to reopen Steam or start another program in the same bottle; you do not need to stop the bottle first. Use **Steam → Exit** to quit Steam normally. MagicWine does not terminate a session merely because its windows disappear, which would interrupt games and downloads. Installers, graphics changes, and other exclusive bottle operations remain unavailable until the session ends or you use **Stop**.
 

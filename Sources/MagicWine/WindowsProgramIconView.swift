@@ -21,15 +21,15 @@ struct WindowsProgramIconView: View {
                 Image(decorative: image, scale: 2)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 32, height: 32)
+                    .frame(width: 48, height: 48)
             } else {
                 Image(systemName: ["lnk", "url"].contains((executablePath as NSString).pathExtension.lowercased()) ? "link" : "app")
-                    .font(.system(size: 20))
+                    .font(.system(size: 28))
                     .foregroundStyle(WineTheme.muted)
             }
         }
-        .frame(width: 38, height: 38)
-        .background(WineTheme.elevated, in: RoundedRectangle(cornerRadius: 9))
+        .frame(width: 56, height: 56)
+        .background(WineTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
         .accessibilityHidden(true)
         .task(id: Request(executablePath: executablePath, prefix: prefix, revision: revision)) {
             image = nil
