@@ -36,12 +36,12 @@ enum WineMetalDriver {
               compressedDigest: "a06d077e695969de74c855d0e36b5ae84756d825c9b1bf6074eb564f49b6f9f2"),
         Image(relativePath: "lib/wine/x86_64-unix/ntdll.so", resourceSuffix: "-ntdll.so.deflate",
               originalDigest: "dfb9d4d4d6e7fd3dc537c1bacd69cb3a6bb46ae98311bb5358df3c4eab470c3f",
-              digest: "76b129dda3fea5cc16c5a8dc50c231c7a02566d2c35fd104584f24d394bc7722",
-              compressedDigest: "cc620e9398b5147b239413adf47922650b6492629a0a9b410d46f5a37eabcb40"),
+              digest: "38f73b1536c8a2e358c941d10bf41d4b4352a6cc0a127a686b45e1217abcc691",
+              compressedDigest: "8436a770978a082afe46a7f5327c970dc0ead2f912f0e818f87dabf2466eff37"),
         Image(relativePath: "bin/wineserver", resourceSuffix: "-wineserver.deflate",
               originalDigest: "6da7d389c5a35687e580c4988e03f830a73786cf13aba6761e4791ab74aeea2e",
-              digest: "dc39a5b3fb6510cf950947d1cf567e7b650383781167f48de4460430ec1025a6",
-              compressedDigest: "b97e7b029b67141212e2d6b78b6efcd113c65d4bb9aea7b04513350531da052a"),
+              digest: "3d204a530de16f6904afd73a65d3d5fc0f62305d5814b824ded6c535178b741e",
+              compressedDigest: "722de4553ca46463e5263be67792413ea77160f3acdfba90071353f8a23bce9d"),
         Image(relativePath: "lib/wine/x86_64-windows/ntdll.dll", resourceSuffix: "-x86_64.ntdll.deflate",
               originalDigest: "d63d10c77a55105d68bf1935ff10137d2ab5e8a4c6ae329aee599f17524b2755",
               digest: "63695dba9ca40e8e75f10470ec5f462a33efe99b717b3551d61a5aeaa1a8effb",
@@ -52,8 +52,8 @@ enum WineMetalDriver {
               compressedDigest: "c906ffa9bb4f56860a7682202bdf09c25cb342118c37af5695c91dc87d4de460"),
         Image(relativePath: "lib/wine/x86_64-unix/win32u.so", resourceSuffix: "-win32u.so.deflate",
               originalDigest: "5686c667977ab6d4ea932ea53a2a7b73e51c936988118707b85c7619db1dfb98",
-              digest: "3ed06f88e58a5a3efabb43419cdfe2ffe2109a5f8025512bfad6a86f75644d9f",
-              compressedDigest: "e078529ec968140f738d689447e8a05d77e80a5bf7317720e3e0b8d269804533"),
+              digest: "80a332d8ed6e76a582fbdf98640d9c98353f28c4f26cf1c49a26b472441ae51a",
+              compressedDigest: "f86ee043ec54343077b7c0375b95b3d8b9bae5d4a9f40bdab987f5b3afaf1337"),
         Image(relativePath: "lib/wine/x86_64-windows/user32.dll", resourceSuffix: "-x86_64.user32.deflate",
               originalDigest: "8ea5e7d18a3d1fc774f56a30c13c1abe0848a3a0af0c2d007e1b852e716a7496",
               digest: "8dee0d4c6ec6fbb3c96f5a925cf63aa6b5d4aa995b90f1056ffb88a1dcb2a556",
@@ -94,9 +94,9 @@ enum WineMetalDriver {
             (componentID + $0.resourceSuffix, $0.compressedDigest, nativeMaximum, $0)
         }
         pins += [
-            (sourceName, "b7721fa7e32362905a7afc0810a38dc505f876fc514469ee2f99303b44661601", sourceMaximum, nil),
+            (sourceName, "1869d0c0a16eba30e814da4309995fc5da6e9ae0ddc9766b7e1b89fc46aa9ece", sourceMaximum, nil),
             (licenseName, "352d42690d61e6bb37d34999c96f1cd5a99d97275b0ccc00a7ba466f788ea96b", textMaximum, nil),
-            (provenanceName, "db07b4e2b0df8c0c5296ae55e9bf7b7c1ab0a1e15c0741371d92a8423539d9ec", textMaximum, nil)
+            (provenanceName, "4eafdc23cd06a865468786d37a3abaafde524cbaab8fbf5c8ed71712fed4a97f", textMaximum, nil)
         ]
         return try pins.map { name, digest, maximum, image in
             guard let url = Bundle.module.url(forResource: name, withExtension: nil) else {

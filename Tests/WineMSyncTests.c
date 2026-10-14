@@ -154,9 +154,9 @@ static void test_semaphores(void)
     SetLastError(0);
     require(!ReleaseSemaphore(handle, 1, NULL) && GetLastError() == ERROR_TOO_MANY_POSTS,
             "full semaphore rejects a post");
-    SetLastError(0);
-    require(!ReleaseSemaphore(handle, 0, NULL) && GetLastError() == ERROR_INVALID_PARAMETER,
-            "zero semaphore release is invalid");
+    /* Wine forwards this as an unsigned NT count. The failed release must not
+     * overflow or consume the semaphore, regardless of Win32 error mapping. */
+    require(!ReleaseSemaphore(handle, -1, NULL), "negative release must fail");
     for (i = 0; i < 3; ++i) expect_wait(handle, 0, WAIT_OBJECT_0, "drain maximum count");
     expect_wait(handle, 0, WAIT_TIMEOUT, "maximum count exhausted");
     close_handle(handle);
@@ -232,6 +232,31 @@ static void test_mutexes(void)
     close_handle(handle);
     close_handle(blocker);
     puts("PASS recursive and abandoned mutexes");
+}
+
+static void test_native_mutex_state(void)
+{
+    typedef LONG (WINAPI *release_mutant_fn)(HANDLE, LONG *);
+    release_mutant_fn release_mutant = (release_mutant_fn)(void *)
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtReleaseMutant");
+    HANDLE handle = mutex(TRUE);
+    LONG previous, status, depth;
+    require(release_mutant != NULL, "resolve NtReleaseMutant");
+    expect_wait(handle, 0, WAIT_OBJECT_0, "native mutant recursion 2");
+    expect_wait(handle, 0, WAIT_OBJECT_0, "native mutant recursion 3");
+    for (depth = 3; depth >= 1; --depth) {
+        previous = 12345;
+        status = release_mutant(handle, &previous);
+        require(status == 0 && previous == 1 - depth,
+                "NtReleaseMutant depth %ld: status %#lx, previous %ld, expected %ld",
+                depth, (unsigned long)status, previous, 1 - depth);
+        expect_mutex_from_thread(handle, depth > 1 ? WAIT_TIMEOUT : WAIT_OBJECT_0);
+    }
+    expect_wait(handle, 0, WAIT_OBJECT_0, "native mutant can be reacquired");
+    require(release_mutant(handle, NULL) == 0, "NtReleaseMutant accepts null previous-state output");
+    expect_mutex_from_thread(handle, WAIT_OBJECT_0);
+    close_handle(handle);
+    puts("PASS native NtReleaseMutant previous-state semantics");
 }
 
 struct wait_all_worker {
@@ -400,6 +425,20 @@ static void object_name(char *buffer, size_t capacity, DWORD owner, const char *
     require(length > 0 && (size_t)length < capacity, "named-object name length");
 }
 
+static void start_child(const wchar_t *arguments, BOOL inherit, PROCESS_INFORMATION *process)
+{
+    wchar_t executable[4096], command[4352];
+    STARTUPINFOW startup = {0};
+    DWORD length = GetModuleFileNameW(NULL, executable, (DWORD)ARRAY_SIZE(executable));
+    int command_length;
+    require(length && length < ARRAY_SIZE(executable), "get executable path");
+    command_length = swprintf(command, ARRAY_SIZE(command), L"\"%ls\" %ls", executable, arguments);
+    require(command_length > 0 && (size_t)command_length < ARRAY_SIZE(command), "child command length");
+    startup.cb = sizeof(startup);
+    require(CreateProcessW(executable, command, NULL, NULL, inherit, 0, NULL, NULL, &startup, process),
+            "CreateProcess: %lu", GetLastError());
+}
+
 static int child_process(DWORD owner, HANDLE pipe)
 {
     char name[128];
@@ -442,13 +481,12 @@ static int child_process(DWORD owner, HANDLE pipe)
 static void test_processes(void)
 {
     char name[128];
-    wchar_t executable[4096], command[4352];
+    wchar_t arguments[128];
     HANDLE gate, ready, lock, done, original = event(FALSE, FALSE), local, remote;
     HANDLE pipe_read, pipe_write, termination[2];
     SECURITY_ATTRIBUTES attributes = {sizeof(attributes), NULL, TRUE};
-    STARTUPINFOW startup = {0};
     PROCESS_INFORMATION process = {0};
-    DWORD owner = GetCurrentProcessId(), written, code, length;
+    DWORD owner = GetCurrentProcessId(), written, code;
     uint64_t payload;
     int command_length;
 
@@ -469,14 +507,10 @@ static void test_processes(void)
     close_handle(original);
     require(CreatePipe(&pipe_read, &pipe_write, &attributes, 0), "create child control pipe");
     require(SetHandleInformation(pipe_write, HANDLE_FLAG_INHERIT, 0), "parent keeps pipe writer");
-    length = GetModuleFileNameW(NULL, executable, (DWORD)ARRAY_SIZE(executable));
-    require(length && length < ARRAY_SIZE(executable), "get executable path");
-    command_length = swprintf(command, ARRAY_SIZE(command), L"\"%ls\" --child %lu %llu",
-                              executable, owner, (unsigned long long)(uintptr_t)pipe_read);
-    require(command_length > 0 && (size_t)command_length < ARRAY_SIZE(command), "child command length");
-    startup.cb = sizeof(startup);
-    require(CreateProcessW(executable, command, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &process),
-            "CreateProcess: %lu", GetLastError());
+    command_length = swprintf(arguments, ARRAY_SIZE(arguments), L"--child %lu %llu",
+                              owner, (unsigned long long)(uintptr_t)pipe_read);
+    require(command_length > 0 && (size_t)command_length < ARRAY_SIZE(arguments), "child arguments length");
+    start_child(arguments, TRUE, &process);
     close_handle(pipe_read);
     require(DuplicateHandle(GetCurrentProcess(), local, process.hProcess, &remote,
                             0, FALSE, DUPLICATE_SAME_ACCESS), "duplicate handle into child");
@@ -640,6 +674,199 @@ static void test_contention(void)
     puts("PASS bounded repeated mutex/semaphore contention");
 }
 
+#define DUPLICATE_BOUNDARY_COUNT 65568
+#define GROWTH_WORKERS 4
+/* More than 128 pages even with the old 16-byte slots and 16-KiB host pages. */
+#define GROWTH_OBJECTS_PER_WORKER 33792
+#define STRESS_DEADLINE 120000
+
+static void probe_live_event(HANDLE original, HANDLE *recycled)
+{
+    HANDLE probe;
+    /* Free a lower allocation first so an incorrectly zero reference count on
+     * the still-live original cannot hide behind the allocator's free hint. */
+    close_handle(*recycled);
+    *recycled = event(TRUE, FALSE);
+    probe = event(TRUE, TRUE);
+    expect_wait(original, 0, WAIT_TIMEOUT, "live event must not alias a newly signaled object");
+    expect_wait(*recycled, 0, WAIT_TIMEOUT, "recycled event remains independent");
+    require(SetEvent(original) && ResetEvent(probe), "change independent event states");
+    expect_wait(original, 0, WAIT_OBJECT_0, "resetting new object must not reset live event");
+    expect_wait(probe, 0, WAIT_TIMEOUT, "new event reset");
+    require(ResetEvent(original), "restore original event state");
+    close_handle(probe);
+}
+
+static void test_duplicate_boundary(void)
+{
+    HANDLE recycled = event(TRUE, FALSE), original = event(TRUE, FALSE);
+    HANDLE *duplicates = HeapAlloc(GetProcessHeap(), 0,
+                                   DUPLICATE_BOUNDARY_COUNT * sizeof(*duplicates));
+    unsigned i;
+    require(duplicates != NULL, "allocate duplicate-handle boundary array");
+    expect_wait(recycled, 0, WAIT_TIMEOUT, "cache lower allocation");
+    expect_wait(original, 0, WAIT_TIMEOUT, "cache original event");
+    for (i = 0; i < DUPLICATE_BOUNDARY_COUNT; ++i) {
+        require(DuplicateHandle(GetCurrentProcess(), original, GetCurrentProcess(), &duplicates[i],
+                                0, FALSE, DUPLICATE_SAME_ACCESS),
+                "duplicate boundary handle %u: %lu", i, GetLastError());
+        expect_wait(duplicates[i], 0, WAIT_TIMEOUT, "cache each distinct duplicate handle");
+        if (i >= 65520) probe_live_event(original, &recycled);
+    }
+    require(SetEvent(original), "signal more than 65535 cached duplicates");
+    for (i = 0; i < DUPLICATE_BOUNDARY_COUNT; ++i)
+        expect_wait(duplicates[i], 0, WAIT_OBJECT_0, "all duplicate handles observe one live event");
+    require(ResetEvent(original), "reset more than 65535 cached duplicates");
+    for (i = 0; i < DUPLICATE_BOUNDARY_COUNT; ++i) {
+        expect_wait(duplicates[i], 0, WAIT_TIMEOUT, "duplicate retains reset state");
+        close_handle(duplicates[i]);
+        if (i < 64) probe_live_event(original, &recycled);
+    }
+    probe_live_event(original, &recycled);
+    require(HeapFree(GetProcessHeap(), 0, duplicates), "free duplicate-handle array");
+    close_handle(original);
+    close_handle(recycled);
+    puts("PASS 65568 cached duplicate handles preserve live event identity across allocation/release");
+}
+
+struct object_growth {
+    HANDLE start, ready, verify;
+    HANDLE *objects;
+};
+
+static DWORD WINAPI grow_objects(void *argument)
+{
+    struct object_growth *state = argument;
+    unsigned i;
+    expect_wait(state->start, STRESS_DEADLINE, WAIT_OBJECT_0, "object growth start");
+    for (i = 0; i < GROWTH_OBJECTS_PER_WORKER; ++i) {
+        state->objects[i] = event(TRUE, !!(i & 1));
+        expect_wait(state->objects[i], 0, (i & 1) ? WAIT_OBJECT_0 : WAIT_TIMEOUT,
+                    "concurrent creation maps independent initial state");
+    }
+    require(ReleaseSemaphore(state->ready, 1, NULL), "all worker objects remain live");
+    expect_wait(state->verify, STRESS_DEADLINE, WAIT_OBJECT_0, "hold all pages across growth boundary");
+    for (i = 0; i < GROWTH_OBJECTS_PER_WORKER; ++i) {
+        expect_wait(state->objects[i], 0, (i & 1) ? WAIT_OBJECT_0 : WAIT_TIMEOUT,
+                    "mapping growth preserves existing objects");
+        require(SetEvent(state->objects[i]), "signal object after mapping growth");
+        expect_wait(state->objects[i], 0, WAIT_OBJECT_0, "grown object signal");
+        require(ResetEvent(state->objects[i]), "reset object after mapping growth");
+        expect_wait(state->objects[i], 0, WAIT_TIMEOUT, "grown object reset");
+        close_handle(state->objects[i]);
+        state->objects[i] = event(TRUE, !(i & 1));
+        expect_wait(state->objects[i], 0, (i & 1) ? WAIT_TIMEOUT : WAIT_OBJECT_0,
+                    "concurrent reused handles do not expose stale cache entries");
+    }
+    for (i = 0; i < GROWTH_OBJECTS_PER_WORKER; ++i) close_handle(state->objects[i]);
+    return 0;
+}
+
+static void test_object_growth(void)
+{
+    HANDLE start = event(TRUE, FALSE), ready = semaphore(0, GROWTH_WORKERS);
+    HANDLE verify = event(TRUE, FALSE), threads[GROWTH_WORKERS];
+    HANDLE *objects = HeapAlloc(GetProcessHeap(), 0,
+                                GROWTH_WORKERS * GROWTH_OBJECTS_PER_WORKER * sizeof(*objects));
+    struct object_growth workers[GROWTH_WORKERS];
+    unsigned i;
+    require(objects != NULL, "allocate concurrent object-growth handle array");
+    for (i = 0; i < GROWTH_WORKERS; ++i) {
+        workers[i].start = start;
+        workers[i].ready = ready;
+        workers[i].verify = verify;
+        workers[i].objects = objects + i * GROWTH_OBJECTS_PER_WORKER;
+        threads[i] = start_thread(grow_objects, &workers[i]);
+    }
+    require(SetEvent(start), "start concurrent shared mapping growth");
+    for (i = 0; i < GROWTH_WORKERS; ++i)
+        expect_wait(ready, STRESS_DEADLINE, WAIT_OBJECT_0, "all object-growth allocations complete");
+    require(SetEvent(verify), "validate and recycle simultaneously live objects");
+    require(WaitForMultipleObjects(GROWTH_WORKERS, threads, TRUE, STRESS_DEADLINE) == WAIT_OBJECT_0,
+            "bounded concurrent mapping verification finishes");
+    for (i = 0; i < GROWTH_WORKERS; ++i) join_thread(threads[i], 0);
+    require(HeapFree(GetProcessHeap(), 0, objects), "free object-growth array");
+    close_handle(start);
+    close_handle(ready);
+    close_handle(verify);
+    printf("PASS concurrent mapping growth and reuse of %u simultaneously live objects\n",
+           (unsigned)(GROWTH_WORKERS * GROWTH_OBJECTS_PER_WORKER));
+}
+
+#define EXIT_CACHE_OBJECTS 8192
+#define EXIT_CACHE_ROUNDS 8
+
+static int cache_exit_child(DWORD owner, BOOL abrupt)
+{
+    char name[128];
+    HANDLE ready, live;
+    unsigned i;
+    object_name(name, sizeof(name), owner, "cache-ready");
+    ready = OpenEventA(EVENT_MODIFY_STATE, FALSE, name);
+    object_name(name, sizeof(name), owner, "cache-live");
+    live = OpenEventA(SYNCHRONIZE, FALSE, name);
+    require(ready && live, "cache child opens parent objects");
+    expect_wait(live, 0, WAIT_TIMEOUT, "cache child sees retained parent object");
+    for (i = 0; i < EXIT_CACHE_OBJECTS; ++i) {
+        HANDLE anonymous = event(TRUE, !!(i & 1)), duplicate;
+        expect_wait(anonymous, 0, (i & 1) ? WAIT_OBJECT_0 : WAIT_TIMEOUT,
+                    "cache child anonymous object state");
+        require(DuplicateHandle(GetCurrentProcess(), live, GetCurrentProcess(), &duplicate,
+                                0, FALSE, DUPLICATE_SAME_ACCESS), "cache child duplicate");
+        expect_wait(duplicate, 0, WAIT_TIMEOUT, "cache child retained-parent duplicate");
+        /* Intentionally leave both handles cached and open until process death.
+         * This tests OS/backend teardown, not explicit CloseHandle cleanup. */
+    }
+    require(SetEvent(ready), "cache child reports live outstanding handles");
+    if (abrupt) {
+        HANDLE park = event(TRUE, FALSE);
+        expect_wait(park, STRESS_DEADLINE, WAIT_TIMEOUT, "cache child termination guard");
+        ExitProcess(2); /* Parent must terminate this child before the guard expires. */
+    }
+    ExitProcess(0);
+    return 0;
+}
+
+static void test_process_cache_churn(void)
+{
+    char name[128];
+    wchar_t arguments[128];
+    DWORD owner = GetCurrentProcessId(), code;
+    HANDLE recycled = event(TRUE, FALSE), ready, live;
+    unsigned i;
+    object_name(name, sizeof(name), owner, "cache-ready");
+    ready = CreateEventA(NULL, TRUE, FALSE, name);
+    require(ready && GetLastError() != ERROR_ALREADY_EXISTS, "create cache-churn ready event");
+    object_name(name, sizeof(name), owner, "cache-live");
+    live = CreateEventA(NULL, TRUE, FALSE, name);
+    require(live && GetLastError() != ERROR_ALREADY_EXISTS, "create retained cache-churn event");
+    expect_wait(live, 0, WAIT_TIMEOUT, "cache retained parent event");
+    for (i = 0; i < EXIT_CACHE_ROUNDS; ++i) {
+        PROCESS_INFORMATION process = {0};
+        HANDLE startup[2];
+        int length;
+        require(ResetEvent(ready), "reset child cache-ready event");
+        length = swprintf(arguments, ARRAY_SIZE(arguments), L"--cache-child %lu %u", owner, i & 1);
+        require(length > 0 && (size_t)length < ARRAY_SIZE(arguments), "cache child arguments length");
+        start_child(arguments, FALSE, &process);
+        startup[0] = ready;
+        startup[1] = process.hProcess;
+        require(WaitForMultipleObjects(2, startup, FALSE, STRESS_DEADLINE) == WAIT_OBJECT_0,
+                "cache child fills handles before exiting");
+        if (i & 1) require(TerminateProcess(process.hProcess, 73), "terminate only owned cache child");
+        expect_wait(process.hProcess, STRESS_DEADLINE, WAIT_OBJECT_0, "cache child process death");
+        require(GetExitCodeProcess(process.hProcess, &code) && code == ((i & 1) ? 73u : 0u),
+                "cache child exit status");
+        close_handle(process.hThread);
+        close_handle(process.hProcess);
+        probe_live_event(live, &recycled);
+    }
+    close_handle(live);
+    close_handle(ready);
+    close_handle(recycled);
+    puts("PASS retained-object identity through eight normal/terminated process cache-churn cycles");
+}
+
 int main(int argc, char **argv)
 {
     BOOL benchmark = FALSE;
@@ -648,6 +875,8 @@ int main(int argc, char **argv)
     if (argc == 4 && !strcmp(argv[1], "--child"))
         return child_process((DWORD)strtoul(argv[2], NULL, 10),
                              (HANDLE)(uintptr_t)strtoull(argv[3], NULL, 10));
+    if (argc == 4 && !strcmp(argv[1], "--cache-child"))
+        return cache_exit_child((DWORD)strtoul(argv[2], NULL, 10), !!strtoul(argv[3], NULL, 10));
     if (argc == 2 && !strcmp(argv[1], "--benchmark")) benchmark = TRUE;
     else if (argc != 1) {
         fprintf(stderr, "Usage: %s [--benchmark]\n", argv[0]);
@@ -658,11 +887,15 @@ int main(int argc, char **argv)
     test_events();
     test_semaphores();
     test_mutexes();
+    test_native_mutex_state();
     test_wait_sets();
     test_apcs();
     test_processes();
     test_signal_and_wait();
     test_contention();
+    test_duplicate_boundary();
+    test_object_growth();
+    test_process_cache_churn();
     if (benchmark) run_handoffs(20000, TRUE);
     printf("PASS: MagicWine MSync synchronization regression (%u-bit)\n", (unsigned)(sizeof(void *) * 8));
     return 0;
