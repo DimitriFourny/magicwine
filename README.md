@@ -32,6 +32,7 @@ Wine downloads separately; compatibility components ship with the app. D3DMetal 
 
 ## Development
 
+- [Technical documentation](docs/README.md): architecture, runtime lifecycle, graphics, compatibility patches, controllers, and debugging.
 - `Sources/`: Swift app, core library, CLI, and native gamepad bridge.
 - `patches/` and `scripts/`: runtime patches, build recipes, and verification tools.
 - Run `./scripts/test.sh` for Swift tests; Wine integration runners are in `scripts/test-*.sh`.
