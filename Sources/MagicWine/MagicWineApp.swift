@@ -71,12 +71,11 @@ private struct LibraryView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            LibrarySidebarView(model: model, destination: $destination, search: search,
+            LibrarySidebarView(model: model, destination: $destination, search: $search,
                                trash: { trashTarget = $0 })
                 .frame(width: 250)
             Rectangle().fill(WineTheme.border).frame(width: 1)
             VStack(spacing: 0) {
-                topBar
                 Group {
                     switch destination {
                     case .bottles:
@@ -125,34 +124,6 @@ private struct LibraryView: View {
         } message: {
             Text("This moves the bottle and its Windows files to macOS Trash. Programs outside the bottle are not deleted. Stop all Windows processes in the bottle first.")
         }
-    }
-
-    private var topBar: some View {
-        HStack(spacing: 22) {
-            Spacer(minLength: 0)
-            HStack(spacing: 9) {
-                Image(systemName: "magnifyingglass").foregroundStyle(WineTheme.muted)
-                TextField("Search bottles…", text: $search)
-                    .textFieldStyle(.plain)
-                    .accessibilityLabel("Search bottles")
-                if !search.isEmpty {
-                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(WineTheme.muted)
-                        .accessibilityLabel("Clear bottle search")
-                }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            .frame(width: 270)
-            .background(WineTheme.elevated.opacity(0.7), in: RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(WineTheme.border))
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles").font(.system(size: 25)).foregroundStyle(WineTheme.accent)
-                Text("Good games\nbetter on Mac.").font(.system(size: 12)).foregroundStyle(WineTheme.muted)
-            }
-        }
-        .padding(.horizontal, 24)
-        .frame(height: 64)
     }
 
     private var downloads: some View {

@@ -12,8 +12,11 @@ enum LibraryDestination: Equatable {
 struct LibrarySidebarView: View {
     @ObservedObject var model: AppModel
     @Binding var destination: LibraryDestination
-    let search: String
+    @Binding var search: String
     let trash: (Bottle) -> Void
+    @State private var hoveredBottleID: Bottle.ID?
+    @State private var hoveredDestination: LibraryDestination?
+    @FocusState private var searchFocused: Bool
 
     private var filteredBottles: [Bottle] {
         guard !search.isEmpty else { return model.bottles }
@@ -29,8 +32,12 @@ struct LibrarySidebarView: View {
             VStack(alignment: .leading, spacing: 0) {
                 branding
                     .padding(.horizontal, 16)
-                    .padding(.top, 24)
-                    .padding(.bottom, 24)
+                    .padding(.top, 18)
+                    .padding(.bottom, 16)
+
+                searchField
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
 
                 HStack {
                     Text("Bottles")
@@ -66,13 +73,13 @@ struct LibrarySidebarView: View {
                     }
                     .padding(.horizontal, 12)
                 }
-                .frame(height: min(max(CGFloat(bottles.count) * 52, 104), max(104, geometry.size.height - 478)))
+                .frame(height: min(max(CGFloat(bottles.count) * 52, 104), max(104, geometry.size.height - 470)))
 
                 Rectangle()
                     .fill(WineTheme.border)
                     .frame(height: 1)
                     .padding(.horizontal, 24)
-                    .padding(.vertical, 18)
+                    .padding(.vertical, 14)
 
                 VStack(spacing: 4) {
                     navigationRow("Gamepads", icon: "gamecontroller", target: .gamepads)
@@ -83,7 +90,7 @@ struct LibrarySidebarView: View {
                 }
                 .padding(.horizontal, 12)
 
-                Spacer(minLength: 20)
+                Spacer(minLength: 16)
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("MagicWine \(Self.appVersion)")
@@ -93,7 +100,7 @@ struct LibrarySidebarView: View {
                 }
                 .foregroundStyle(WineTheme.muted)
                 .padding(.horizontal, 24)
-                .padding(.bottom, 26)
+                .padding(.bottom, 18)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -108,11 +115,11 @@ struct LibrarySidebarView: View {
             Image(nsImage: WineArtwork.logo)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 48, height: 70)
+                .frame(width: 40, height: 48)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Text("MagicWine")
-                    .font(.system(size: 27, weight: .regular, design: .serif))
+                    .font(.system(size: 24, weight: .regular, design: .serif))
                     .foregroundStyle(WineTheme.text)
                     .lineLimit(1)
                     .minimumScaleFactor(0.9)
@@ -122,6 +129,30 @@ struct LibrarySidebarView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.9)
             }
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(WineTheme.muted)
+            TextField("Search bottles…", text: $search)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .accessibilityLabel("Search bottles")
+            if !search.isEmpty {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(WineTheme.muted)
+                    .accessibilityLabel("Clear bottle search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(WineTheme.elevated.opacity(0.7), in: RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(searchFocused ? WineTheme.accent : WineTheme.border,
+                              lineWidth: searchFocused ? 2 : 1)
         }
     }
 
@@ -157,7 +188,8 @@ struct LibrarySidebarView: View {
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 8))
-            .background(selected ? WineTheme.accent.opacity(0.32) : .clear,
+            .background(selected ? WineTheme.accent.opacity(hoveredBottleID == bottle.id ? 0.44 : 0.32)
+                        : (hoveredBottleID == bottle.id ? WineTheme.elevated : .clear),
                         in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
@@ -165,6 +197,10 @@ struct LibrarySidebarView: View {
             }
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering { hoveredBottleID = bottle.id }
+            else if hoveredBottleID == bottle.id { hoveredBottleID = nil }
+        }
         .accessibilityAddTraits(selected ? .isSelected : [])
         .contextMenu {
             Button("Reveal Logs") { model.revealLogs(for: bottle) }
@@ -179,7 +215,7 @@ struct LibrarySidebarView: View {
 
     private func rowSubtitle(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10))
+            .font(.system(size: 12))
             .foregroundStyle(WineTheme.muted)
             .lineLimit(1)
     }
@@ -205,11 +241,16 @@ struct LibrarySidebarView: View {
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 8))
-            .background(selected ? WineTheme.accent.opacity(0.25) : .clear,
+            .background(selected ? WineTheme.accent.opacity(hoveredDestination == target ? 0.38 : 0.25)
+                        : (hoveredDestination == target ? WineTheme.elevated : .clear),
                         in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .onHover { hovering in
+            if hovering { hoveredDestination = target }
+            else if hoveredDestination == target { hoveredDestination = nil }
+        }
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityValue(active ? "Download activity in progress" : "")
     }
