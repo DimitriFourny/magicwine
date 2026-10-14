@@ -186,6 +186,8 @@ Every new bottle defaults to **Standard**. Enable another backend explicitly in 
 
 Select an initialized bottle and choose a backend in **Graphics**. Nonstandard backends require experimental/third-party consent. Setup validates compatibility, stops only this bottle, and saves the selection after successful installation. Direct backend switches preserve the complete original DLL set, including different 32/64-bit footprints. **Standard** restores original files, links, or absence even if the selected component is missing; displaced user replacements go to `graphics/recovered/`. Keep these backups intact. Errors do not silently select another backend.
 
+The Graphics menu marks the current backend with a checkmark. Before switching, quit the bottle's Windows programs (Steam can remain running in the tray) or use **Stop**; the controls also remain disabled during bottle operations. For a DXMT comparison, select the game's Direct3D 11 mode, not Direct3D 12.
+
 Click the small info icon beside **Show Graphics HUD**, **Retina / HiDPI**, or **MSync** to read its description. Help remains available when the setting is disabled.
 
 ### DXVK

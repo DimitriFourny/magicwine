@@ -36,6 +36,8 @@
 - Enlarge installed-program icon tiles to 56 points (48-point artwork) and Launch buttons to 44 points high. Give the graphics backend menu a readable bordered surface; align HUD, Retina / HiDPI, and MSync switches on the right while keeping help popovers beside their labels and preserving existing bindings, compatibility confirmations, and busy-state guards.
 - Build/sign the app and CLI and inspect native control layouts at 1440×960, 1200×800, and 1000×720, including HUD-visible and unsupported-runtime fixtures.
 - Verify final Tools placement directly beneath Installed Programs at 1440×960 and 1000×720 in native view captures; rebuild and sign the app and CLI.
+- Fix all Graphics backend entries appearing disabled in an idle bottle: replace the nested inline SwiftUI picker with explicit native menu actions and a checkmark for the current backend. Preserve consent, compatibility validation, and busy-state guards; explain that tray-running Steam must be quit or stopped before changing graphics.
+- Verify enabled native menu entries, cancellation without mutation, confirmed DXMT installation and persistence, Standard restoration, and the disabled busy state in an isolated real Wine bottle. Inspect in-process native view captures; Lightyear Frontier rendering has not been verified.
 
 ## Unreleased — 2026-10-13
 
