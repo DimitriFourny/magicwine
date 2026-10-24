@@ -100,7 +100,7 @@ struct GraphicsComponentUpdateTests {
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
             }
             store = BottleStore(paths: paths)
-            wine = WineRuntime(paths: paths)
+            wine = WineRuntime(paths: paths, store: store)
             await wine.useGraphicsProviders(GraphicsComponentProviders([FixtureProvider()]))
             var bottle = try await store.create(name: "Update", runtime: RuntimeDescriptor(executableURL: executable, version: "wine-11.0"))
             let prefix = store.prefixURL(for: bottle)
@@ -114,8 +114,7 @@ struct GraphicsComponentUpdateTests {
                 try originals[path]!.write(to: prefix.appendingPathComponent(path))
             }
             self.originals = originals
-            bottle.isInitialized = true
-            try await store.save(bottle)
+            bottle = try await store.markInitialized(bottle)
             let component = try GraphicsComponentUpdateTests.writeComponent(componentID, paths: paths)
             self.bottle = try await store.setGraphics(GraphicsConfiguration(backend: .dxvk, componentID: componentID, showHUD: true),
                                                       in: bottle, componentRoot: component)
