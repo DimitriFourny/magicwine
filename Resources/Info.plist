@@ -14,29 +14,58 @@
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+    <!-- Alternate rank everywhere: MagicWine appears in Open With but never replaces the user's
+         default handler (for example for .url files). Windows EXE and Internet Shortcut files
+         have system types (com.microsoft.*), which these entries must name; a type declared
+         only under org.magicwine would never match a .exe or .url file. -->
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
-            <key>CFBundleTypeName</key><string>Windows Installer</string>
+            <key>CFBundleTypeName</key><string>Windows Program or Installer</string>
             <key>CFBundleTypeRole</key><string>Viewer</string>
             <key>LSHandlerRank</key><string>Alternate</string>
             <key>LSItemContentTypes</key>
-            <array><string>org.magicwine.windows-executable</string><string>org.magicwine.windows-installer</string></array>
+            <array><string>com.microsoft.windows-executable</string><string>org.magicwine.windows-installer</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>Windows Shortcut</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array><string>org.magicwine.windows-shortcut</string><string>com.microsoft.internet-shortcut</string></array>
         </dict>
     </array>
-    <key>UTImportedTypeDeclarations</key>
+    <!-- Types MagicWine defines: macOS has no system type for .msi or .lnk files. -->
+    <key>UTExportedTypeDeclarations</key>
     <array>
-        <dict>
-            <key>UTTypeIdentifier</key><string>org.magicwine.windows-executable</string>
-            <key>UTTypeDescription</key><string>Windows Executable</string>
-            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
-            <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>exe</string></array></dict>
-        </dict>
         <dict>
             <key>UTTypeIdentifier</key><string>org.magicwine.windows-installer</string>
             <key>UTTypeDescription</key><string>Windows Installer Package</string>
             <key>UTTypeConformsTo</key><array><string>public.data</string></array>
             <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>msi</string></array></dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>org.magicwine.windows-shortcut</string>
+            <key>UTTypeDescription</key><string>Windows Shortcut</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>lnk</string></array></dict>
+        </dict>
+    </array>
+    <!-- Types owned by Microsoft, which macOS already declares with the same identifiers and
+         extensions (its richer definition wins); imported so these names resolve everywhere. -->
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.microsoft.windows-executable</string>
+            <key>UTTypeDescription</key><string>Windows Executable</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.executable</string></array>
+            <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>exe</string></array></dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.microsoft.internet-shortcut</string>
+            <key>UTTypeDescription</key><string>Internet Shortcut</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>url</string></array></dict>
         </dict>
     </array>
 </dict>

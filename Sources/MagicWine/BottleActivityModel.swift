@@ -107,9 +107,11 @@ final class BottleActivityModel {
 
     /// Runs one exclusive operation: refused while `blocksPrefixMutation` (or, for metadata
     /// edits with `allowsRunningPrograms`, `blocksLibraryEdit`); its title shows until it ends.
+    /// `completion` runs after the title is cleared, with whether the operation succeeded.
     func perform(in bottle: Bottle, title: String, canStop: Bool = false,
                  allowsRunningPrograms: Bool = false,
-                 operation: @escaping @MainActor () async throws -> OperationResult?) {
+                 operation: @escaping @MainActor () async throws -> OperationResult?,
+                 completion: (@MainActor (_ succeeded: Bool) -> Void)? = nil) {
         var state = activity(for: bottle)
         guard !(allowsRunningPrograms ? state.blocksLibraryEdit : state.blocksPrefixMutation) else { return }
         state.title = title
@@ -117,28 +119,35 @@ final class BottleActivityModel {
         state.error = nil
         activities[bottle.id] = state
         Task {
+            var succeeded = true
             do {
                 if let result = try await operation() { recordLog(result.logURL, for: bottle.id) }
             } catch {
+                succeeded = false
                 recordError(error, for: bottle.id)
             }
             // A deleted bottle no longer needs operation state.
-            guard library.contains(bottle.id) else { return }
+            guard library.contains(bottle.id) else {
+                completion?(false)
+                return
+            }
             var latest = activity(for: bottle)
             latest.title = nil
             latest.canStop = false
             latest.graphicsProgress = nil
             latest.graphicsSetupID = nil
             activities[bottle.id] = latest
+            completion?(succeeded)
         }
     }
 
-    func initialize(_ bottle: Bottle) {
-        perform(in: bottle, title: "Setting up Windows environment…", canStop: true) {
+    /// `completion` runs after setup ended, with whether it succeeded.
+    func initialize(_ bottle: Bottle, completion: (@MainActor (_ succeeded: Bool) -> Void)? = nil) {
+        perform(in: bottle, title: "Setting up Windows environment…", canStop: true, operation: {
             let initialization = try await self.wine.initialize(bottle)
             self.library.replace(initialization.bottle)
             return initialization.result
-        }
+        }, completion: completion)
     }
 
     func install(_ url: URL, in bottle: Bottle) {
@@ -161,9 +170,26 @@ final class BottleActivityModel {
     }
 
     func addProgram(_ url: URL, to bottle: Bottle) {
-        perform(in: bottle, title: "Adding program…", allowsRunningPrograms: true) {
-            let updated = try await self.store.registerProgram(in: self.library.current(bottle), executableURL: url)
-            self.library.replace(updated)
+        addPrograms([url], to: bottle)
+    }
+
+    /// Registers EXE, LNK, or URL files in one library edit, in place and in order; allowed
+    /// while programs run. Stops at the first file the store refuses.
+    func addPrograms(_ urls: [URL], to bottle: Bottle) {
+        let bottle = library.current(bottle)
+        guard bottle.isInitialized else {
+            notices.post(AppNotice(title: "Set Up This Bottle First", message: "Use Retry Setup for \(bottle.name), then add the program again."))
+            return
+        }
+        guard !activity(for: bottle).blocksLibraryEdit else {
+            notices.post(AppNotice(title: "Bottle Is Busy", message: "Wait for the operation in \(bottle.name) to finish, or stop the bottle, before adding programs."))
+            return
+        }
+        perform(in: bottle, title: urls.count == 1 ? "Adding program…" : "Adding programs…", allowsRunningPrograms: true) {
+            for url in urls {
+                let updated = try await self.store.registerProgram(in: self.library.current(bottle), executableURL: url)
+                self.library.replace(updated)
+            }
             return nil
         }
     }

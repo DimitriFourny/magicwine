@@ -16,6 +16,9 @@ struct BottleDashboardView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.fileImport) private var fileImport
     @State private var showsDependencies = false
+    /// A drag is over the dashboard (EXE/MSI installers) or over its program list (EXE/LNK/URL).
+    @State private var installTargeted = false
+    @State private var programsTargeted = false
 
     private var currentBottle: Bottle {
         model.library.current(bottle)
@@ -62,6 +65,8 @@ struct BottleDashboardView: View {
             .background(WineTheme.background)
         }
         .foregroundStyle(WineTheme.text)
+        .fileDrop(isEnabled: !prefixOperationUnavailable, targeted: $installTargeted) { model.install(dropped: $0, in: currentBottle) }
+        .dropHighlight(installTargeted && !programsTargeted, cornerRadius: 0, caption: "Drop to install in \(currentBottle.name)")
         .navigationTitle(currentBottle.name)
         .focusedSceneValue(\.selectedProgramID, selectedProgramID)
         .sheet(item: $editingProgram) { program in
@@ -392,6 +397,8 @@ struct BottleDashboardView: View {
                 }
             }
         }
+        .fileDrop(isEnabled: !libraryEditUnavailable, targeted: $programsTargeted) { model.addPrograms(dropped: $0, to: currentBottle) }
+        .dropHighlight(programsTargeted, caption: "Drop to add programs to \(currentBottle.name)")
     }
 
     private func programRow(_ program: WindowsProgram) -> some View {

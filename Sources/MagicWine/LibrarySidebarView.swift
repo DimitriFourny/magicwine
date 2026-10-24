@@ -44,7 +44,7 @@ struct LibrarySidebarView: View {
                     emptySearch
                 } else {
                     ForEach(bottles) { bottle in
-                        bottleRow(bottle)
+                        InstallDropTarget(model: model, bottle: bottle) { bottleRow(bottle) }
                             .tag(SidebarItem.bottle(bottle.id))
                     }
                 }
@@ -196,5 +196,22 @@ struct LibrarySidebarView: View {
         .font(.system(size: 12))
         .foregroundStyle(WineTheme.muted)
         .padding(.vertical, 6)
+    }
+}
+
+/// Installs the EXE/MSI file dropped on a bottle's row, like Install EXE/MSI: the bottle must be
+/// set up and idle. The row is highlighted only while a drop can start the installer.
+private struct InstallDropTarget<Content: View>: View {
+    let model: AppModel
+    let bottle: Bottle
+    @ViewBuilder let content: () -> Content
+    @State private var isTargeted = false
+
+    var body: some View {
+        let current = model.library.current(bottle)
+        let available = current.isInitialized && !model.activity.activity(for: current).blocksPrefixMutation
+        content()
+            .fileDrop(isEnabled: available, targeted: $isTargeted) { model.install(dropped: $0, in: current) }
+            .dropHighlight(isTargeted, cornerRadius: 6)
     }
 }

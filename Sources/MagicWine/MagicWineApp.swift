@@ -64,10 +64,13 @@ private struct LibraryView: View {
     @State private var destination: LibraryDestination = .bottles
     @State private var selectedBottleID: UUID?
     @State private var search = ""
-    @State private var showsNewBottle = false
+    @State private var sheet: LibrarySheet?
     @State private var trashTarget: Bottle?
     @State private var notice: AppNotice?
     @State private var pendingOpenURLs: [URL] = []
+    /// Files opened from Finder that wait for the user to choose a bottle, one sheet at a time.
+    @State private var openQueue: [OpenedFile] = []
+    @State private var followUp: LibrarySheet?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.fileImport) private var fileImport
     @Environment(\.controlActiveState) private var activeState
@@ -101,7 +104,7 @@ private struct LibraryView: View {
     var body: some View {
         NavigationSplitView {
             LibrarySidebarView(model: model, selection: sidebarSelection, search: search,
-                               newBottle: { showsNewBottle = true }, trash: { trashTarget = $0 })
+                               newBottle: presentNewBottle, trash: { trashTarget = $0 })
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
         } detail: {
             detail
@@ -115,13 +118,13 @@ private struct LibraryView: View {
         .buttonStyle(WineButtonStyle())
         .focusedSceneValue(\.selectedBottleID, selectedBottleID)
         .focusedSceneValue(\.fileImport, fileImport)
-        .focusedSceneValue(\.newBottle, WindowAction { showsNewBottle = true })
-        .environment(\.newBottle, WindowAction { showsNewBottle = true })
+        .focusedSceneValue(\.newBottle, WindowAction { presentNewBottle() })
+        .environment(\.newBottle, WindowAction { presentNewBottle() })
         .onOpenURL { url in
             if model.library.isLoading {
                 pendingOpenURLs.append(url)
             } else {
-                model.openInstallerURL(url, in: selectedBottle)
+                enqueueOpen(url)
             }
         }
         // Files opened from Finder go to an existing library window instead of a new one.
@@ -134,7 +137,7 @@ private struct LibraryView: View {
             guard !loading else { return }
             let urls = pendingOpenURLs
             pendingOpenURLs.removeAll()
-            for url in urls { model.openInstallerURL(url, in: selectedBottle) }
+            for url in urls { enqueueOpen(url) }
         }
         .onChange(of: model.notices.current?.id, initial: true) { claimNotice() }
         .onChange(of: activeState) { claimNotice() }
@@ -143,10 +146,19 @@ private struct LibraryView: View {
             openWindow(id: LogViewerView.windowID, value: url)
             model.activity.logToShow = nil
         }
-        .sheet(isPresented: $showsNewBottle) {
-            NewBottleView(model: model) { bottle in
-                selectedBottleID = bottle.id
-                destination = .bottles
+        .sheet(item: $sheet, onDismiss: sheetDismissed) { sheet in
+            switch sheet {
+            case .newBottle(let pending):
+                NewBottleView(model: model, pending: pending) { bottle in
+                    selectedBottleID = bottle.id
+                    destination = .bottles
+                }
+            case .openFile(let file):
+                OpenFileSheet(model: model, file: file, preferredBottleID: selectedBottleID) { action in
+                    // A sheet cannot present another: the New Bottle sheet follows once this is gone.
+                    followUp = .newBottle(PendingOpen(file: file, action: action))
+                    self.sheet = nil
+                }
             }
         }
         .alert(notice?.title ?? "", isPresented: Binding(
@@ -190,7 +202,7 @@ private struct LibraryView: View {
                                     trash: { trashTarget = bottle })
                     .id(bottle.id)
             } else {
-                WelcomeView(model: model, newBottle: { showsNewBottle = true })
+                WelcomeView(model: model, newBottle: presentNewBottle)
             }
         case .gamepads:
             GamepadView(paths: model.paths)
@@ -236,6 +248,33 @@ private struct LibraryView: View {
         guard notice == nil, activeState == .key, let pending = model.notices.current else { return }
         notice = pending
         model.notices.current = nil
+    }
+
+    private func presentNewBottle() {
+        guard sheet == nil else { return }
+        sheet = .newBottle(nil)
+    }
+
+    /// Holding Option while opening an EXE chooses Add as Program over Run Installer first.
+    private func enqueueOpen(_ url: URL) {
+        guard let file = model.openedFile(url, preferringProgram: NSEvent.modifierFlags.contains(.option)) else { return }
+        openQueue.append(file)
+        presentNextOpen()
+    }
+
+    private func presentNextOpen() {
+        guard sheet == nil, !openQueue.isEmpty else { return }
+        sheet = .openFile(openQueue.removeFirst())
+    }
+
+    /// After a sheet closes: the sheet it asked for, else the next opened file.
+    private func sheetDismissed() {
+        if let next = followUp {
+            followUp = nil
+            sheet = next
+        } else {
+            presentNextOpen()
+        }
     }
 
     private var downloads: some View {
@@ -352,8 +391,23 @@ private struct WelcomeView: View {
     }
 }
 
+/// The one sheet a library window presents: its sheets never overlap.
+private enum LibrarySheet: Identifiable {
+    case newBottle(PendingOpen?)
+    case openFile(OpenedFile)
+
+    var id: String {
+        switch self {
+        case .newBottle: "new-bottle"
+        case .openFile(let file): file.id.uuidString
+        }
+    }
+}
+
 private struct NewBottleView: View {
     let model: AppModel
+    /// A file the user opened that runs in this bottle once its setup finishes.
+    let pending: PendingOpen?
     /// Called with the created bottle, before its setup finishes.
     let created: (Bottle) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -371,6 +425,11 @@ private struct NewBottleView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("New Bottle").font(.title2)
+            if let pending {
+                Text("When setup finishes, \(pending.file.url.lastPathComponent) will \(pending.action == .install ? "run its installer in" : "be added to") this bottle.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if runtime == nil {
                 Text("Install Wine before creating a bottle.")
                 RuntimeSetupView(model: model)
@@ -418,7 +477,7 @@ private struct NewBottleView: View {
     private func create() {
         guard validName, !model.library.isCreating, model.runtimes.activity == nil, let runtime else { return }
         Task {
-            guard let bottle = await model.createBottle(name: name, runtime: runtime) else { return }
+            guard let bottle = await model.createBottle(name: name, runtime: runtime, then: pending) else { return }
             created(bottle)
             dismiss()
         }

@@ -90,24 +90,59 @@ final class AppModel {
         }
     }
 
-    /// An EXE/MSI opened from Finder, for the opening window's selected bottle. Windows keep
-    /// files opened while the library loads and pass them here once it has.
-    func openInstallerURL(_ url: URL, in bottle: Bottle?) {
-        guard url.isFileURL, ["exe", "msi"].contains(url.pathExtension.lowercased()) else {
-            notices.post(AppNotice(title: "Unsupported File", message: "Open a Windows EXE or MSI installer. To register an existing program or shortcut, select a bottle and use Add Program."))
+    /// A file opened from Finder or the Dock. `nil`, with a notice, when it is not a Windows
+    /// EXE, MSI, LNK, or URL file. The window asks which bottle and action to use.
+    func openedFile(_ url: URL, preferringProgram: Bool) -> OpenedFile? {
+        if let file = OpenedFile(url: url, preferringProgram: preferringProgram) { return file }
+        notices.post(AppNotice(title: "Unsupported File", message: "Open a Windows EXE or MSI installer, or an EXE, LNK, or URL shortcut to add as a program."))
+        return nil
+    }
+
+    /// Runs `action` for `file` in `bottle`: an installer, or a registered program.
+    func open(_ file: OpenedFile, as action: OpenedFileAction, in bottle: Bottle) {
+        switch action {
+        case .install: activity.install(file.url, in: bottle)
+        case .addProgram: activity.addPrograms([file.url], to: bottle)
+        }
+    }
+
+    /// Files dropped on a bottle's row or dashboard: one EXE/MSI installer, run like Install EXE/MSI.
+    func install(dropped urls: [URL], in bottle: Bottle) {
+        let installers = urls.filter { OpenedFile.installerExtensions.contains($0.pathExtension.lowercased()) }
+        guard installers.count == 1, let installer = installers.first else {
+            notices.post(AppNotice(
+                title: installers.isEmpty ? "Unsupported File" : "One Installer at a Time",
+                message: installers.isEmpty
+                    ? "Drop a Windows EXE or MSI installer here to install it in \(bottle.name). To add an existing program, drop it on the Installed Programs list."
+                    : "Drop one installer at a time, and wait for it to finish."))
             return
         }
-        guard let bottle else {
-            notices.post(AppNotice(title: "Choose a Bottle First", message: "Create or select a bottle, then open \(url.lastPathComponent) again or use Install EXE/MSI. Installers need a bottle to keep their Windows files and settings."))
+        activity.install(installer, in: bottle)
+    }
+
+    /// Files dropped on a bottle's program list: EXE, LNK, and URL files, registered like Add Program.
+    func addPrograms(dropped urls: [URL], to bottle: Bottle) {
+        let programs = urls.filter { OpenedFile.programExtensions.contains($0.pathExtension.lowercased()) }
+        guard !programs.isEmpty else {
+            notices.post(AppNotice(title: "Unsupported File", message: "Drop an EXE, LNK shortcut, or URL Internet Shortcut here to add it to \(bottle.name). To run an installer, drop an EXE or MSI on the bottle instead."))
             return
         }
-        activity.install(url, in: bottle)
+        activity.addPrograms(programs, to: bottle)
     }
 
     /// Creates a bottle and starts its setup; `nil` when creation failed or another runs.
-    func createBottle(name: String, runtime: RuntimeDescriptor) async -> Bottle? {
+    /// `pending` runs once setup has finished, for a file the user opened before choosing
+    /// to create a new bottle.
+    func createBottle(name: String, runtime: RuntimeDescriptor, then pending: PendingOpen? = nil) async -> Bottle? {
         guard let bottle = await library.create(name: name, runtime: runtime) else { return nil }
-        activity.initialize(bottle)
+        activity.initialize(bottle) { [self] succeeded in
+            guard let pending else { return }
+            guard succeeded, let ready = library.bottles.first(where: { $0.id == bottle.id }) else {
+                notices.post(AppNotice(title: "File Not Opened", message: "\(bottle.name) could not be set up, so \(pending.file.url.lastPathComponent) was not opened. Retry setup in the bottle, then open the file again."))
+                return
+            }
+            open(pending.file, as: pending.action, in: ready)
+        }
         return bottle
     }
 }
