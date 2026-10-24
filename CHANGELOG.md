@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased — 2026-10-24
+
 ## Unreleased — 2026-10-14
 
 - Prepare the repository for publication: license current original source under MIT, preserve explicitly licensed Wine-derived code and checksum-pinned historical component notices/source archives, and package `THIRD_PARTY_NOTICES.md` with the app and CLI.
