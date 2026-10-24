@@ -3,14 +3,34 @@
 # Build the original MagicWine XInput bridge, not proprietary controller DLLs.
 # Run: bash scripts/build-gamepad-bridge.sh
 # Prerequisites on macOS: brew install mingw-w64 python
+#
+# Current sources are MIT. The checked-in magicwine-xinput-v1 payload is the
+# historical GPL-3.0-or-later build whose bytes are pinned in GamepadBridge.swift
+# and validated in existing bottles, so this recipe never writes to those names.
+# Output goes to a gitignored staging directory under a NEW component identity
+# (default magicwine-xinput-v2); adopting it is a separate, explicit step.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-COMPONENT=magicwine-xinput-v1
-OUTPUT="$ROOT/Sources/MagicWineCore/Resources"
+COMPONENT="${COMPONENT:-magicwine-xinput-v2}"
+OUTPUT="$ROOT/.local/gamepad-bridge-output/$COMPONENT"
+LICENSE_NAME="LICENSE-$COMPONENT.txt"
 export SOURCE_DATE_EPOCH=1768262400
 export LC_ALL=C TZ=UTC COPYFILE_DISABLE=1
 unset CC CXX CFLAGS CXXFLAGS CPPFLAGS LDFLAGS AR LD STRIP
 unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH GCC_EXEC_PREFIX COMPILER_PATH
+
+if [[ "$COMPONENT" == magicwine-xinput-v1 ]]; then
+    printf 'Refusing COMPONENT=magicwine-xinput-v1: that identity is the pinned historical GPL payload under Sources/MagicWineCore/Resources.\nUse a new identity such as magicwine-xinput-v2.\n' >&2
+    exit 1
+fi
+if [[ ! "$COMPONENT" =~ ^magicwine-xinput-v[0-9]+$ ]]; then
+    printf 'COMPONENT must look like magicwine-xinput-v<N> (got "%s").\n' "$COMPONENT" >&2
+    exit 1
+fi
+if [[ -e "$OUTPUT" ]]; then
+    printf 'Refusing to overwrite existing output: %s\nMove or delete it first, or choose a new COMPONENT.\n' "$OUTPUT" >&2
+    exit 1
+fi
 
 missing=()
 for tool in python3 x86_64-w64-mingw32-gcc x86_64-w64-mingw32-strip i686-w64-mingw32-gcc i686-w64-mingw32-strip; do
@@ -20,7 +40,7 @@ if [[ ${#missing[@]} -ne 0 ]]; then
     printf 'Missing prerequisites: %s\nInstall with: brew install mingw-w64 python\n' "${missing[*]}" >&2
     exit 1
 fi
-mkdir -p "$ROOT/.local" "$OUTPUT"
+mkdir -p "$ROOT/.local"
 WORK="$(mktemp -d "$ROOT/.local/gamepad-bridge-build.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 cp "$ROOT/Sources/GamepadBridge/"* "$WORK/"
@@ -39,7 +59,7 @@ done
 
 # An offline, deterministic corresponding-source distribution includes the
 # original sources, this exact build recipe and the repository MIT license.
-python3 - "$ROOT" "$WORK" "$COMPONENT" <<'PY'
+python3 - "$ROOT" "$WORK" "$COMPONENT" "$LICENSE_NAME" <<'PY'
 import gzip
 import hashlib
 import io
@@ -50,7 +70,7 @@ import sys
 import tarfile
 
 root, work = map(Path, sys.argv[1:3])
-component = sys.argv[3]
+component, license_name = sys.argv[3:5]
 epoch = int(os.environ['SOURCE_DATE_EPOCH'])
 for arch, machine in [('i686', 0x014c), ('x86_64', 0x8664)]:
     path = work / f'{component}-{arch}.dll'
@@ -75,12 +95,31 @@ with archive.open('wb') as raw:
                 info.uid = info.gid = 0
                 info.uname = info.gname = ''
                 tar.addfile(info, io.BytesIO(data))
-license_path = work / 'LICENSE-MAGICWINE-GAMEPAD.txt'
+license_path = work / license_name
 license_path.write_bytes((root / 'LICENSE').read_bytes())
 for path in [work / f'{component}-i686.dll', work / f'{component}-x86_64.dll', archive, license_path]:
     print(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}')
 PY
-for name in "$COMPONENT-i686.dll" "$COMPONENT-x86_64.dll" "$COMPONENT-source.tar.gz" LICENSE-MAGICWINE-GAMEPAD.txt; do
-    mv "$WORK/$name" "$OUTPUT/$name"
+mkdir -p "$ROOT/.local/gamepad-bridge-output"
+mkdir "$OUTPUT"
+for name in "$COMPONENT-i686.dll" "$COMPONENT-x86_64.dll" "$COMPONENT-source.tar.gz" "$LICENSE_NAME"; do
+    mv -n "$WORK/$name" "$OUTPUT/$name"
 done
-printf '\nPayloads written to %s\nIndependently pin their SHA-256 values in GamepadBridge.swift before shipping.\n' "$OUTPUT"
+cat <<EOF
+
+Staged $COMPONENT payloads (not installed) in:
+  $OUTPUT
+
+Nothing under Sources/MagicWineCore/Resources was touched; the pinned
+magicwine-xinput-v1 files and LICENSE-MAGICWINE-GAMEPAD.txt are unchanged.
+
+To adopt this build as a new component, as one deliberate change:
+  1. Compare the hashes above with an independent rebuild.
+  2. Copy the four files into Sources/MagicWineCore/Resources and list them
+     in the Package.swift resources.
+  3. Add $COMPONENT with new SHA-256 pins, backup directory name and license
+     file to GamepadBridge.swift; keep magicwine-xinput-v1 pins and migration
+     paths for existing bottles.
+  4. Update THIRD_PARTY_NOTICES.md, docs/controllers.md and tests, then run
+     ./scripts/test.sh.
+EOF
