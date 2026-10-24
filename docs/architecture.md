@@ -84,7 +84,9 @@ Discovery scans shared Start Menu programs and relevant user Desktop/Start Menu 
 
 ## Busy is not the same as running
 
-`BottleActivity.title` describes an exclusive UI operation, such as installation, initialization, configuration, or discovery. `runningLaunches` tracks independent launch tasks. A long-lived launcher in the Windows tray must not prevent clicking another program or reopening the launcher, so the UI permits additional launches while that set is nonempty. It does block conflicting management actions. `isStopping` is separate again.
+`BottleActivity.title` describes an exclusive UI operation, such as installation, initialization, configuration, or discovery. `runningLaunches` tracks independent launch tasks. A long-lived launcher in the Windows tray must not prevent clicking another program or reopening the launcher, so the UI permits additional launches while that set is nonempty. `isStopping` is separate again.
+
+The UI names three gates as predicates on `BottleActivity`: `blocksLaunch` (exclusive operation or Stop in progress), `blocksLibraryEdit` (the same; Refresh, Add Program, Remove from MagicWine, Reload Bottles), and `blocksPrefixMutation` (those plus running programs; graphics, MSync, Retina, installers, Wine update, winecfg, Trash). Library edits only rewrite `bottle.json` and read shortcut files under the bottle lock, so a tray-resident Steam does not stop new games from being discovered. Discovery's `BottleDesktop.prepare` is a no-op once a launch has prepared the prefix's Desktop directories.
 
 These are **UI observations**, not an authoritative process inventory. An EXE may spawn a child and exit; a separate CLI process may launch Wine; a shortcut may return before its target exits. Core operations therefore consult leases and the prefix's real `wineserver`, not just UI activity. Shortcut launch waits on `wineserver -w`; ordinary EXE launch observes its direct Wine process. The exact handoff, stop, timeout and mutation rules are in [runtime lifecycle](runtime-lifecycle.md).
 

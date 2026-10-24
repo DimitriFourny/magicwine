@@ -16,6 +16,19 @@ struct BottleActivity {
     var hasRunningPrograms: Bool { !runningLaunches.isEmpty }
 }
 
+extension BottleActivity {
+    /// Changes Wine's prefix, runtime, or the bottle directory itself (graphics, MSync, Retina,
+    /// installers, Wine update, winecfg, setup, Trash). Running programs hold the prefix open.
+    var blocksPrefixMutation: Bool { title != nil || hasRunningPrograms || isStopping }
+
+    /// Edits only MagicWine's bottle metadata and shortcut bookkeeping under the bottle lock
+    /// (refresh/add/remove programs, reload). Safe while Windows programs run.
+    var blocksLibraryEdit: Bool { title != nil || isStopping }
+
+    /// Starting another program may overlap running ones, but not an exclusive operation.
+    var blocksLaunch: Bool { title != nil || isStopping }
+}
+
 struct AppNotice: Identifiable {
     let id = UUID()
     let title: String
@@ -82,7 +95,7 @@ final class AppModel: ObservableObject {
     func refreshBottles() {
         guard !isLoading else { return }
         // Do not replace metadata while an operation is saving the same bottle.
-        guard !activities.values.contains(where: { $0.title != nil || $0.hasRunningPrograms }) else {
+        guard !activities.values.contains(where: \.blocksLibraryEdit) else {
             notice = AppNotice(title: "A Bottle Is Busy", message: "Wait for bottle operations to finish before reloading the library. Other bottles are still available.")
             return
         }
@@ -152,7 +165,7 @@ final class AppModel: ObservableObject {
             guard let current = bottles.first(where: { $0.id == requestedBottle.id }),
                   canUpgradeRuntime(current) else { return }
             var state = activity(for: current)
-            guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
+            guard !state.blocksPrefixMutation else { return }
             state.title = "Updating Wine…"
             state.error = nil
             activities[current.id] = state
@@ -323,7 +336,7 @@ final class AppModel: ObservableObject {
             notice = AppNotice(title: "Set Up This Bottle First", message: "Use Retry Setup for \(bottle.name), then open the installer again.")
             return
         }
-        guard activity(for: bottle).title == nil, !activity(for: bottle).hasRunningPrograms else {
+        guard !activity(for: bottle).blocksPrefixMutation else {
             notice = AppNotice(title: "Bottle Is Busy", message: "Wait for the operation in \(bottle.name) to finish, or stop the bottle, before opening another installer.")
             return
         }
@@ -339,7 +352,7 @@ final class AppModel: ObservableObject {
     func chooseProgram(in bottle: Bottle) {
         chooseFile(title: "Add a Windows Program", message: "Choose an EXE, LNK shortcut, or URL Internet Shortcut. Removing it from MagicWine does not delete the file.", extensions: ["exe", "lnk", "url"]) { [weak self] url in
             guard let self else { return }
-            self.perform(in: bottle, title: "Adding program…") {
+            self.perform(in: bottle, title: "Adding program…", allowsRunningPrograms: true) {
                 let updated = try await self.store.registerProgram(in: self.current(bottle), executableURL: url)
                 self.replace(updated)
                 return nil
@@ -348,7 +361,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshPrograms(in bottle: Bottle) {
-        perform(in: bottle, title: "Finding Windows shortcuts…") {
+        perform(in: bottle, title: "Finding Windows shortcuts…", allowsRunningPrograms: true) {
             let updated = try await self.store.discoverPrograms(in: self.current(bottle))
             self.replace(updated)
             return nil
@@ -356,7 +369,7 @@ final class AppModel: ObservableObject {
     }
 
     func removeProgram(_ program: WindowsProgram, in bottle: Bottle) {
-        perform(in: bottle, title: "Removing shortcut…") {
+        perform(in: bottle, title: "Removing shortcut…", allowsRunningPrograms: true) {
             let updated = try await self.store.removeProgram(id: program.id, in: self.current(bottle))
             self.replace(updated)
             return nil
@@ -401,8 +414,7 @@ final class AppModel: ObservableObject {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
               supportsMSync(bottle) else { return }
         let state = activity(for: bottle)
-        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping,
-              bottle.msyncEnabled != enabled else { return }
+        guard !state.blocksPrefixMutation, bottle.msyncEnabled != enabled else { return }
         perform(in: bottle, title: "Changing synchronization…") {
             do {
                 let updated = try await self.wine.configureSynchronization(msyncEnabled: enabled, in: bottle)
@@ -419,7 +431,7 @@ final class AppModel: ObservableObject {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
               bottle.isInitialized else { return }
         let state = activity(for: bottle)
-        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
+        guard !state.blocksPrefixMutation else { return }
         let dpi: UInt32 = enabled ? 192 : 96
         guard bottle.display.retinaEnabled != enabled || bottle.display.dpi != dpi else { return }
 
@@ -441,7 +453,7 @@ final class AppModel: ObservableObject {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
               bottle.isInitialized else { return }
         var state = activity(for: bottle)
-        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
+        guard !state.blocksPrefixMutation else { return }
         let showHUD = backend != .standard && showHUD
         guard bottle.graphics.backend != backend || bottle.graphics.showHUD != showHUD || componentSource != nil else { return }
 
@@ -488,8 +500,7 @@ final class AppModel: ObservableObject {
 
     func importD3DMetal(in bottle: Bottle) {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
-              bottle.isInitialized, activity(for: bottle).title == nil,
-              !activity(for: bottle).hasRunningPrograms, !activity(for: bottle).isStopping else { return }
+              bottle.isInitialized, !activity(for: bottle).blocksPrefixMutation else { return }
         if let source = WineRuntime.discoverD3DMetalSource(executable: bottle.runtime.executableURL) {
             setGraphics(.d3dmetal, in: bottle, showHUD: bottle.graphics.showHUD, componentSource: source)
             return
@@ -560,9 +571,10 @@ final class AppModel: ObservableObject {
     }
 
     private func perform(in bottle: Bottle, title: String, canStop: Bool = false,
+                         allowsRunningPrograms: Bool = false,
                          operation: @escaping @MainActor () async throws -> OperationResult?) {
         var state = activity(for: bottle)
-        guard state.title == nil, !state.hasRunningPrograms, !state.isStopping else { return }
+        guard !(allowsRunningPrograms ? state.blocksLibraryEdit : state.blocksPrefixMutation) else { return }
         state.title = title
         state.canStop = canStop
         state.error = nil

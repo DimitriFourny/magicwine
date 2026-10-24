@@ -3,6 +3,8 @@
 ## Unreleased — 2026-10-24
 
 - Stop the gamepad bridge recipe from overwriting the pinned historical GPL XInput v1 payload with MIT license text: it now builds a new component identity (default `magicwine-xinput-v2`, `magicwine-xinput-v1` refused), writes a component-specific license name into gitignored `.local/gamepad-bridge-output/<component>/`, refuses existing output, and prints hashes plus adoption steps. Verified with `bash -n`, the v1/invalid/existing-output refusals, and a real MinGW build whose staged v2 hashes differ from, and left byte-identical, the checked-in v1 DLLs and GPL license.
+- Let Refresh, Add Program, Remove from MagicWine, and Reload Bottles run while Windows programs (for example Steam in the tray) are running, so new games can be picked up without stopping the client. Consolidate the repeated busy checks into `BottleActivity.blocksPrefixMutation`, `blocksLibraryEdit`, and `blocksLaunch`; graphics, MSync, Retina, installers, Wine update, winecfg, and Trash stay blocked while programs run. Library edits only touch bottle metadata under the bottle lock.
+
 ## Unreleased — 2026-10-14
 
 - Prepare the repository for publication: license current original source under MIT, preserve explicitly licensed Wine-derived code and checksum-pinned historical component notices/source archives, and package `THIRD_PARTY_NOTICES.md` with the app and CLI.

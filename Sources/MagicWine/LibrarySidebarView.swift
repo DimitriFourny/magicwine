@@ -158,7 +158,7 @@ struct LibrarySidebarView: View {
 
     private func bottleRow(_ bottle: Bottle) -> some View {
         let activity = model.activity(for: bottle)
-        let busy = activity.title != nil || activity.hasRunningPrograms || activity.isStopping
+        let busy = activity.blocksPrefixMutation
         let selected = destination == .bottles && model.selectedBottleID == bottle.id
         return Button {
             model.selectedBottleID = bottle.id
@@ -206,7 +206,7 @@ struct LibrarySidebarView: View {
             Button("Reveal Logs") { model.revealLogs(for: bottle) }
             Button("Move Bottle to Trash…", role: .destructive) {
                 let current = model.activity(for: bottle)
-                guard current.title == nil, !current.hasRunningPrograms, !current.isStopping else { return }
+                guard !current.blocksPrefixMutation else { return }
                 trash(bottle)
             }
             .disabled(busy)

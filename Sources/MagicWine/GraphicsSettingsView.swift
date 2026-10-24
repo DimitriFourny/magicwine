@@ -4,7 +4,6 @@ import MagicWineCore
 struct GraphicsSettingsView: View {
     @ObservedObject var model: AppModel
     let bottle: Bottle
-    let busy: Bool
     private struct Selection {
         let backend: GraphicsBackend
         let bottle: Bottle
@@ -18,11 +17,11 @@ struct GraphicsSettingsView: View {
 
     private var state: BottleActivity { model.activity(for: currentBottle) }
     private var unavailable: Bool {
-        busy || model.isLoading || state.title != nil || state.hasRunningPrograms || state.isStopping || !currentBottle.isInitialized
+        model.isLoading || state.blocksPrefixMutation || !currentBottle.isInitialized
     }
 
     private var synchronizationUnavailable: Bool {
-        busy || model.isLoading || state.title != nil || state.hasRunningPrograms || state.isStopping
+        model.isLoading || state.blocksPrefixMutation
     }
 
     private func backendNotice(_ backend: GraphicsBackend) -> String {
@@ -173,7 +172,7 @@ struct GraphicsSettingsView: View {
                     .font(.callout)
                     .foregroundStyle(WineTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if state.graphicsProgress == nil && (busy || state.isStopping) {
+            } else if state.graphicsProgress == nil && state.blocksPrefixMutation {
                 Text("Wait for this bottle’s operation to finish before changing graphics.")
                     .font(.callout)
                     .foregroundStyle(WineTheme.muted)

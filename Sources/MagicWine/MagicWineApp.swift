@@ -53,7 +53,7 @@ struct MagicWineApp: App {
     private var canUseSelectedBottle: Bool {
         guard let bottle = model.selectedBottle else { return false }
         let state = model.activity(for: bottle)
-        return bottle.isInitialized && state.title == nil && !state.hasRunningPrograms && !state.isStopping
+        return bottle.isInitialized && !state.blocksPrefixMutation
     }
 
     private var canStopSelectedBottle: Bool {
@@ -390,7 +390,7 @@ struct WineInstallationView: View {
         if model.isLoading || model.runtimeActivity != nil { return true }
         guard let bottle else { return false }
         let state = model.activity(for: bottle)
-        return state.title != nil || state.hasRunningPrograms || state.isStopping
+        return state.blocksPrefixMutation
     }
 
     var body: some View {

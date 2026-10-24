@@ -12,9 +12,10 @@ struct BottleDashboardView: View {
     }
 
     private var activity: BottleActivity { model.activity(for: currentBottle) }
-    private var busy: Bool { activity.title != nil || activity.hasRunningPrograms || activity.isStopping }
-    private var operationUnavailable: Bool { busy || !currentBottle.isInitialized }
-    private var launchUnavailable: Bool { activity.title != nil || activity.isStopping || !currentBottle.isInitialized }
+    private var prefixLocked: Bool { activity.blocksPrefixMutation }
+    private var prefixOperationUnavailable: Bool { prefixLocked || !currentBottle.isInitialized }
+    private var libraryEditUnavailable: Bool { activity.blocksLibraryEdit || !currentBottle.isInitialized }
+    private var launchUnavailable: Bool { activity.blocksLaunch || !currentBottle.isInitialized }
     private var bottleURL: URL {
         model.paths.bottlesDirectory.appendingPathComponent(currentBottle.id.uuidString, isDirectory: true)
     }
@@ -144,21 +145,21 @@ struct BottleDashboardView: View {
             Label("Install EXE/MSI", systemImage: "plus")
         }
         .buttonStyle(WineButtonStyle(prominent: true))
-        .disabled(operationUnavailable)
+        .disabled(prefixOperationUnavailable)
         .help("Run a Windows EXE or MSI installer in this bottle")
 
         Button { model.chooseProgram(in: currentBottle) } label: {
             Label("Add Program", systemImage: "app.badge")
         }
         .buttonStyle(WineButtonStyle())
-        .disabled(operationUnavailable)
+        .disabled(libraryEditUnavailable)
         .help("Register an existing EXE, LNK, or URL shortcut without moving its file")
 
         Button { model.refreshPrograms(in: currentBottle) } label: {
             Label("Refresh", systemImage: "arrow.clockwise")
         }
         .buttonStyle(WineButtonStyle())
-        .disabled(operationUnavailable)
+        .disabled(libraryEditUnavailable)
         .help("Find Windows Start Menu and Desktop shortcuts, including Steam URL shortcuts")
     }
 
@@ -226,7 +227,7 @@ struct BottleDashboardView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Button("Retry Setup") { model.initialize(currentBottle) }
                         .buttonStyle(WineButtonStyle(prominent: true))
-                        .disabled(busy)
+                        .disabled(prefixLocked)
                 }
             }
         }
@@ -366,7 +367,7 @@ struct BottleDashboardView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .disabled(busy)
+            .disabled(activity.blocksLibraryEdit)
             .accessibilityLabel("Actions for \(program.name)")
             .help("Remove this program from MagicWine without deleting its file")
         }
@@ -377,7 +378,7 @@ struct BottleDashboardView: View {
             Button("Remove from MagicWine", role: .destructive) {
                 model.removeProgram(program, in: currentBottle)
             }
-            .disabled(busy)
+            .disabled(activity.blocksLibraryEdit)
         }
     }
 
@@ -400,13 +401,13 @@ struct BottleDashboardView: View {
                         .help(currentBottle.runtime.executableURL.path)
                 }
                 rowSeparator
-                GraphicsSettingsView(model: model, bottle: currentBottle, busy: busy)
+                GraphicsSettingsView(model: model, bottle: currentBottle)
                 Button { model.configure(currentBottle) } label: {
                     Label("Configure Runtime", systemImage: "gearshape")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(WineButtonStyle())
-                .disabled(operationUnavailable)
+                .disabled(prefixOperationUnavailable)
                 .help("Open this bottle’s Wine configuration dialog")
                 if let componentID = currentBottle.graphics.componentID {
                     DisclosureGroup("Component Details") {
@@ -435,7 +436,7 @@ struct BottleDashboardView: View {
             }
             rowSeparator
             toolButton("Trash Bottle…", icon: "trash", destructive: true, action: trash)
-                .disabled(busy)
+                .disabled(prefixLocked)
                 .help("Ask for confirmation before moving this bottle to Trash")
         }
     }
