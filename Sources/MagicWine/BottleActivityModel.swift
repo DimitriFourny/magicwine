@@ -27,6 +27,12 @@ extension BottleActivity {
 
     /// Starting another program may overlap running ones, but not an exclusive operation.
     var blocksLaunch: Bool { title != nil || isStopping }
+
+    /// Stop Windows Processes (toolbar and menu): any set-up bottle without an exclusive
+    /// operation, since programs started elsewhere may run, and operations that can stop.
+    func allowsStop(of bottle: Bottle) -> Bool {
+        !isStopping && (canStop || (title == nil && bottle.isInitialized))
+    }
 }
 
 /// A dismissible, non-error status for one bottle, tied to one specific process log.

@@ -2,15 +2,14 @@ import Foundation
 import MagicWineCore
 import Observation
 
-/// The loaded bottles, the selection, bottle creation, and per-bottle icon revisions.
-/// Other models change a bottle only by handing the core's saved result to `replace`.
+/// The loaded bottles, bottle creation, and per-bottle icon revisions. Selection is window
+/// state. Other models change a bottle only by handing the core's saved result to `replace`.
 @Observable
 @MainActor
 final class LibraryModel {
     private(set) var bottles: [Bottle] = []
     /// Set by `AppModel`'s startup and reload sequence; operations wait while it is set.
     var isLoading = true
-    var selectedBottleID: UUID?
     private(set) var isCreating = false
     private(set) var creationError: String?
     /// Bumped per bottle whenever its saved record is replaced or reloaded, so only that
@@ -25,10 +24,6 @@ final class LibraryModel {
         self.paths = paths
         self.store = store
         self.notices = notices
-    }
-
-    var selectedBottle: Bottle? {
-        bottles.first { $0.id == selectedBottleID }
     }
 
     func contains(_ id: UUID) -> Bool {
@@ -56,16 +51,13 @@ final class LibraryModel {
         do {
             bottles = try await store.list()
             for bottle in bottles { iconRevisions[bottle.id, default: 0] += 1 }
-            if !bottles.contains(where: { $0.id == selectedBottleID }) {
-                selectedBottleID = bottles.first?.id
-            }
         } catch {
             notices.report(error, title: "Could Not Load Bottles")
         }
     }
 
-    /// Creates and selects a new bottle; `nil` while another creation runs or on failure
-    /// (shown as `creationError`).
+    /// Creates a new bottle; `nil` while another creation runs or on failure (shown as
+    /// `creationError`).
     func create(name: String, runtime: RuntimeDescriptor) async -> Bottle? {
         guard !isCreating else { return nil }
         isCreating = true
@@ -74,7 +66,6 @@ final class LibraryModel {
         do {
             let bottle = try await store.create(name: name.trimmingCharacters(in: .whitespacesAndNewlines), runtime: runtime)
             bottles.append(bottle)
-            selectedBottleID = bottle.id
             return bottle
         } catch {
             creationError = error.localizedDescription
@@ -92,6 +83,5 @@ final class LibraryModel {
     func remove(_ id: UUID) {
         bottles.removeAll { $0.id == id }
         iconRevisions[id] = nil
-        if selectedBottleID == id { selectedBottleID = bottles.first?.id }
     }
 }

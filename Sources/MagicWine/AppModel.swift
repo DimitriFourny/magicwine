@@ -27,13 +27,14 @@ final class NoticeModel {
 
 /// Composition root: creates the library's single `BottleStore` and `WineRuntime` and the
 /// focused models that share them, and runs the flows that span several of them
-/// (startup, reload, file opening, bottle creation).
+/// (startup, reload, file opening, bottle creation). Selection, sheets, and files opened
+/// before the library loaded belong to each window, not to these shared models.
 @Observable
 @MainActor
 final class AppModel {
     let paths: ApplicationPaths
     let notices: NoticeModel
-    /// Bottles, selection, creation, and icon revisions.
+    /// Bottles, creation, and icon revisions.
     let library: LibraryModel
     /// Wine runtimes and app settings.
     let runtimes: RuntimeModel
@@ -44,10 +45,7 @@ final class AppModel {
     let storage: StorageCleanupModel
     let dependencies: DependenciesModel
 
-    var showsNewBottle = false
-
     @ObservationIgnored private var hasStarted = false
-    @ObservationIgnored private var pendingOpenURLs: [URL] = []
 
     init(paths: ApplicationPaths = ApplicationPaths()) {
         self.paths = paths
@@ -76,7 +74,6 @@ final class AppModel {
         await library.load()
         await runtimes.discover()
         library.isLoading = false
-        drainOpenURLs()
     }
 
     func refreshBottles() {
@@ -90,37 +87,27 @@ final class AppModel {
         Task {
             await library.load()
             library.isLoading = false
-            drainOpenURLs()
         }
     }
 
-    private func drainOpenURLs() {
-        let urls = pendingOpenURLs
-        pendingOpenURLs.removeAll()
-        for url in urls { openInstallerURL(url) }
-    }
-
-    func openInstallerURL(_ url: URL) {
-        guard !library.isLoading else {
-            pendingOpenURLs.append(url)
-            return
-        }
+    /// An EXE/MSI opened from Finder, for the opening window's selected bottle. Windows keep
+    /// files opened while the library loads and pass them here once it has.
+    func openInstallerURL(_ url: URL, in bottle: Bottle?) {
         guard url.isFileURL, ["exe", "msi"].contains(url.pathExtension.lowercased()) else {
             notices.post(AppNotice(title: "Unsupported File", message: "Open a Windows EXE or MSI installer. To register an existing program or shortcut, select a bottle and use Add Program."))
             return
         }
-        guard let bottle = library.selectedBottle else {
+        guard let bottle else {
             notices.post(AppNotice(title: "Choose a Bottle First", message: "Create or select a bottle, then open \(url.lastPathComponent) again or use Install EXE/MSI. Installers need a bottle to keep their Windows files and settings."))
             return
         }
         activity.install(url, in: bottle)
     }
 
-    func createBottle(name: String, runtime: RuntimeDescriptor) {
-        Task {
-            guard let bottle = await library.create(name: name, runtime: runtime) else { return }
-            showsNewBottle = false
-            activity.initialize(bottle)
-        }
+    /// Creates a bottle and starts its setup; `nil` when creation failed or another runs.
+    func createBottle(name: String, runtime: RuntimeDescriptor) async -> Bottle? {
+        guard let bottle = await library.create(name: name, runtime: runtime) else { return nil }
+        activity.initialize(bottle)
+        return bottle
     }
 }

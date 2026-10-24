@@ -41,6 +41,7 @@ struct OperationErrorCard: View {
     let bottle: Bottle
     let error: PresentedError
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.newBottle) private var newBottle
     @State private var confirmsComponentUpdate = false
 
     private var activity: BottleActivity { model.activity.activity(for: bottle) }
@@ -104,8 +105,8 @@ struct OperationErrorCard: View {
             Button("Update Component…") { confirmsComponentUpdate = true }
                 .disabled(model.library.isLoading || activity.blocksPrefixMutation)
         case .chooseWine:
-            Button("New Bottle with Other Wine…") { model.showsNewBottle = true }
-                .disabled(model.library.isLoading)
+            Button("New Bottle with Other Wine…") { newBottle?() }
+                .disabled(model.library.isLoading || newBottle == nil)
         case .reload:
             Button("Reload") { model.refreshBottles() }
                 .disabled(model.library.isLoading || activity.blocksLibraryEdit)

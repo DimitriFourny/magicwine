@@ -10,21 +10,18 @@ struct MagicWineApp: App {
     ))
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: LibraryView.windowID) {
             LibraryView(model: model)
                 .fileImportHost(model)
                 .frame(minWidth: 1000, minHeight: 720)
                 .preferredColorScheme(.dark)
                 .task { await model.start() }
-                .onOpenURL { model.openInstallerURL($0) }
         }
         .defaultSize(width: 1440, height: 960)
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Bottle…") { model.showsNewBottle = true }
-                    .keyboardShortcut("n")
-                    .disabled(model.library.isLoading)
+                NewBottleCommand(model: model)
             }
             CommandMenu("Bottle") {
                 BottleCommands(model: model)
@@ -58,108 +55,109 @@ struct MagicWineApp: App {
     }
 }
 
-private struct FileImportFocusKey: FocusedValueKey {
-    typealias Value = FileImportAction
-}
-
-extension FocusedValues {
-    /// The focused main window's file dialog, for menu commands.
-    var fileImport: FileImportAction? {
-        get { self[FileImportFocusKey.self] }
-        set { self[FileImportFocusKey.self] = newValue }
-    }
-}
-
-/// Menu commands cannot read `openWindow` or the window's file dialog from the app; a view can.
-private struct BottleCommands: View {
-    let model: AppModel
-    @FocusedValue(\.fileImport) private var fileImport
-    @Environment(\.openWindow) private var openWindow
-
-    private var bottle: Bottle? { model.library.selectedBottle }
-
-    private var canUseSelectedBottle: Bool {
-        guard let bottle else { return false }
-        return bottle.isInitialized && !model.activity.activity(for: bottle).blocksPrefixMutation
-    }
-
-    private var canStopSelectedBottle: Bool {
-        guard let bottle else { return false }
-        let state = model.activity.activity(for: bottle)
-        return !state.isStopping && (state.canStop || (state.title == nil && bottle.isInitialized))
-    }
-
-    var body: some View {
-        Button("Install EXE/MSI…") {
-            if let bottle { fileImport?(.installer(bottle)) }
-        }
-        .disabled(!canUseSelectedBottle || fileImport == nil)
-        Button("Stop Windows Processes") {
-            if let bottle { model.activity.stop(bottle) }
-        }
-        .disabled(!canStopSelectedBottle)
-        Divider()
-        Button("Show Bottle Logs…") { if let bottle { openWindow(id: BottleLogsView.windowID, value: bottle.id) } }
-            .disabled(bottle == nil)
-        Button("Reload Bottles") { model.refreshBottles() }
-            .disabled(model.library.isLoading)
-    }
-}
-
+/// One library window. Selection, the New Bottle sheet, the presented alert, and files opened
+/// before the library loaded are this window's state, so several windows do not share them.
 private struct LibraryView: View {
-    @Bindable var model: AppModel
-    @State private var trashTarget: Bottle?
+    static let windowID = "library"
+
+    let model: AppModel
     @State private var destination: LibraryDestination = .bottles
+    @State private var selectedBottleID: UUID?
     @State private var search = ""
+    @State private var showsNewBottle = false
+    @State private var trashTarget: Bottle?
+    @State private var notice: AppNotice?
+    @State private var pendingOpenURLs: [URL] = []
     @Environment(\.openWindow) private var openWindow
     @Environment(\.fileImport) private var fileImport
+    @Environment(\.controlActiveState) private var activeState
+
+    private var selectedBottle: Bottle? {
+        model.library.bottles.first { $0.id == selectedBottleID }
+    }
+
+    /// The sidebar shows the selected bottle only on the Bottles destination; the bottle stays
+    /// selected for menu commands and opened installers while another destination is shown.
+    private var sidebarSelection: Binding<SidebarItem?> {
+        Binding(
+            get: {
+                if destination == .bottles { return selectedBottleID.map(SidebarItem.bottle) }
+                return .destination(destination)
+            },
+            set: { item in
+                switch item {
+                case .bottle(let id):
+                    selectedBottleID = id
+                    destination = .bottles
+                case .destination(let target):
+                    destination = target
+                case nil:
+                    break
+                }
+            }
+        )
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            LibrarySidebarView(model: model, destination: $destination, search: $search,
-                               trash: { trashTarget = $0 })
-                .frame(width: 250)
-            Rectangle().fill(WineTheme.border).frame(width: 1)
-            VStack(spacing: 0) {
-                Group {
-                    switch destination {
-                    case .bottles:
-                        if let bottle = model.library.selectedBottle {
-                            BottleDashboardView(model: model, bottle: bottle, trash: { trashTarget = bottle })
-                                .id(bottle.id)
-                        } else {
-                            WelcomeView(model: model)
-                        }
-                    case .gamepads:
-                        GamepadView(paths: model.paths)
-                    case .downloads:
-                        downloads
-                    case .settings:
-                        WineSettingsView(model: model).padding(24)
-                    case .documentation:
-                        documentation
-                    }
-                }
+        NavigationSplitView {
+            LibrarySidebarView(model: model, selection: sidebarSelection, search: search,
+                               newBottle: { showsNewBottle = true }, trash: { trashTarget = $0 })
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
+        } detail: {
+            detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
+                .background(WineTheme.background)
+                .toolbar { bottleToolbar }
         }
+        .searchable(text: $search, placement: .sidebar, prompt: "Bottles and programs")
         .foregroundStyle(WineTheme.text)
-        .background(WineTheme.background)
         .tint(WineTheme.accent)
         .buttonStyle(WineButtonStyle())
+        .focusedSceneValue(\.selectedBottleID, selectedBottleID)
         .focusedSceneValue(\.fileImport, fileImport)
+        .focusedSceneValue(\.newBottle, WindowAction { showsNewBottle = true })
+        .environment(\.newBottle, WindowAction { showsNewBottle = true })
+        .onOpenURL { url in
+            if model.library.isLoading {
+                pendingOpenURLs.append(url)
+            } else {
+                model.openInstallerURL(url, in: selectedBottle)
+            }
+        }
+        // Files opened from Finder go to an existing library window instead of a new one.
+        .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+        .onChange(of: model.library.bottles.map(\.id), initial: true) { _, ids in
+            if let selectedBottleID, ids.contains(selectedBottleID) { return }
+            selectedBottleID = ids.first
+        }
+        .onChange(of: model.library.isLoading) { _, loading in
+            guard !loading else { return }
+            let urls = pendingOpenURLs
+            pendingOpenURLs.removeAll()
+            for url in urls { model.openInstallerURL(url, in: selectedBottle) }
+        }
+        .onChange(of: model.notices.current?.id, initial: true) { claimNotice() }
+        .onChange(of: activeState) { claimNotice() }
         .onChange(of: model.activity.logToShow) { _, url in
             guard let url else { return }
             openWindow(id: LogViewerView.windowID, value: url)
             model.activity.logToShow = nil
         }
-        .sheet(isPresented: $model.showsNewBottle) {
-            NewBottleView(model: model)
+        .sheet(isPresented: $showsNewBottle) {
+            NewBottleView(model: model) { bottle in
+                selectedBottleID = bottle.id
+                destination = .bottles
+            }
         }
-        .alert(model.notices.current?.title ?? "", isPresented: Binding(
-            get: { model.notices.current != nil },
-            set: { if !$0 { model.notices.current = nil } }
-        ), presenting: model.notices.current) { notice in
+        .alert(notice?.title ?? "", isPresented: Binding(
+            get: { notice != nil },
+            set: { presented in
+                guard !presented else { return }
+                notice = nil
+                // A notice posted while this one was shown is presented next.
+                Task { @MainActor in claimNotice() }
+            }
+        ), presenting: notice) { notice in
             Button("OK", role: .cancel) { }
             if let log = notice.logURL {
                 Button("Show Log") { openWindow(id: LogViewerView.windowID, value: log) }
@@ -181,6 +179,63 @@ private struct LibraryView: View {
         } message: {
             Text("This moves the bottle and its Windows files to macOS Trash. Programs outside the bottle are not deleted. Stop all Windows processes in the bottle first.")
         }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch destination {
+        case .bottles:
+            if let bottle = selectedBottle {
+                BottleDashboardView(model: model, bottle: bottle, programFilter: search,
+                                    trash: { trashTarget = bottle })
+                    .id(bottle.id)
+            } else {
+                WelcomeView(model: model, newBottle: { showsNewBottle = true })
+            }
+        case .gamepads:
+            GamepadView(paths: model.paths)
+        case .downloads:
+            downloads
+        case .documentation:
+            documentation
+        }
+    }
+
+    /// The selected bottle's main actions, enabled by the same predicates as its dashboard.
+    @ToolbarContentBuilder
+    private var bottleToolbar: some ToolbarContent {
+        if destination == .bottles, let bottle = selectedBottle {
+            let state = model.activity.activity(for: bottle)
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button { fileImport?(.installer(bottle)) } label: {
+                    Label("Install EXE/MSI", systemImage: "square.and.arrow.down")
+                }
+                .disabled(!bottle.isInitialized || state.blocksPrefixMutation || fileImport == nil)
+                .help("Run a Windows EXE or MSI installer in this bottle")
+                Button { fileImport?(.program(bottle)) } label: {
+                    Label("Add Program", systemImage: "app.badge")
+                }
+                .disabled(!bottle.isInitialized || state.blocksLibraryEdit || fileImport == nil)
+                .help("Register an existing EXE, LNK, or URL shortcut without moving its file")
+                Button { model.activity.refreshPrograms(in: bottle) } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(!bottle.isInitialized || state.blocksLibraryEdit)
+                .help("Find Windows Start Menu and Desktop shortcuts, including Steam URL shortcuts")
+                Button { model.activity.stop(bottle) } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .disabled(!state.allowsStop(of: bottle))
+                .help("Stop all Windows processes in this bottle")
+            }
+        }
+    }
+
+    /// Only the frontmost window presents the app-wide alert; it waits while none is.
+    private func claimNotice() {
+        guard notice == nil, activeState == .key, let pending = model.notices.current else { return }
+        notice = pending
+        model.notices.current = nil
     }
 
     private var downloads: some View {
@@ -256,6 +311,7 @@ private struct LibraryView: View {
 
 private struct WelcomeView: View {
     let model: AppModel
+    let newBottle: () -> Void
 
     var body: some View {
         ScrollView {
@@ -283,7 +339,7 @@ private struct WelcomeView: View {
                         RuntimeSetupView(model: model)
                     }
                 } else {
-                    Button("Create Bottle…") { model.showsNewBottle = true }
+                    Button("Create Bottle…", action: newBottle)
                         .buttonStyle(WineButtonStyle(prominent: true))
                     Text("Or select a bottle in the sidebar.").foregroundStyle(.secondary)
                     SettingsLink { Text("Wine Settings…") }
@@ -298,6 +354,8 @@ private struct WelcomeView: View {
 
 private struct NewBottleView: View {
     let model: AppModel
+    /// Called with the created bottle, before its setup finishes.
+    let created: (Bottle) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var runtimeID = ""
@@ -359,7 +417,11 @@ private struct NewBottleView: View {
 
     private func create() {
         guard validName, !model.library.isCreating, model.runtimes.activity == nil, let runtime else { return }
-        model.createBottle(name: name, runtime: runtime)
+        Task {
+            guard let bottle = await model.createBottle(name: name, runtime: runtime) else { return }
+            created(bottle)
+            dismiss()
+        }
     }
 }
 

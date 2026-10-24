@@ -1,113 +1,93 @@
 import SwiftUI
 import MagicWineCore
 
-enum LibraryDestination: Equatable {
+enum LibraryDestination: Hashable {
     case bottles
     case gamepads
     case downloads
-    case settings
     case documentation
+}
+
+/// A selectable sidebar row: one bottle, or a library destination.
+enum SidebarItem: Hashable {
+    case bottle(UUID)
+    case destination(LibraryDestination)
 }
 
 struct LibrarySidebarView: View {
     let model: AppModel
-    @Binding var destination: LibraryDestination
-    @Binding var search: String
+    @Binding var selection: SidebarItem?
+    /// The window's search text: matches bottle names and their programs' names.
+    let search: String
+    let newBottle: () -> Void
     let trash: (Bottle) -> Void
-    @State private var hoveredBottleID: Bottle.ID?
-    @State private var hoveredDestination: LibraryDestination?
-    @FocusState private var searchFocused: Bool
     @Environment(\.openWindow) private var openWindow
 
     private var filteredBottles: [Bottle] {
         guard !search.isEmpty else { return model.library.bottles }
-        return model.library.bottles.filter { $0.name.localizedStandardContains(search) }
+        return model.library.bottles.filter { bottle in
+            bottle.name.localizedStandardContains(search)
+                || bottle.programs.contains { $0.name.localizedStandardContains(search) }
+        }
     }
 
     private static let appVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
         .flatMap { $0.isEmpty ? nil : $0 } ?? "0.1.0"
 
     var body: some View {
-        GeometryReader { geometry in
-            let bottles = filteredBottles
-            VStack(alignment: .leading, spacing: 0) {
-                branding
-                    .padding(.horizontal, 16)
-                    .padding(.top, 18)
-                    .padding(.bottom, 16)
-
-                searchField
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
-
+        let bottles = filteredBottles
+        List(selection: $selection) {
+            Section {
+                if model.library.bottles.isEmpty {
+                    emptyLibrary
+                } else if bottles.isEmpty {
+                    emptySearch
+                } else {
+                    ForEach(bottles) { bottle in
+                        bottleRow(bottle)
+                            .tag(SidebarItem.bottle(bottle.id))
+                    }
+                }
+            } header: {
                 HStack {
                     Text("Bottles")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(WineTheme.muted)
                     Spacer()
-                    Button {
-                        guard !model.library.isLoading else { return }
-                        model.showsNewBottle = true
-                    } label: {
+                    Button(action: newBottle) {
                         Image(systemName: "plus")
-                            .font(.system(size: 14, weight: .medium))
                     }
-                    .buttonStyle(WineButtonStyle())
+                    .buttonStyle(.borderless)
                     .disabled(model.library.isLoading)
                     .help("Create a bottle")
                     .accessibilityLabel("Create a bottle")
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 12)
-
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        if model.library.bottles.isEmpty {
-                            emptyLibrary
-                        } else if bottles.isEmpty {
-                            emptySearch
-                        } else {
-                            ForEach(bottles) { bottle in
-                                bottleRow(bottle)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                }
-                .frame(height: min(max(CGFloat(bottles.count) * 52, 104), max(104, geometry.size.height - 470)))
-
-                Rectangle()
-                    .fill(WineTheme.border)
-                    .frame(height: 1)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 14)
-
-                VStack(spacing: 4) {
-                    navigationRow("Gamepads", icon: "gamecontroller", target: .gamepads)
-                    navigationRow("Downloads", icon: "arrow.down.to.line", target: .downloads,
-                                  active: model.runtimes.activity != nil)
-                    navigationRow("Settings", icon: "gearshape", target: .settings)
-                    navigationRow("Documentation", icon: "book", target: .documentation)
-                }
-                .padding(.horizontal, 12)
-
-                Spacer(minLength: 16)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("MagicWine \(Self.appVersion)")
-                        .font(.system(size: 12, weight: .medium))
-                    Text("Run Windows your way.")
-                        .font(.system(size: 12))
-                }
-                .foregroundStyle(WineTheme.muted)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 18)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            Section("Library") {
+                destinationRow("Gamepads", icon: "gamecontroller", target: .gamepads)
+                destinationRow("Downloads", icon: "arrow.down.to.line", target: .downloads,
+                               active: model.runtimes.activity != nil)
+                destinationRow("Documentation", icon: "book", target: .documentation)
+            }
         }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .background(WineTheme.sidebar)
-        .overlay(alignment: .trailing) {
-            Rectangle().fill(WineTheme.border).frame(width: 1)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            branding
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("MagicWine \(Self.appVersion)")
+                    .font(.system(size: 12, weight: .medium))
+                Text("Run Windows your way.")
+                    .font(.system(size: 12))
+            }
+            .foregroundStyle(WineTheme.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
         }
     }
 
@@ -131,86 +111,38 @@ struct LibrarySidebarView: View {
                     .minimumScaleFactor(0.9)
             }
         }
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(WineTheme.muted)
-            TextField("Search bottles…", text: $search)
-                .textFieldStyle(.plain)
-                .focused($searchFocused)
-                .accessibilityLabel("Search bottles")
-            if !search.isEmpty {
-                Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(WineTheme.muted)
-                    .accessibilityLabel("Clear bottle search")
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(WineTheme.elevated.opacity(0.7), in: RoundedRectangle(cornerRadius: 9))
-        .overlay {
-            RoundedRectangle(cornerRadius: 9)
-                .strokeBorder(searchFocused ? WineTheme.accent : WineTheme.border,
-                              lineWidth: searchFocused ? 2 : 1)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func bottleRow(_ bottle: Bottle) -> some View {
         let activity = model.activity.activity(for: bottle)
-        let busy = activity.blocksPrefixMutation
-        let selected = destination == .bottles && model.library.selectedBottleID == bottle.id
-        return Button {
-            model.library.selectedBottleID = bottle.id
-            destination = .bottles
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "shippingbox")
-                    .font(.system(size: 21, weight: .light))
-                    .frame(width: 24)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(bottle.name)
-                        .font(.system(size: 14, weight: selected ? .medium : .regular))
-                        .lineLimit(1)
-                    if activity.isStopping {
-                        rowSubtitle("Stopping Windows processes…")
-                    } else if let title = activity.title {
-                        rowSubtitle(title)
-                    } else if activity.hasRunningPrograms {
-                        rowSubtitle("Windows programs running")
-                    } else if !bottle.isInitialized {
-                        rowSubtitle("Setup needed")
-                    }
+        return HStack(spacing: 12) {
+            Image(systemName: "shippingbox")
+                .font(.system(size: 18, weight: .light))
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(bottle.name)
+                    .font(.system(size: 14))
+                    .lineLimit(1)
+                if activity.isStopping {
+                    rowSubtitle("Stopping Windows processes…")
+                } else if let title = activity.title {
+                    rowSubtitle(title)
+                } else if activity.hasRunningPrograms {
+                    rowSubtitle("Windows programs running")
+                } else if !bottle.isInitialized {
+                    rowSubtitle("Setup needed")
                 }
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(selected ? WineTheme.text : WineTheme.muted)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-            .background(selected ? WineTheme.accent.opacity(hoveredBottleID == bottle.id ? 0.44 : 0.32)
-                        : (hoveredBottleID == bottle.id ? WineTheme.elevated : .clear),
-                        in: RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(selected ? WineTheme.accent.opacity(0.5) : .clear, lineWidth: 1)
             }
         }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            if hovering { hoveredBottleID = bottle.id }
-            else if hoveredBottleID == bottle.id { hoveredBottleID = nil }
-        }
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .padding(.vertical, 4)
         .contextMenu {
             Button("Show Logs…") { openWindow(id: BottleLogsView.windowID, value: bottle.id) }
             Button("Move Bottle to Trash…", role: .destructive) {
-                let current = model.activity.activity(for: bottle)
-                guard !current.blocksPrefixMutation else { return }
+                guard !model.activity.activity(for: bottle).blocksPrefixMutation else { return }
                 trash(bottle)
             }
-            .disabled(busy)
+            .disabled(activity.blocksPrefixMutation)
         }
     }
 
@@ -221,39 +153,22 @@ struct LibrarySidebarView: View {
             .lineLimit(1)
     }
 
-    private func navigationRow(_ title: String, icon: String, target: LibraryDestination,
-                               active: Bool = false) -> some View {
-        let selected = destination == target
-        return Button {
-            destination = target
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.system(size: 20, weight: .light))
-                    .frame(width: 24)
-                Text(title).font(.system(size: 14))
-                Spacer(minLength: 0)
-                if active {
-                    Circle().fill(WineTheme.success).frame(width: 6, height: 6)
-                        .accessibilityHidden(true)
-                }
+    private func destinationRow(_ title: String, icon: String, target: LibraryDestination,
+                                active: Bool = false) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .light))
+                .frame(width: 24)
+            Text(title).font(.system(size: 14))
+            Spacer(minLength: 0)
+            if active {
+                Circle().fill(WineTheme.success).frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
             }
-            .foregroundStyle(selected ? WineTheme.text : WineTheme.muted)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-            .background(selected ? WineTheme.accent.opacity(hoveredDestination == target ? 0.38 : 0.25)
-                        : (hoveredDestination == target ? WineTheme.elevated : .clear),
-                        in: RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .onHover { hovering in
-            if hovering { hoveredDestination = target }
-            else if hoveredDestination == target { hoveredDestination = nil }
-        }
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .padding(.vertical, 3)
         .accessibilityValue(active ? "Download activity in progress" : "")
+        .tag(SidebarItem.destination(target))
     }
 
     private var emptyLibrary: some View {
@@ -270,18 +185,16 @@ struct LibrarySidebarView: View {
         }
         .font(.system(size: 12))
         .foregroundStyle(WineTheme.muted)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
+        .padding(.vertical, 6)
     }
 
     private var emptySearch: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("No matching bottles").foregroundStyle(WineTheme.text)
+            Text("No matching bottles or programs").foregroundStyle(WineTheme.text)
             Text("Try another name or clear the search.")
         }
         .font(.system(size: 12))
         .foregroundStyle(WineTheme.muted)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
+        .padding(.vertical, 6)
     }
 }

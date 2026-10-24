@@ -5,9 +5,13 @@ import MagicWineCore
 struct BottleDashboardView: View {
     let model: AppModel
     let bottle: Bottle
+    /// The window's search text; programs whose names match are listed.
+    let programFilter: String
     let trash: () -> Void
     @State private var editingProgram: WindowsProgram?
     @State private var diagnosticProgram: WindowsProgram?
+    /// Target of Bottle › Launch; clicking a program row selects it.
+    @State private var selectedProgramID: UUID?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.fileImport) private var fileImport
     @State private var showsDependencies = false
@@ -58,6 +62,7 @@ struct BottleDashboardView: View {
         }
         .foregroundStyle(WineTheme.text)
         .navigationTitle(currentBottle.name)
+        .focusedSceneValue(\.selectedProgramID, selectedProgramID)
         .sheet(item: $editingProgram) { program in
             ProgramEditorView(model: model, bottle: currentBottle, program: program)
         }
@@ -187,10 +192,10 @@ struct BottleDashboardView: View {
     @ViewBuilder
     private func settingsActions(onSettings: @escaping () -> Void) -> some View {
         Button(action: onSettings) {
-            Label("Settings", systemImage: "slider.horizontal.3")
+            Label("Bottle Settings", systemImage: "slider.horizontal.3")
         }
         .buttonStyle(WineButtonStyle())
-        .help("Show runtime and graphics settings")
+        .help("Show this bottle’s runtime, graphics, and compatibility settings")
 
         if showsStop {
             Button { model.activity.stop(currentBottle) } label: {
@@ -343,8 +348,15 @@ struct BottleDashboardView: View {
         .padding(.vertical, 9)
     }
 
+    /// Programs matching the window's search; all of them when it is empty.
+    private var visiblePrograms: [WindowsProgram] {
+        guard !programFilter.isEmpty else { return currentBottle.programs }
+        return currentBottle.programs.filter { $0.name.localizedStandardContains(programFilter) }
+    }
+
     private var installedPrograms: some View {
         WineCard(title: "Installed Programs", icon: "square.grid.2x2", trailing: "\(currentBottle.programs.count) items") {
+            let programs = visiblePrograms
             if currentBottle.programs.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     Label("No programs yet", systemImage: "app.dashed")
@@ -355,10 +367,15 @@ struct BottleDashboardView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 8)
+            } else if programs.isEmpty {
+                Text("No programs in this bottle match “\(programFilter)”.")
+                    .font(.callout)
+                    .foregroundStyle(WineTheme.muted)
+                    .padding(.vertical, 8)
             } else {
                 LazyVStack(spacing: 0) {
-                    ForEach(currentBottle.programs) { program in
-                        if program.id != currentBottle.programs.first?.id { rowSeparator }
+                    ForEach(programs) { program in
+                        if program.id != programs.first?.id { rowSeparator }
                         programRow(program)
                     }
                 }
@@ -414,6 +431,12 @@ struct BottleDashboardView: View {
             .help("Edit this program’s launch options, or remove it from MagicWine without deleting its file")
         }
         .padding(.vertical, 10)
+        .padding(.horizontal, 6)
+        .background(selectedProgramID == program.id ? WineTheme.accent.opacity(0.18) : .clear,
+                    in: RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .onTapGesture { selectedProgramID = program.id }
+        .accessibilityAddTraits(selectedProgramID == program.id ? .isSelected : [])
         .contextMenu {
             Button("Launch") { model.activity.launch(program, in: currentBottle) }
                 .disabled(launchUnavailable)
