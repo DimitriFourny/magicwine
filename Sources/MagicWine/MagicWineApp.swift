@@ -200,6 +200,11 @@ private struct LibraryView: View {
             } else {
                 WelcomeView(model: model, newBottle: presentNewBottle)
             }
+        case .games:
+            GameLibraryView(model: model, search: search) { id in
+                selectedBottleID = id
+                destination = .bottles
+            }
         case .gamepads:
             GamepadView(paths: model.paths)
         case .downloads:

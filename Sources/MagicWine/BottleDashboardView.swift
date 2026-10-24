@@ -427,7 +427,7 @@ struct BottleDashboardView: View {
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                     .help(program.executablePath)
-                Text(Self.history(of: program)).font(WineTheme.Font.small)
+                Text(ProgramHistory.summary(of: program)).font(WineTheme.Font.small)
                     .foregroundStyle(WineTheme.muted)
                     .lineLimit(1)
             }
@@ -495,13 +495,6 @@ struct BottleDashboardView: View {
         Button(program.isFavorite ? localized("Remove from Favorites") : localized("Add to Favorites")) {
             model.bottleSettings.setFavorite(!program.isFavorite, for: program, in: currentBottle)
         }
-    }
-
-    private static func history(of program: WindowsProgram) -> String {
-        guard let last = program.lastLaunchedAt else { return localized("Never launched from MagicWine") }
-        let played = program.playTime < 60 ? localized("under a minute")
-            : Duration.seconds(program.playTime).formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
-        return localized("Last launched \(last.formatted(.relative(presentation: .named))) · \(played) played")
     }
 
     private func displayPath(_ path: String) -> String {

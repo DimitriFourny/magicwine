@@ -82,5 +82,23 @@
             <key>other</key><string>%lld items</string>
         </dict>
     </dict>
+    <key>%lld programs in %lld bottles</key>
+    <dict>
+        <key>NSStringLocalizedFormatKey</key><string>%1$#@programs@ in %2$#@bottles@</string>
+        <key>programs</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key><string>lld</string>
+            <key>one</key><string>%lld program</string>
+            <key>other</key><string>%lld programs</string>
+        </dict>
+        <key>bottles</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key><string>lld</string>
+            <key>one</key><string>%lld bottle</string>
+            <key>other</key><string>%lld bottles</string>
+        </dict>
+    </dict>
 </dict>
 </plist>

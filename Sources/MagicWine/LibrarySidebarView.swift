@@ -2,6 +2,7 @@ import SwiftUI
 import MagicWineCore
 
 enum LibraryDestination: Hashable {
+    case games
     case bottles
     case gamepads
     case downloads
@@ -37,6 +38,10 @@ struct LibrarySidebarView: View {
     var body: some View {
         let bottles = filteredBottles
         List(selection: $selection) {
+            Section {
+                destinationRow("All Games", icon: "books.vertical", target: .games)
+            }
+
             Section {
                 if model.library.bottles.isEmpty {
                     emptyLibrary
