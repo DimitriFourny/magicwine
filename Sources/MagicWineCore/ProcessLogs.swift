@@ -137,7 +137,12 @@ public enum ProcessLogs {
     private static func removeIfInactive(_ file: File) -> Bool {
         let descriptor = open(file.url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard descriptor >= 0 else { return false }
-        defer { Darwin.close(descriptor) }
+        // Unlock explicitly: a child spawned on another thread can briefly share this
+        // description, and close alone would keep the lock held until that child execs.
+        defer {
+            _ = flock(descriptor, LOCK_UN)
+            Darwin.close(descriptor)
+        }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { return false }
         var status = stat()
         guard fstat(descriptor, &status) == 0, status.st_dev == file.device, status.st_ino == file.inode else { return false }
@@ -147,7 +152,10 @@ public enum ProcessLogs {
     static func isActive(_ url: URL) -> Bool {
         let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard descriptor >= 0 else { return false }
-        defer { Darwin.close(descriptor) }
+        defer {
+            _ = flock(descriptor, LOCK_UN)
+            Darwin.close(descriptor)
+        }
         return flock(descriptor, LOCK_EX | LOCK_NB) != 0
     }
 
@@ -196,8 +204,8 @@ public enum ProcessLogs {
 
 /// A newly and exclusively created log. While open it holds a shared `flock`, which
 /// retention and the log list read as "still being written" in every MagicWine process
-/// (a `ProcessLogDrain` helper inherits that lock with the descriptor).
-/// Closing it applies retention to its folder.
+/// (a `ProcessLogDrain` helper holds its own description and lock of the same file).
+/// Closing it unlocks explicitly and applies retention to its folder.
 final class ProcessLogFile: @unchecked Sendable {
     let url: URL
     private let lock = NSLock()
@@ -208,8 +216,23 @@ final class ProcessLogFile: @unchecked Sendable {
         storedDescriptor = descriptor
     }
 
-    /// The open descriptor, or -1 once closed.
-    var descriptor: Int32 { lock.withLock { storedDescriptor } }
+    /// A separate append-only description of the same file with its own shared lock, for
+    /// a writer in another process; nil when the file was replaced or cannot be locked.
+    func openLockedDescription() -> Int32? {
+        lock.withLock {
+            guard storedDescriptor >= 0 else { return nil }
+            let descriptor = open(url.path, O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC)
+            guard descriptor >= 0 else { return nil }
+            var own = stat(), opened = stat()
+            guard fstat(storedDescriptor, &own) == 0, fstat(descriptor, &opened) == 0,
+                  own.st_dev == opened.st_dev, own.st_ino == opened.st_ino,
+                  flock(descriptor, LOCK_SH | LOCK_NB) == 0 else {
+                Darwin.close(descriptor)
+                return nil
+            }
+            return descriptor
+        }
+    }
 
     deinit { close() }
 
@@ -260,6 +283,9 @@ final class ProcessLogFile: @unchecked Sendable {
     func close(pruning: Bool = true) {
         let closed: Bool = lock.withLock {
             guard storedDescriptor >= 0 else { return false }
+            // Unlock explicitly: a child spawned on another thread can briefly share this
+            // description, and close alone would keep the log "running" until it execs.
+            _ = flock(storedDescriptor, LOCK_UN)
             Darwin.close(storedDescriptor)
             storedDescriptor = -1
             return true

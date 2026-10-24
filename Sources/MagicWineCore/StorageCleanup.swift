@@ -428,7 +428,12 @@ public enum StorageCleanup {
     private static func removeLock(parent: Int32, name: String, item: StorageCleanupItem) throws -> Bool {
         let descriptor = openat(parent, name, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else { return false }
-        defer { close(descriptor) }
+        // Unlock explicitly, as for the cleanup lock: close alone can leave it held while a
+        // child spawned on another thread still shares the description.
+        defer {
+            _ = flock(descriptor, LOCK_UN)
+            close(descriptor)
+        }
         var opened = stat(), current = stat()
         // A holder still uses it; leave it for a later cleanup.
         guard fstat(descriptor, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG, opened.st_nlink == 1,

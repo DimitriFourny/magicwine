@@ -432,15 +432,25 @@ final class ProcessLogDrain: @unchecked Sendable {
         guard let replies = try? ProcessOutputCapture.makePipe() else {
             [output.read, output.write, requests.read, requests.write].forEach { close($0) }; return nil
         }
+        // The helper gets its own open file description of the log with its own shared
+        // lock, so this process can always unlock and close its description explicitly.
+        guard let helperLog = log.openLockedDescription() else {
+            [output.read, output.write, requests.read, requests.write, replies.read, replies.write].forEach { close($0) }
+            return nil
+        }
         // Sources above the targets, so no dup2 overwrites a source it still needs.
-        let sources = [output.read, log.descriptor, requests.read, replies.write].map { fcntl($0, F_DUPFD_CLOEXEC, 10) }
+        let sources = [output.read, helperLog, requests.read, replies.write].map { fcntl($0, F_DUPFD_CLOEXEC, 10) }
         defer { sources.filter { $0 >= 0 }.forEach { close($0) } }
         let parentOnly = [output.read, requests.read, replies.write]
         guard sources.allSatisfy({ $0 >= 0 }), let pid = Self.spawn(sources: sources, limit: limit) else {
             (parentOnly + [output.write, requests.write, replies.read]).forEach { close($0) }
+            _ = flock(helperLog, LOCK_UN)
+            close(helperLog)
             return nil
         }
         parentOnly.forEach { close($0) }
+        // Never unlocked here: that description and its lock now belong to the helper.
+        close(helperLog)
         // A helper that exited early must not turn a flush request into SIGPIPE here.
         _ = fcntl(requests.write, F_SETNOSIGPIPE, 1)
         self.pid = pid
@@ -448,7 +458,7 @@ final class ProcessLogDrain: @unchecked Sendable {
         control = requests.write
         acknowledgement = replies.read
         directory = log.url.deletingLastPathComponent()
-        // The helper holds the log (and its lock) now; retention runs when it exits.
+        // The helper holds the log (and its own lock) now; retention runs when it exits.
         log.close(pruning: false)
         let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .global(qos: .utility))
         source.setEventHandler { [self] in reap() }

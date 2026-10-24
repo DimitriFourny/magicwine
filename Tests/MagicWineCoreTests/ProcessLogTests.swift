@@ -314,4 +314,27 @@ struct ProcessLogTests {
         #expect(update.reset)
         #expect(update.lines.map(\.text) == ["new log"])
     }
+
+    /// A child spawned on another thread briefly shares every open description until it
+    /// execs; a closed log must still never look running, nor a retention probe hold it.
+    @Test func closedLogsAreNeverRunningWhileOtherThreadsSpawn() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let spawning = Task.detached {
+            while !Task.isCancelled {
+                let child = Process()
+                child.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+                try? child.run()
+                child.waitUntilExit()
+            }
+        }
+        defer { spawning.cancel() }
+        var stillRunning = 0
+        for index in 0..<400 {
+            let file = try ProcessLogFile.create(in: directory, operation: "exec", detail: "\(index)")
+            file.close(pruning: false)
+            if ProcessLogs.isActive(file.url) || ProcessLogs.isActive(file.url) { stillRunning += 1 }
+        }
+        #expect(stillRunning == 0)
+    }
 }
