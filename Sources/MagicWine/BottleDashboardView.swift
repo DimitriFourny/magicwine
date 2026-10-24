@@ -40,28 +40,24 @@ struct BottleDashboardView: View {
     var body: some View {
         GeometryReader { geometry in
             let contentWidth = max(0, geometry.size.width - 32)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        header {
-                            withAnimation { proxy.scrollTo("runtime", anchor: .top) }
-                        }
-                        operationFeedback
-                        if contentWidth >= 900 {
-                            HStack(alignment: .top, spacing: 14) {
-                                programsColumn
-                                    .frame(width: (contentWidth - 14) * 0.56)
-                                secondaryColumn
-                                    .frame(maxWidth: .infinity)
-                            }
-                        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    header
+                    operationFeedback
+                    if contentWidth >= 900 {
+                        HStack(alignment: .top, spacing: 14) {
                             programsColumn
+                                .frame(width: (contentWidth - 14) * 0.56)
                             secondaryColumn
+                                .frame(maxWidth: .infinity)
                         }
+                    } else {
+                        programsColumn
+                        secondaryColumn
                     }
-                    .frame(width: contentWidth, alignment: .leading)
-                    .padding(16)
                 }
+                .frame(width: contentWidth, alignment: .leading)
+                .padding(16)
             }
             .background(WineTheme.background)
         }
@@ -104,7 +100,7 @@ struct BottleDashboardView: View {
         }
     }
 
-    private func header(onSettings: @escaping () -> Void) -> some View {
+    private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
                 Image(nsImage: WineArtwork.bottle)
@@ -133,13 +129,15 @@ struct BottleDashboardView: View {
                 HStack(spacing: 8) {
                     installerActions
                     Spacer(minLength: 8)
-                    settingsActions(onSettings: onSettings)
+                    stopAction
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) { installerActions }
-                    HStack(spacing: 8) {
-                        Spacer(minLength: 0)
-                        settingsActions(onSettings: onSettings)
+                    if showsStop {
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 0)
+                            stopAction
+                        }
                     }
                 }
             }
@@ -196,13 +194,7 @@ struct BottleDashboardView: View {
     }
 
     @ViewBuilder
-    private func settingsActions(onSettings: @escaping () -> Void) -> some View {
-        Button(action: onSettings) {
-            Label("Bottle Settings", systemImage: "slider.horizontal.3")
-        }
-        .buttonStyle(WineButtonStyle())
-        .help("Show this bottle’s runtime, graphics, and compatibility settings")
-
+    private var stopAction: some View {
         if showsStop {
             Button { model.activity.stop(currentBottle) } label: {
                 Label(activity.isStopping ? localized("Stopping…") : localized("Stop"), systemImage: "stop.fill")
@@ -537,7 +529,6 @@ struct BottleDashboardView: View {
                 }
             }
         }
-        .id("runtime")
     }
 
     private var tools: some View {
