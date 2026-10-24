@@ -120,7 +120,7 @@ struct SecureFS: Sendable {
     // MARK: Validation evidence
 
     /// Inode identity plus size and modification/change times of an `lstat` result.
-    struct Stamp: Equatable, Sendable {
+    struct Stamp: Equatable, Codable, Sendable {
         let device: Int32
         let inode: UInt64
         let size: Int64

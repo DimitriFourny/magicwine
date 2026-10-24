@@ -65,9 +65,9 @@ public enum StorageCleanup {
     private static let cleanupPrefix = ".cleanup-"
 
     /// A read-only plan. Current managed Wine and bundled components are only listed in
-    /// `keptCurrent` unless `includeCurrent` is set.
-    public static func plan(paths: ApplicationPaths, includeCurrent: Bool = false) async throws -> StorageCleanupPlan {
-        let store = BottleStore(paths: paths)
+    /// `keptCurrent` unless `includeCurrent` is set. `store` is the library's shared store.
+    public static func plan(store: BottleStore, includeCurrent: Bool = false) async throws -> StorageCleanupPlan {
+        let paths = store.paths
         let bottles = try await store.list()
         let all = try candidates(paths: paths, bottles: bottles, settings: try await store.settings())
         return StorageCleanupPlan(items: all.filter { includeCurrent || !$0.isCurrent },
@@ -77,9 +77,9 @@ public enum StorageCleanup {
     /// Removes the confirmed items that a plan recomputed under every bottle's exclusive
     /// launch and lifetime leases still contains. Refuses while any bottle is launching,
     /// running, being configured, or has a live Wine server.
-    public static func apply(_ confirmed: [StorageCleanupItem], paths: ApplicationPaths) async throws -> StorageCleanupResult {
+    public static func apply(_ confirmed: [StorageCleanupItem], store: BottleStore) async throws -> StorageCleanupResult {
         guard !confirmed.isEmpty else { return StorageCleanupResult(removed: [], skipped: []) }
-        let store = BottleStore(paths: paths)
+        let paths = store.paths
         try paths.prepare()
         let cleanupLock = try acquireCleanupLock(paths: paths)
         // Unlock explicitly: a child forked by another thread can briefly share this

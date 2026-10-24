@@ -154,7 +154,7 @@ struct StorageCleanupTests {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let (used, unused, _) = try await populate(fixture)
-        let plan = try await StorageCleanup.plan(paths: fixture.paths)
+        let plan = try await StorageCleanup.plan(store: fixture.store)
         #expect(Set(plan.items.map(\.url.standardizedFileURL.path)) == Set(unused.map(\.standardizedFileURL.path)))
         #expect(used.allSatisfy { !plan.items.map(\.url.path).contains($0.path) })
         #expect(plan.keptCurrent.map(\.url.lastPathComponent) == [DXVKInstallation.componentID])
@@ -162,7 +162,7 @@ struct StorageCleanupTests {
         #expect(plan.items.allSatisfy { !$0.isCurrent && !$0.reason.isEmpty })
         #expect(plan.totalSize == plan.items.reduce(0) { $0 + $1.size })
         #expect(plan.items.first { $0.category == .runtime }!.size > 0)
-        let included = try await StorageCleanup.plan(paths: fixture.paths, includeCurrent: true)
+        let included = try await StorageCleanup.plan(store: fixture.store, includeCurrent: true)
         #expect(included.keptCurrent.isEmpty)
         #expect(Set(included.items.map(\.id)) == Set((plan.items + plan.keptCurrent).map(\.id)))
     }
@@ -171,10 +171,10 @@ struct StorageCleanupTests {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let (used, unused, bottles) = try await populate(fixture)
-        let plan = try await StorageCleanup.plan(paths: fixture.paths)
+        let plan = try await StorageCleanup.plan(store: fixture.store)
         let unconfirmed = try #require(plan.items.first { $0.category == .component })
         let confirmed = plan.items.filter { $0.id != unconfirmed.id }
-        let result = try await StorageCleanup.apply(confirmed, paths: fixture.paths)
+        let result = try await StorageCleanup.apply(confirmed, store: fixture.store)
         #expect(Set(result.removed.map(\.id)) == Set(confirmed.map(\.id)))
         #expect(result.skipped.isEmpty)
         #expect(result.reclaimedSize == confirmed.reduce(0) { $0 + $1.size })
@@ -188,10 +188,10 @@ struct StorageCleanupTests {
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: fixture.paths.componentsDirectory.path)
         #expect(!leftovers.contains { $0.hasPrefix(".cleanup-") })
 
-        let again = try await StorageCleanup.apply(confirmed, paths: fixture.paths)
+        let again = try await StorageCleanup.apply(confirmed, store: fixture.store)
         #expect(again.removed.isEmpty)
         #expect(Set(again.skipped.map(\.id)) == Set(confirmed.map(\.id)))
-        #expect(try await StorageCleanup.plan(paths: fixture.paths).items.map(\.id) == [unconfirmed.id])
+        #expect(try await StorageCleanup.plan(store: fixture.store).items.map(\.id) == [unconfirmed.id])
     }
 
     @Test(arguments: [GraphicsOperationLease.Kind.launch, .lifetime])
@@ -199,16 +199,16 @@ struct StorageCleanupTests {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let (_, unused, bottles) = try await populate(fixture)
-        let plan = try await StorageCleanup.plan(paths: fixture.paths)
+        let plan = try await StorageCleanup.plan(store: fixture.store)
         // Even a bottle pinned to a missing runtime blocks cleanup while it is busy.
         for bottle in [bottles[0], bottles[2]] {
             let lease = try await GraphicsOperationLease.acquire(paths: fixture.paths, bottleID: bottle.id, kind: kind, exclusive: false)
-            await #expect(throws: MagicWineError.self) { try await StorageCleanup.apply(plan.items, paths: fixture.paths) }
+            await #expect(throws: MagicWineError.self) { try await StorageCleanup.apply(plan.items, store: fixture.store) }
             lease.release()
         }
         for url in unused { #expect(fixture.exists(url)) }
         // The refused attempt released every lease it took.
-        #expect(try await StorageCleanup.apply(plan.items, paths: fixture.paths).removed.count == plan.items.count)
+        #expect(try await StorageCleanup.apply(plan.items, store: fixture.store).removed.count == plan.items.count)
     }
 
     @Test func applyRefusesWhileAWineServerRuns() async throws {
@@ -217,11 +217,11 @@ struct StorageCleanupTests {
         let (_, unused, bottles) = try await populate(fixture)
         let marker = fixture.store.prefixURL(for: bottles[1]).appendingPathComponent("external-server")
         try Data().write(to: marker)
-        let plan = try await StorageCleanup.plan(paths: fixture.paths)
-        await #expect(throws: MagicWineError.self) { try await StorageCleanup.apply(plan.items, paths: fixture.paths) }
+        let plan = try await StorageCleanup.plan(store: fixture.store)
+        await #expect(throws: MagicWineError.self) { try await StorageCleanup.apply(plan.items, store: fixture.store) }
         for url in unused { #expect(fixture.exists(url)) }
         try FileManager.default.removeItem(at: marker)
-        #expect(try await StorageCleanup.apply(plan.items, paths: fixture.paths).removed.count == plan.items.count)
+        #expect(try await StorageCleanup.apply(plan.items, store: fixture.store).removed.count == plan.items.count)
     }
 
     @Test func viewsAreKeptWhenALaunchIdentityCannotBeComputed() async throws {
@@ -237,7 +237,7 @@ struct StorageCleanupTests {
         let unreadable = fixture.paths.runtimesDirectory.appendingPathComponent(".graphics-views/" + String(repeating: "0", count: 64))
         try FileManager.default.createDirectory(at: unreadable, withIntermediateDirectories: true)
         func planned() async throws -> Set<String> {
-            Set(try await StorageCleanup.plan(paths: fixture.paths).items.filter { $0.category == .runtimeView }.map(\.url.lastPathComponent))
+            Set(try await StorageCleanup.plan(store: fixture.store).items.filter { $0.category == .runtimeView }.map(\.url.lastPathComponent))
         }
         // An empty native module makes view planning fail for this bottle's inputs.
         try Data().write(to: ntdll)
@@ -259,14 +259,14 @@ struct StorageCleanupTests {
         _ = try await fixture.bottle("Current", revision: 7, componentID: DXMTInstallation.componentID)
         let oldView = try fixture.view(7, component: retained)
         #expect(oldView != (try fixture.view(7, component: DXMTInstallation.componentID)))
-        #expect(try await StorageCleanup.plan(paths: fixture.paths).items.isEmpty)
+        #expect(try await StorageCleanup.plan(store: fixture.store).items.isEmpty)
 
         // After the bottle moves to the current component, only the old one and its view are unused.
         let metadata = fixture.paths.bottlesDirectory.appendingPathComponent(pinned.id.uuidString).appendingPathComponent("bottle.json")
         var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: metadata)) as? [String: Any])
         json["graphics"] = ["backend": "dxmt", "componentID": DXMTInstallation.componentID, "showHUD": false]
         try JSONSerialization.data(withJSONObject: json).write(to: metadata)
-        let plan = try await StorageCleanup.plan(paths: fixture.paths)
+        let plan = try await StorageCleanup.plan(store: fixture.store)
         #expect(Set(plan.items.map(\.url.standardizedFileURL.path)) ==
                 Set([oldComponent, oldView].map(\.standardizedFileURL.path)))
         #expect(plan.items.allSatisfy { !$0.isCurrent } && plan.keptCurrent.isEmpty)
@@ -287,7 +287,7 @@ struct StorageCleanupTests {
         let lock = paths.bottlesDirectory.appendingPathComponent(".graphics-locks/\(deleted).lock")
         try FileManager.default.createDirectory(at: lock.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: lock, withDestinationURL: outsideFile)
-        let plan = try await StorageCleanup.plan(paths: paths)
+        let plan = try await StorageCleanup.plan(store: fixture.store)
         #expect(Set(plan.items.map(\.url.lastPathComponent)) == [oldDXVK, swapped.lastPathComponent])
         // Replace a planned directory with a link before applying.
         try FileManager.default.removeItem(at: swapped)
@@ -297,7 +297,7 @@ struct StorageCleanupTests {
         let forged = StorageCleanupItem(category: .runtime, url: paths.bottlesDirectory.appendingPathComponent(bottle.id.uuidString),
                                         size: 0, reason: "", requiresReimport: false, isCurrent: false,
                                         parent: ["Bottles"], name: bottle.id.uuidString)
-        let result = try await StorageCleanup.apply(plan.items + [forged], paths: paths)
+        let result = try await StorageCleanup.apply(plan.items + [forged], store: fixture.store)
         #expect(result.removed.map(\.url.lastPathComponent) == [oldDXVK])
         #expect(Set(result.skipped.map(\.url.lastPathComponent)) == [swapped.lastPathComponent, bottle.id.uuidString])
         #expect(try Data(contentsOf: outsideFile) == Data("keep".utf8))
@@ -309,10 +309,10 @@ struct StorageCleanupTests {
         let views = paths.runtimesDirectory.appendingPathComponent(".graphics-views")
         try FileManager.default.createSymbolicLink(at: views, withDestinationURL: fixture.outside)
         try fixture.write(Data(), to: fixture.outside.appendingPathComponent(String(repeating: "1", count: 64) + "/installation.json"))
-        #expect(try await StorageCleanup.plan(paths: paths).items.isEmpty)
+        #expect(try await StorageCleanup.plan(store: fixture.store).items.isEmpty)
         try FileManager.default.removeItem(at: paths.componentsDirectory)
         try FileManager.default.createSymbolicLink(at: paths.componentsDirectory, withDestinationURL: fixture.outside)
-        await #expect(throws: MagicWineError.self) { try await StorageCleanup.plan(paths: paths) }
+        await #expect(throws: MagicWineError.self) { try await StorageCleanup.plan(store: fixture.store) }
         #expect(try Data(contentsOf: outsideFile) == Data("keep".utf8))
     }
 }

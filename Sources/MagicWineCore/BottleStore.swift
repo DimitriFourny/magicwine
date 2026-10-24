@@ -2,7 +2,7 @@ import Foundation
 
 /// Each bottle is independently persisted; names never become filesystem paths.
 public actor BottleStore {
-    private let paths: ApplicationPaths
+    public nonisolated let paths: ApplicationPaths
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 

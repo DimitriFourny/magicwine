@@ -11,15 +11,15 @@ final class StorageCleanupModel {
     private(set) var error: String?
     private(set) var includesCurrent = false
 
-    @ObservationIgnored private let paths: ApplicationPaths
+    @ObservationIgnored private let store: BottleStore
     @ObservationIgnored private let library: LibraryModel
     @ObservationIgnored private let runtimes: RuntimeModel
     @ObservationIgnored private let bottleActivity: BottleActivityModel
     @ObservationIgnored private let notices: NoticeModel
 
-    init(paths: ApplicationPaths, library: LibraryModel, runtimes: RuntimeModel, activity: BottleActivityModel,
+    init(store: BottleStore, library: LibraryModel, runtimes: RuntimeModel, activity: BottleActivityModel,
          notices: NoticeModel) {
-        self.paths = paths
+        self.store = store
         self.library = library
         self.runtimes = runtimes
         bottleActivity = activity
@@ -51,11 +51,10 @@ final class StorageCleanupModel {
         // Keeps Wine installation and bottle creation from racing the removal.
         runtimes.reserve("Removing unused files…")
         error = nil
-        let paths = paths
         Task {
             var removedRuntime = false
             do {
-                let result = try await StorageCleanup.apply(items, paths: paths)
+                let result = try await StorageCleanup.apply(items, store: store)
                 removedRuntime = result.removed.contains { $0.category == .runtime }
                 let size = ByteCountFormatter.string(fromByteCount: result.reclaimedSize, countStyle: .file)
                 notices.post(AppNotice(title: "Unused Files Removed", message: "Removed \(result.removed.count) of \(items.count) items (\(size))."
@@ -72,7 +71,7 @@ final class StorageCleanupModel {
 
     private func loadPlan() async {
         do {
-            plan = try await StorageCleanup.plan(paths: paths, includeCurrent: includesCurrent)
+            plan = try await StorageCleanup.plan(store: store, includeCurrent: includesCurrent)
         } catch {
             plan = nil
             if self.error == nil { self.error = error.localizedDescription }

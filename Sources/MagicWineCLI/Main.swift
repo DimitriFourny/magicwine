@@ -270,7 +270,7 @@ struct MagicWineCLI {
             guard flags.count == values.count, flags.isSubset(of: ["--apply", "--include-current"]) else {
                 throw argumentError("cleanup [--apply] [--include-current]")
             }
-            let plan = try await StorageCleanup.plan(paths: paths, includeCurrent: flags.contains("--include-current"))
+            let plan = try await StorageCleanup.plan(store: store, includeCurrent: flags.contains("--include-current"))
             for category in StorageCleanupItem.Category.allCases {
                 let items = plan.items.filter { $0.category == category }
                 guard !items.isEmpty else { continue }
@@ -284,7 +284,7 @@ struct MagicWineCLI {
                 print("Total: \(plan.items.count) items, \(byteCount(plan.totalSize)). Dry run; run cleanup --apply to remove them.")
                 return
             }
-            let result = try await StorageCleanup.apply(plan.items, paths: paths)
+            let result = try await StorageCleanup.apply(plan.items, store: store)
             for item in result.removed { print("Removed\t\(item.url.path)") }
             for item in result.skipped { print("Skipped (no longer removable)\t\(item.url.path)") }
             print("Removed \(result.removed.count) items, \(byteCount(result.reclaimedSize)).")

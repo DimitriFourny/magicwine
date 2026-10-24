@@ -60,7 +60,7 @@ final class AppModel {
         self.activity = activity
         self.runtimes = runtimes
         bottleSettings = BottleSettingsModel(wine: wine, store: store, library: library, activity: activity, runtimes: runtimes)
-        storage = StorageCleanupModel(paths: paths, library: library, runtimes: runtimes, activity: activity, notices: notices)
+        storage = StorageCleanupModel(store: store, library: library, runtimes: runtimes, activity: activity, notices: notices)
         dependencies = DependenciesModel(wine: wine, library: library, activity: activity)
     }
 

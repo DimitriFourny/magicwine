@@ -80,23 +80,54 @@ public actor WineRuntime {
                 }
             }
         }
+        return await discover(candidates: candidates)
+    }
+
+    /// Inspections run at most this many `wine --version` processes at once.
+    static let discoveryConcurrency = 4
+
+    /// Inspects each distinct executable candidate, reusing unchanged cached results and
+    /// running the others concurrently; candidates that fail inspection are left out.
+    internal func discover(candidates: [URL]) async -> [RuntimeDescriptor] {
+        let manager = FileManager.default
         var seen: Set<String> = []
-        var result: [RuntimeDescriptor] = []
+        var pending: [URL] = []
         for candidate in candidates {
-            if Task.isCancelled { break }
             let canonical = candidate.resolvingSymlinksInPath().standardizedFileURL
             // A Homebrew symlink must not silently adopt a reference manager's Wine.
             guard !isReferenceRuntime(canonical), manager.isExecutableFile(atPath: canonical.path),
                   seen.insert(canonical.path).inserted else { continue }
-            if let runtime = try? await inspect(executableURL: canonical) { result.append(runtime) }
+            pending.append(canonical)
+        }
+        var result: [RuntimeDescriptor] = []
+        await withTaskGroup(of: RuntimeDescriptor?.self) { group in
+            var next = pending.makeIterator()
+            func startNext() -> Bool {
+                guard !Task.isCancelled, let executable = next.next() else { return false }
+                group.addTask { try? await self.inspect(executableURL: executable, reusingCachedResult: true) }
+                return true
+            }
+            for _ in 0..<Self.discoveryConcurrency where !startNext() { break }
+            for await runtime in group {
+                if let runtime { result.append(runtime) }
+                _ = startNext()
+            }
         }
         return result.sorted { $0.executableURL.path < $1.executableURL.path }
     }
 
-    public func inspect(executableURL: URL) async throws -> RuntimeDescriptor {
+    /// Runs `executableURL --version`. With `reusingCachedResult`, a successful earlier
+    /// inspection of the same unchanged file (`RuntimeInspectionCache`) is returned without
+    /// running it; the executable is still validated. Every successful run is cached.
+    public func inspect(executableURL: URL, reusingCachedResult: Bool = false) async throws -> RuntimeDescriptor {
         try paths.prepare()
         let executable = executableURL.resolvingSymlinksInPath().standardizedFileURL
         try validateExecutable(executable)
+        let stamp = RuntimeInspectionCache.stamp(of: executable)
+        if reusingCachedResult, let stamp,
+           let version = RuntimeInspectionCache(paths: paths).version(of: executable, stamp: stamp) {
+            return RuntimeDescriptor(executableURL: executable, version: version)
+        }
         let operation = ProcessOperation(executable: executable, arguments: ["--version"],
             environment: environment(executable: executable, prefix: nil), directory: nil,
             output: .probe(directory: ProcessLogs.libraryDirectory(paths: paths), operation: "wine-version", detail: nil),
@@ -109,10 +140,12 @@ public actor WineRuntime {
         guard let version = String(decoding: output, as: UTF8.self).components(separatedBy: .newlines)
                 .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
                 .first(where: { $0.lowercased().hasPrefix("wine-") || $0.lowercased().hasPrefix("wine ") }),
-              version.count <= 256 else {
+              RuntimeInspectionCache.isVersion(version) else {
             let log = try operation.recordProbeLog(note: "No Wine version was reported.")
             throw MagicWineError.runtimeUnavailable("The selected executable did not report a Wine version.", logURL: log)
         }
+        // The file identity from before the run: a file replaced meanwhile is inspected again.
+        if let stamp { RuntimeInspectionCache.record(version, for: executable, stamp: stamp, paths: paths) }
         return RuntimeDescriptor(executableURL: executable, version: version)
     }
 

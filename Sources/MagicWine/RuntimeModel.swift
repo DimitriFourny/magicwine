@@ -50,7 +50,8 @@ final class RuntimeModel {
         var found = await wine.discover()
         if let path = settings.customWinePath {
             do {
-                let custom = try await wine.inspect(executableURL: URL(fileURLWithPath: path))
+                // Inspected again only when the saved executable changed since it last ran.
+                let custom = try await wine.inspect(executableURL: URL(fileURLWithPath: path), reusingCachedResult: true)
                 if !found.contains(where: { $0.id == custom.id }) { found.append(custom) }
             } catch {
                 self.error = "The saved Wine executable could not be opened. \(error.localizedDescription)"
