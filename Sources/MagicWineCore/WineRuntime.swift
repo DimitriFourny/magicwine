@@ -102,18 +102,20 @@ public actor WineRuntime {
         try paths.prepare()
         let executable = executableURL.resolvingSymlinksInPath().standardizedFileURL
         try validateExecutable(executable)
-        let log = logURL(name: "wine-version")
         let operation = ProcessOperation(executable: executable, arguments: ["--version"],
-            environment: environment(executable: executable, prefix: nil), directory: nil, logURL: log, timeout: 15)
-        do { _ = try await operation.run() }
+            environment: environment(executable: executable, prefix: nil), directory: nil,
+            output: .probe(directory: ProcessLogs.libraryDirectory(paths: paths), operation: "wine-version", detail: nil),
+            timeout: 15)
+        let output: Data
+        do { output = try await operation.probe().output }
         catch ProcessOperation.Interrupted.timedOut(let log) {
             throw MagicWineError.runtimeUnavailable("Wine version inspection timed out for \(executable.path). If macOS is blocking a custom Wine installation, review System Settings > Privacy & Security. For managed Wine, run Install / Update Wine again and accept the unsigned-runtime confirmation. Log: \(log.path)")
         }
-        let text = try RuntimeInstallation.boundedLog(log)
-        guard let version = text.components(separatedBy: .newlines).dropFirst(2)
+        guard let version = String(decoding: output, as: UTF8.self).components(separatedBy: .newlines)
                 .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
                 .first(where: { $0.lowercased().hasPrefix("wine-") || $0.lowercased().hasPrefix("wine ") }),
               version.count <= 256 else {
+            let log = try operation.recordProbeLog(note: "No Wine version was reported.")
             throw MagicWineError.runtimeUnavailable("The selected executable did not report a Wine version. Log: \(log.path)")
         }
         return RuntimeDescriptor(executableURL: executable, version: version)
@@ -137,14 +139,13 @@ public actor WineRuntime {
     public func initialize(_ bottle: Bottle) async throws -> BottleInitialization {
         let deadline = Date().addingTimeInterval(180)
         let result = try await execute(arguments: ["wineboot", "-u"], bottle: bottle,
-                                       directory: nil, timeout: 180)
+                                       directory: nil, timeout: 180, log: LogName("setup"))
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0 else {
             await cleanup(bottle)
             throw MagicWineError.setup("Bottle setup timed out. Log: \(result.logURL.path)")
         }
-        _ = try await execute(arguments: ["-w"], bottle: bottle, directory: nil,
-                              timeout: remaining, server: true)
+        try await serverCommand("-w", in: bottle, timeout: remaining)
         let prefix = try prefixURL(for: bottle)
         guard FileManager.default.fileExists(atPath: prefix.appendingPathComponent("system.reg").path),
               FileManager.default.fileExists(atPath: prefix.appendingPathComponent("user.reg").path) else {
@@ -161,7 +162,8 @@ public actor WineRuntime {
         let arguments = installer.pathExtension.lowercased() == "msi"
             ? ["msiexec", "/i", installer.path] : [installer.path]
         return try await execute(arguments: arguments, bottle: bottle,
-                                 directory: installer.deletingLastPathComponent(), timeout: nil)
+                                 directory: installer.deletingLastPathComponent(), timeout: nil,
+                                 log: LogName("install", installer.lastPathComponent))
     }
 
     /// `onStart` runs once the program's process has started (for LNK/URL, once
@@ -191,27 +193,27 @@ public actor WineRuntime {
         if isShortcut {
             // ShellExecute launches shortcuts asynchronously. Observe the prefix's
             // server lifetime instead of start /wait's unreliable shortcut handle.
-            _ = try await execute(arguments: ["-w"], bottle: bottle, directory: nil,
-                                  timeout: nil, server: true)
+            // A Stop while waiting reports the launch's own log.
+            try await serverCommand("-w", in: bottle, timeout: nil, tracked: true, stoppedLog: result.logURL)
         }
         return result
     }
 
     public func configure(_ bottle: Bottle) async throws -> OperationResult {
-        try await execute(arguments: ["winecfg"], bottle: bottle, directory: nil, timeout: nil)
+        try await execute(arguments: ["winecfg"], bottle: bottle, directory: nil, timeout: nil, log: LogName("winecfg"))
     }
 
-    public func stop(_ bottle: Bottle) async throws -> OperationResult {
+    /// Server probes keep no log unless they fail, so a successful Stop returns none.
+    public func stop(_ bottle: Bottle) async throws {
         interruptOperations(in: bottle)
         try paths.prepare()
         let launch = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
                                                               kind: .launch, exclusive: true)
         defer { launch.release() }
-        let result = try await stopProcesses(bottle)
+        try await stopProcesses(bottle)
         let lifetime = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
                                                                 kind: .lifetime, exclusive: true, timeout: .seconds(15))
         lifetime.release()
-        return result
     }
 
     private func interruptOperations(in bottle: Bottle) {
@@ -223,25 +225,18 @@ public actor WineRuntime {
         }
     }
 
-    private func stopProcesses(_ bottle: Bottle) async throws -> OperationResult {
+    private func stopProcesses(_ bottle: Bottle) async throws {
         interruptOperations(in: bottle)
-        let result: OperationResult
-        do {
-            result = try await execute(arguments: ["-k"], bottle: bottle, directory: nil,
-                                       timeout: 15, server: true, tracked: false)
-        } catch MagicWineError.processFailed(let code, let log) where code == 1 {
-            // Wine returns 1 when no server holds the prefix lock. Verify the stopped
-            // postcondition below rather than treating every status 1 as success.
-            result = OperationResult(exitCode: code, logURL: log)
-        }
-        _ = try await execute(arguments: ["-w"], bottle: bottle, directory: nil,
-                              timeout: 15, server: true, tracked: false)
-        return result
+        // Wine returns 1 when no server holds the prefix lock. Verify the stopped
+        // postcondition below rather than treating every status 1 as success.
+        try await serverCommand("-k", in: bottle, timeout: 15, tolerating: 1)
+        try await serverCommand("-w", in: bottle, timeout: 15)
     }
 
     public func run(arguments: [String], in bottle: Bottle, timeout: TimeInterval? = nil,
                     onStart: (@Sendable (LaunchStart) -> Void)? = nil) async throws -> OperationResult {
-        try await execute(arguments: arguments, bottle: bottle, directory: nil, timeout: timeout, onStart: onStart)
+        try await execute(arguments: arguments, bottle: bottle, directory: nil, timeout: timeout, onStart: onStart,
+                          log: LogName("exec", arguments.first.map { URL(fileURLWithPath: $0).lastPathComponent }))
     }
 
     public func configureSynchronization(msyncEnabled: Bool, in bottle: Bottle) async throws -> Bottle {
@@ -296,8 +291,7 @@ public actor WineRuntime {
                 let current = try await store.current(bottle)
                 // A detached Windows child may outlive our process lease. Waiting briefly
                 // observes the real server without killing it or changing its backend.
-                _ = try await execute(arguments: ["-w"], bottle: current, directory: nil,
-                                      timeout: 0.5, server: true, tracked: false, idleProbe: true)
+                try await serverCommand("-w", in: current, timeout: 0.5, idleProbe: true)
                 return (current, launch, lifetime)
             } catch {
                 lifetime.release()
@@ -487,17 +481,26 @@ public actor WineRuntime {
         return try await store.setGraphicsHUD(showHUD, in: bottle)
     }
 
+    /// Names a Windows process's log: an operation such as `launch`, plus its program.
+    struct LogName {
+        let operation: String
+        let detail: String?
+        init(_ operation: String, _ detail: String? = nil) {
+            self.operation = operation
+            self.detail = detail
+        }
+    }
+
     private func execute(arguments: [String], bottle: Bottle, directory: URL?, timeout: TimeInterval?,
-                         server: Bool = false, tracked: Bool = true, idleProbe: Bool = false,
                          onStart: (@Sendable (LaunchStart) -> Void)? = nil,
                          exitStatusIsResult: Bool = false, program: WindowsProgram? = nil,
-                         diagnostics: Bool = false) async throws -> OperationResult {
-        guard server || !settingsChanging.contains(bottle.id) else {
+                         diagnostics: Bool = false, log logName: LogName? = nil) async throws -> OperationResult {
+        guard !settingsChanging.contains(bottle.id) else {
             throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
         }
         try paths.prepare()
         let handoffID = UUID()
-        let launchTask: Task<GraphicsOperationLease, Error>? = server ? nil : Task {
+        let launchTask: Task<GraphicsOperationLease, Error>? = Task {
             try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id, kind: .launch, exclusive: true)
         }
         if let launchTask { pendingLaunches[bottle.id, default: [:]][handoffID] = launchTask }
@@ -520,16 +523,15 @@ public actor WineRuntime {
         let current = try await store.current(bottle)
         try Task.checkCancellation()
         if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
-        guard server || !settingsChanging.contains(bottle.id) else {
+        guard !settingsChanging.contains(bottle.id) else {
             throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
         }
         let prefix = try prefixURL(for: current)
         // The descriptor is pinned, never fall back to whichever Wine is in PATH today.
         let wine = current.runtime.executableURL.standardizedFileURL
         try validateExecutable(wine)
-        let executable = server ? wine.deletingLastPathComponent().appendingPathComponent("wineserver") : wine
-        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-            throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(executable.path). Select an intact Wine distribution; this bottle was not migrated.")
+        guard FileManager.default.isExecutableFile(atPath: wine.path) else {
+            throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(wine.path). Select an intact Wine distribution; this bottle was not migrated.")
         }
         // Options come from the saved record; hand-edited metadata is validated again.
         let savedProgram = try program.map { requested in
@@ -540,20 +542,19 @@ public actor WineRuntime {
             _ = try saved.launchDirectory()
             return saved
         }
-        if !server, current.isInitialized, (try? PrefixBoot.hasPendingRenames(prefix: prefix)) ?? true {
+        if current.isInitialized, (try? PrefixBoot.hasPendingRenames(prefix: prefix)) ?? true {
             try await bootIfIdle(current, prefix: prefix)
             try Task.checkCancellation()
             if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
         }
-        if !server, try await store.displayNeedsUpdate(current) {
+        if try await store.displayNeedsUpdate(current) {
             // Never rewrite a live wineserver's registry or terminate a game merely
             // to adopt the new default. Explicit setting changes use Stop above.
             do {
                 let displayLifetime = try await GraphicsOperationLease.acquire(
                     paths: paths, bottleID: bottle.id, kind: .lifetime, exclusive: true, timeout: .seconds(1))
                 defer { displayLifetime.release() }
-                _ = try await execute(arguments: ["-w"], bottle: current, directory: nil,
-                                      timeout: 15, server: true, tracked: false)
+                try await serverCommand("-w", in: current, timeout: 15)
                 try Task.checkCancellation()
                 if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
                 _ = try await store.prepareDisplay(current)
@@ -563,16 +564,14 @@ public actor WineRuntime {
                 throw MagicWineError.setup("Could not apply this bottle's Retina / HiDPI settings. Close its Windows programs or use Stop, then retry. \(error.localizedDescription)")
             }
         }
-        let lifetime = server ? nil : try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
-                                                                               kind: .lifetime, exclusive: false)
-        defer { lifetime?.release() }
-        if !server {
-            try GraphicsPrefix.withLock(bottleDirectory: prefix.deletingLastPathComponent()) {
-                try BottleDesktop.prepare(prefix: prefix)
-            }
+        let lifetime = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                                kind: .lifetime, exclusive: false)
+        defer { lifetime.release() }
+        try GraphicsPrefix.withLock(bottleDirectory: prefix.deletingLastPathComponent()) {
+            try BottleDesktop.prepare(prefix: prefix)
         }
         var integrations: LaunchIntegrations?
-        if !server, current.isInitialized {
+        if current.isInitialized {
             let gamepad: Result<[String: String], any Error>
             do { gamepad = .success(try await GamepadService.shared.prepare(paths: paths)) }
             catch { gamepad = .failure(error) }
@@ -592,18 +591,67 @@ public actor WineRuntime {
                 }
             })
         }
-        let graphics = !server && current.graphics.backend != .standard
+        let graphics = current.graphics.backend != .standard
             ? try prepareGraphicsLaunch(for: current, prefix: prefix) : nil
         let plan = LaunchPlanner.plan(LaunchRequest(
             inherited: ProcessInfo.processInfo.environment, runtime: runtimeFacts(for: wine),
-            executable: executable, arguments: arguments, directory: directory ?? prefix, prefix: prefix,
+            executable: wine, arguments: arguments, directory: directory ?? prefix, prefix: prefix,
             msyncEnabled: current.msyncEnabled, integrations: integrations, graphics: graphics,
-            compatibility: server ? nil : current.compatibility, program: savedProgram, diagnostics: diagnostics))
+            compatibility: current.compatibility, program: savedProgram, diagnostics: diagnostics))
         let id = UUID()
-        let log = logURL(name: "\(bottle.id.uuidString)-\(server ? "wineserver" : "wine")")
+        let name = logName ?? savedProgram.map { LogName(diagnostics ? "diagnostics" : "launch", $0.name) } ?? LogName("exec")
+        let log = try ProcessLogFile.create(in: ProcessLogs.bottleDirectory(bottle.id, paths: paths),
+                                            operation: name.operation, detail: name.detail)
         let operation = ProcessOperation(executable: plan.executable, arguments: plan.arguments,
             environment: plan.environment, directory: plan.directory,
-            logURL: log, timeout: timeout, warnings: plan.warnings, exitStatusIsResult: exitStatusIsResult)
+            output: .log(log), timeout: timeout, warnings: plan.warnings, exitStatusIsResult: exitStatusIsResult)
+        active[bottle.id, default: [:]][id] = operation
+        defer {
+            active[bottle.id]?[id] = nil
+            if active[bottle.id]?.isEmpty == true { active[bottle.id] = nil }
+        }
+        let started = LaunchStart(logURL: log.url, warnings: plan.warnings)
+        do {
+            return try await operation.run(onStart: {
+                launch?.release()
+                onStart?(started)
+            })
+        } catch is CancellationError {
+            await cleanup(bottle)
+            throw CancellationError()
+        } catch ProcessOperation.Interrupted.timedOut(let log) {
+            await cleanup(bottle)
+            throw MagicWineError.setup("Wine operation timed out. Log: \(log.path)")
+        }
+    }
+
+    /// Runs the bottle's pinned `wineserver` with `-k` or `-w`. Server commands bypass
+    /// launch preparation and leases so Stop and idle checks work while a mutation holds
+    /// the launch lease, and they use only the base environment layer. Their output stays
+    /// in memory and becomes a bottle log only when they fail, time out, or are stopped.
+    private func serverCommand(_ argument: String, in bottle: Bottle, timeout: TimeInterval?,
+                               tracked: Bool = false, idleProbe: Bool = false, tolerating tolerated: Int32? = nil,
+                               stoppedLog: URL? = nil) async throws {
+        try paths.prepare()
+        let current = try await store.current(bottle)
+        let prefix = try prefixURL(for: current)
+        // The descriptor is pinned, never fall back to whichever Wine is in PATH today.
+        let wine = current.runtime.executableURL.standardizedFileURL
+        try validateExecutable(wine)
+        let server = wine.deletingLastPathComponent().appendingPathComponent("wineserver")
+        guard FileManager.default.isExecutableFile(atPath: server.path) else {
+            throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(server.path). Select an intact Wine distribution; this bottle was not migrated.")
+        }
+        let plan = LaunchPlanner.plan(LaunchRequest(
+            inherited: ProcessInfo.processInfo.environment, runtime: runtimeFacts(for: wine),
+            executable: server, arguments: [argument], directory: prefix, prefix: prefix,
+            msyncEnabled: current.msyncEnabled))
+        let id = UUID()
+        let operation = ProcessOperation(executable: plan.executable, arguments: plan.arguments,
+            environment: plan.environment, directory: plan.directory,
+            output: .probe(directory: ProcessLogs.bottleDirectory(bottle.id, paths: paths), operation: "wineserver",
+                           detail: argument, stoppedLog: stoppedLog),
+            timeout: timeout, exitStatusIsResult: true)
         if tracked { active[bottle.id, default: [:]][id] = operation }
         defer {
             if tracked {
@@ -611,12 +659,9 @@ public actor WineRuntime {
                 if active[bottle.id]?.isEmpty == true { active[bottle.id] = nil }
             }
         }
-        let started = LaunchStart(logURL: log, warnings: plan.warnings)
+        let status: Int32
         do {
-            return try await operation.run(onStart: {
-                launch?.release()
-                onStart?(started)
-            })
+            status = try await operation.probe().status
         } catch is CancellationError {
             if tracked { await cleanup(bottle) }
             throw CancellationError()
@@ -626,6 +671,9 @@ public actor WineRuntime {
                 throw MagicWineError.setup("This bottle's Wine server is still running. Close its Windows programs or use Stop before changing synchronization or Wine. Log: \(log.path)")
             }
             throw MagicWineError.setup("Wine operation timed out. Log: \(log.path)")
+        }
+        guard status == 0 || status == tolerated else {
+            throw MagicWineError.processFailed(exitCode: status, logURL: try operation.recordProbeLog(note: "Exited with status \(status)."))
         }
     }
 
@@ -678,8 +726,7 @@ public actor WineRuntime {
         defer { lifetime.release() }
         do {
             // A server lingering after its last program exits is still a live session.
-            _ = try await execute(arguments: ["-w"], bottle: bottle, directory: nil,
-                                  timeout: 15, server: true, tracked: false)
+            try await serverCommand("-w", in: bottle, timeout: 15)
         } catch let error where !Self.isInterruption(error) {
             return
         }
@@ -705,9 +752,12 @@ public actor WineRuntime {
             inherited: ProcessInfo.processInfo.environment, runtime: runtimeFacts(for: wine),
             executable: wine, arguments: ["wineboot", "--init"], directory: prefix, prefix: prefix,
             msyncEnabled: bottle.msyncEnabled))
+        // A probe: its output becomes a bottle log only if the boot fails or times out.
         let operation = ProcessOperation(executable: plan.executable, arguments: plan.arguments,
             environment: plan.environment, directory: plan.directory,
-            logURL: logURL(name: "\(bottle.id.uuidString)-wine"), timeout: remaining)
+            output: .probe(directory: ProcessLogs.bottleDirectory(bottle.id, paths: paths), operation: "wineboot",
+                           detail: "--init"),
+            timeout: remaining)
         let id = UUID()
         active[bottle.id, default: [:]][id] = operation
         defer {
@@ -715,7 +765,7 @@ public actor WineRuntime {
             if active[bottle.id]?.isEmpty == true { active[bottle.id] = nil }
         }
         do {
-            _ = try await operation.run()
+            _ = try await operation.probe()
         } catch is CancellationError {
             await cleanup(bottle)
             throw CancellationError()
@@ -723,21 +773,19 @@ public actor WineRuntime {
             await cleanup(bottle)
             throw MagicWineError.setup("Wine's pending prefix update timed out. Log: \(log.path)")
         }
-        _ = try await execute(arguments: ["-w"], bottle: bottle, directory: nil,
-                              timeout: max(deadline.timeIntervalSinceNow, 1), server: true)
+        try await serverCommand("-w", in: bottle, timeout: max(deadline.timeIntervalSinceNow, 1), tracked: true)
     }
 
     private func pendingStop(_ bottle: Bottle) throws -> MagicWineError {
-        let log = logURL(name: "\(bottle.id.uuidString)-not-started")
-        try Data("Stop requested before the Windows process started.\n".utf8).write(to: log, options: .atomic)
+        let log = try ProcessLogFile.record(Data("Stop requested before the Windows process started.\n".utf8),
+                                            in: ProcessLogs.bottleDirectory(bottle.id, paths: paths), operation: "stopped")
         return .stopped(logURL: log)
     }
 
     private func cleanup(_ bottle: Bottle) async {
         // Cleanup must run even when the initiating task was cancelled.
         let task = Task.detached { [self] in
-            _ = try? await self.execute(arguments: ["-k"], bottle: bottle, directory: nil,
-                                       timeout: 10, server: true, tracked: false)
+            try? await self.serverCommand("-k", in: bottle, timeout: 10, tolerating: 1)
         }
         await task.value
     }
@@ -820,7 +868,7 @@ public actor WineRuntime {
     private func graphicsDirectories(for bottle: Bottle, directory: URL, cache: String) throws -> GraphicsFolders {
         let backend = bottle.graphics.backend
         let cache = directory.appendingPathComponent(cache, isDirectory: true)
-        let logs = paths.logsDirectory.appendingPathComponent("\(bottle.id.uuidString)-\(backend.rawValue)", isDirectory: true)
+        let logs = ProcessLogs.bottleDirectory(bottle.id, paths: paths).appendingPathComponent(backend.rawValue, isDirectory: true)
         for folder in [cache, logs] {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let attributes = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
@@ -876,10 +924,6 @@ public actor WineRuntime {
         let path = url.path.lowercased()
         return path.contains("/crossover.app/") || path.contains("/whisky.app/") ||
                path.contains("/application support/com.isaacmarovitz.whisky/") || path.contains("/whisky/")
-    }
-
-    private func logURL(name: String) -> URL {
-        paths.logsDirectory.appendingPathComponent("\(name)-\(UUID().uuidString).log")
     }
 }
 

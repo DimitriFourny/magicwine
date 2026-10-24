@@ -86,6 +86,8 @@ final class AppModel: ObservableObject {
         guard !hasStarted else { return }
         hasStarted = true
         GamepadService.shared.start()
+        let paths = paths
+        Task.detached(priority: .utility) { ProcessLogs.prune(paths: paths) }
         do {
             settings = try await store.settings()
         } catch {
@@ -577,8 +579,7 @@ final class AppModel: ObservableObject {
         activities[bottle.id] = state
         Task {
             do {
-                let result = try await wine.stop(bottle)
-                recordLog(result.logURL, for: bottle.id)
+                try await wine.stop(bottle)
             } catch {
                 recordError(error, for: bottle.id)
             }

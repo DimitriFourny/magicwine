@@ -93,17 +93,23 @@ The native bottle's **Reveal Logs** action opens the library logs. For an isolat
 
 | Location under the data root | Evidence |
 | --- | --- |
-| `Logs/wine-install-<UUID>.log` | Download source/version/hash, driver preparation, publication/quarantine steps, install failure |
-| `Logs/wine-version-<UUID>.log` | Executed runtime and reported version |
-| `Logs/<bottle-UUID>-wine-<UUID>.log` | Command and combined Windows/Wine stdout/stderr |
-| `Logs/<bottle-UUID>-wineserver-<UUID>.log` | Prefix-scoped stop/wait operations |
-| `Logs/<bottle-UUID>-not-started-<UUID>.log` | A requested Stop prevented a pending process from starting |
-| `Logs/<bottle-UUID>-dxvk/`, `Logs/<bottle-UUID>-dxmt/` | Backend output where provided |
+| `Logs/Bottles/<bottle-UUID>/<date time> launch <program>.log` | Command, skipped-integration warnings, and combined Windows/Wine stdout/stderr of one launch (`diagnostics <program>` for a diagnostic launch) |
+| `Logs/Bottles/<bottle-UUID>/<date time> setup.log`, `install <installer>.log`, `winecfg.log`, `exec <command>.log` | Bottle setup, installers, Wine configuration, `exec` |
+| `Logs/Bottles/<bottle-UUID>/<date time> wineserver -k.log` (or `-w`) | Only a failed, timed-out, or stopped server probe (Stop, idle checks, cleanup); successful probes leave no file |
+| `Logs/Bottles/<bottle-UUID>/<date time> stopped.log` | A requested Stop prevented a pending process from starting |
+| `Logs/Bottles/<bottle-UUID>/dxvk/`, `…/dxmt/` | Backend output where provided |
+| `Logs/Library/<date time> wine-install.log`, `dxvk-install.log`, `<component>-archive-*.log` | Download source/version/hash, driver preparation, publication/quarantine steps, archive listings, install failure |
+| `Logs/Library/<date time> wine-version.log` | Only a failed version inspection: executed runtime and its output |
+| `Logs/*.log`, `Logs/<bottle-UUID>-dxvk/` | Flat logs from earlier MagicWine versions, left in place |
 | `Bottles/<UUID>/bottle.json` | Pinned runtime, saved launchers and their launch options, selected component, display/synchronization preferences |
 | `Bottles/<UUID>/graphics/` | Active originals, transaction/recovery state, and renderer caches |
 | `Bottles/<UUID>/runtime-compatibility/` | CPU/XInput original backups and matching source/notices |
 
 Process logs start with the command/arguments, followed by any `Warning:` lines for launch integrations that were skipped (controller bridge or Rosetta CPU repair); the complete environment is not logged. File modes restrict ordinary access but do not prevent secrets or personal paths appearing in application output. CLI errors use exit status 1 and print a diagnostic. `launch` and `exec` instead exit with the program's or Wine's own status, which is only the low 8 bits of the Windows exit code; a nonzero code from a game or launcher is not by itself a crash.
+
+Each process log holds at most 64 MiB of output. A program that writes more (a chatty game, a broad `WINEDEBUG`) keeps running, but its log ends with `[MagicWine: log truncated after 64 MiB of output; …]` and later output is discarded. The exit-code notice summary (`ProcessLogSummary`) reads the end of the file, so for a truncated log it shows the last `err:` lines *before* the cap, not the ones that led to the exit. Reproduce with a narrower `WINEDEBUG` if the interesting part is late.
+
+Retention keeps, in each bottle folder and in `Logs/Library/`, the newest 50 logs within a 256 MiB total; the newest log and any log still being written (by its detached writer, which can outlive the app or CLI while Windows programs run) are always kept. Older logs are deleted when the app or CLI starts and whenever a log is closed while the MagicWine process that started it still runs. Flat logs from earlier versions are pruned in place with the same policy, grouped per bottle. Backend subfolders (`dxvk/`, `dxmt/`) are not pruned; they are removed with the bottle. Copy a log elsewhere if you need to keep it.
 
 The presence of a backend log or cache directory does not prove the game reached a rendered frame. D3DMetal does not get the same dedicated backend log path from this implementation.
 
@@ -191,7 +197,7 @@ Do not delete `graphics/transaction`, original backups, or notices to bypass val
 
 Standard graphics can restore a valid original footprint even if the previously selected component is unavailable. Unknown user-replaced managed DLLs are preserved during supported switching/restoration. Invalid backups still fail closed. Missing/corrupt cached runtime installations are not automatically repaired in place.
 
-Removing a program only removes its launcher record. **Trash Bottle** moves the entire UUID-owned Windows environment to macOS Trash after Stop; external registered executables, shared runtimes, and separate library logs are not its deletion target. The CLI has no bottle-delete command. Avoid racing deletion against another frontend's launch.
+Removing a program only removes its launcher record. **Trash Bottle** moves the entire UUID-owned Windows environment to macOS Trash after Stop and permanently deletes that bottle's logs (copy any you still need first); external registered executables, shared runtimes, and library logs are not its deletion target. The CLI has no bottle-delete command. Avoid racing deletion against another frontend's launch.
 
 ## Reporting useful results
 

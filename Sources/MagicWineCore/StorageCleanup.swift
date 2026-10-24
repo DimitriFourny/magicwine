@@ -374,15 +374,15 @@ public enum StorageCleanup {
         var environment = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("WINE") && !$0.key.hasPrefix("DYLD_") }
         environment["WINEPREFIX"] = paths.bottlesDirectory.appendingPathComponent(bottle.id.uuidString, isDirectory: true)
             .appendingPathComponent("prefix", isDirectory: true).path
-        let log = paths.logsDirectory.appendingPathComponent("\(bottle.id.uuidString)-wineserver-\(UUID().uuidString).log")
+        // An idle probe records nothing worth keeping; a busy server leaves a bottle log.
         do {
-            _ = try await ProcessOperation(executable: server, arguments: ["-w"], environment: environment,
-                                           directory: nil, logURL: log, timeout: 0.5).run()
-        } catch ProcessOperation.Interrupted.timedOut {
+            _ = try await ProcessOperation(executable: server, arguments: ["-w"], environment: environment, directory: nil,
+                                           output: .probe(directory: ProcessLogs.bottleDirectory(bottle.id, paths: paths),
+                                                          operation: "wineserver", detail: "-w"),
+                                           timeout: 0.5).probe()
+        } catch ProcessOperation.Interrupted.timedOut(let log) {
             throw failure("The Wine server of “\(bottle.name)” is still running. Close its Windows programs or use Stop, then retry. Nothing was removed. Log: \(log.path)")
         }
-        // An idle probe records nothing worth keeping.
-        try? FileManager.default.removeItem(at: log)
     }
 
     private static let allowedParents: [StorageCleanupItem.Category: [[String]]] = [

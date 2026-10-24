@@ -1,8 +1,10 @@
 import Darwin
 import Foundation
 
-/// A short, bounded excerpt of a process log for status messages. Logs are never
-/// rotated and a long session can produce gigabytes, so only the tail is read.
+/// A short, bounded excerpt of a process log for status messages. A log can hold up to
+/// `ProcessLogs.outputLimit` of output, so only the tail is read. When a log was truncated
+/// at that limit, its tail is the output just before the truncation marker: errors the
+/// process printed after the limit were discarded and cannot appear here.
 public enum ProcessLogSummary {
     public static let tailBytes = 64 * 1_024
     static let lineLimit = 240

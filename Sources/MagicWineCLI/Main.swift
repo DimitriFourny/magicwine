@@ -23,6 +23,7 @@ struct MagicWineCLI {
         }
         if arguments.first == "--version" || arguments.first == "version" { print(versionDescription); return }
         let paths = ApplicationPaths(root: root)
+        ProcessLogs.prune(paths: paths)
         let store = BottleStore(paths: paths)
         let runtime = WineRuntime(paths: paths, store: store)
         guard let command = arguments.first else { print(usage); return }
@@ -90,7 +91,9 @@ struct MagicWineCLI {
                     }
                     exit(result.exitCode)
                 }
-            case "stop": print("Log: \(try await runtime.stop(bottle).logURL.path)")
+            case "stop":
+                try await runtime.stop(bottle)
+                print("Stopped.")
             case "configure": print("Log: \(try await runtime.configure(bottle).logURL.path)")
             case "synchronization":
                 guard rest.isEmpty || (rest.count == 1 && ["msync", "server"].contains(rest[0])) else {

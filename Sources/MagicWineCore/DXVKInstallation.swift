@@ -171,11 +171,11 @@ enum DXVKInstallation {
         }
         try paths.prepare()
         try validateManagedParents(paths)
-        let logURL = paths.logsDirectory.appendingPathComponent("dxvk-install-\(UUID().uuidString).log")
-        guard FileManager.default.createFile(atPath: logURL.path,
-              contents: Data((provenance + "\n").utf8), attributes: [.posixPermissions: 0o600]) else {
-            throw MagicWineError.setup("Cannot create DXVK installation log: \(logURL.path)")
-        }
+        // Held open for the whole install so retention never removes it meanwhile.
+        let log = try ProcessLogFile.create(in: ProcessLogs.libraryDirectory(paths: paths), operation: "dxvk-install")
+        defer { log.close() }
+        log.write(Data((provenance + "\n").utf8))
+        let logURL = log.url
         let stage = paths.componentsDirectory.appendingPathComponent(".install-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false,
                                                attributes: [.posixPermissions: 0o700])

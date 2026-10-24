@@ -93,6 +93,8 @@ public actor BottleStore {
             _ = try loadUnlocked(bottle, normalizePrograms: false)
             try FileManager.default.trashItem(at: directoryURL(for: bottle), resultingItemURL: nil)
         }
+        // Logs belong to the bottle, but a leftover log never undoes a completed Trash.
+        try? ProcessLogs.removeLogs(forBottle: bottle.id, paths: paths)
     }
 
     internal func current(_ bottle: Bottle) throws -> Bottle {

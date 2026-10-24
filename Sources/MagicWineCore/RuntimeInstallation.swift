@@ -13,11 +13,11 @@ struct RuntimeInstallation {
     static func install(paths: ApplicationPaths,
                         progress: (@Sendable (WineInstallationProgress) -> Void)? = nil) async throws -> URL {
         try paths.prepare()
-        let logURL = paths.logsDirectory.appendingPathComponent("wine-install-\(UUID().uuidString).log")
-        guard FileManager.default.createFile(atPath: logURL.path, contents: Data((notice + "\n").utf8),
-                                              attributes: [.posixPermissions: 0o600]) else {
-            throw MagicWineError.setup("Cannot create installation log: \(logURL.path)")
-        }
+        // Held open for the whole install so retention never removes it meanwhile.
+        let log = try ProcessLogFile.create(in: ProcessLogs.libraryDirectory(paths: paths), operation: "wine-install")
+        defer { log.close() }
+        log.write(Data((notice + "\n").utf8))
+        let logURL = log.url
         let stage = paths.runtimesDirectory.appendingPathComponent(".install-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false,
                                                 attributes: [.posixPermissions: 0o700])
@@ -136,7 +136,8 @@ struct RuntimeInstallation {
                      name: String, timeout: TimeInterval) async throws -> OperationResult {
         let operation = ProcessOperation(executable: URL(fileURLWithPath: path), arguments: arguments,
             environment: ProcessInfo.processInfo.environment, directory: nil,
-            logURL: paths.logsDirectory.appendingPathComponent("\(name)-\(UUID().uuidString).log"), timeout: timeout)
+            output: .log(try ProcessLogFile.create(in: ProcessLogs.libraryDirectory(paths: paths), operation: name)),
+            timeout: timeout)
         do { return try await operation.run() }
         catch ProcessOperation.Interrupted.timedOut(let log) {
             throw MagicWineError.setup("\(name) timed out. Log: \(log.path)")

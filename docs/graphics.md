@@ -178,7 +178,7 @@ What DXVK's overlay shows is the bottle's **DXVK HUD** compatibility switch (Run
 
 Inherited loader/graphics variables are deliberately sanitized by the launch planner's base layer. Setting `DXVK_*`, `DXMT_*`, `D3DM_*`, `MTL_*`, or `DYLD_*` in the launching shell is not a supported way to bypass managed configuration. The backend layer sits above controller/CPU integrations: if both name the same DLL or variable, the backend's value is used (see [runtime lifecycle](runtime-lifecycle.md#environment-synchronization-and-display)).
 
-DXVK cache files live in the bottle's `graphics/cache/`; DXMT shader cache files use `graphics/dxmt-cache/`. Logs use `Logs/<bottle-UUID>-dxvk/` or `Logs/<bottle-UUID>-dxmt/`. This code does not establish an equivalent D3DMetal-specific log/cache directory. Symlinked graphics cache/log directories are rejected.
+DXVK cache files live in the bottle's `graphics/cache/`; DXMT shader cache files use `graphics/dxmt-cache/`. Logs use `Logs/Bottles/<bottle-UUID>/dxvk/` or `Logs/Bottles/<bottle-UUID>/dxmt/` (older versions used `Logs/<bottle-UUID>-dxvk/` and `-dxmt/`, which stay in place). This code does not establish an equivalent D3DMetal-specific log/cache directory. Symlinked graphics cache/log directories are rejected.
 
 Source: `prepareGraphicsLaunch` in [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift) (validation, folders, runtime view), each provider's `launchFacts` and `cacheFolder` in [GraphicsComponentProvider.swift](../Sources/MagicWineCore/GraphicsComponentProvider.swift), and the graphics layer in [LaunchPlanner.swift](../Sources/MagicWineCore/LaunchPlanner.swift) (variables and DLL overrides).
 

@@ -64,10 +64,12 @@ MagicWine/
 │   │   └── Wine Stable.app/Contents/Resources/wine/
 │   └── .graphics-views/<receipt-digest>/  # private Metal runtime views
 ├── Components/                       # managed/imported graphics components
-└── Logs/                             # process/install logs and backend subdirectories
+└── Logs/
+    ├── Bottles/<UUID>/               # one bottle's process logs; dxvk/, dxmt/ backend logs
+    └── Library/                      # Wine/component installs, failed version inspections
 ```
 
-This is the principal layout, not an exhaustive list of controller, compatibility, or transaction files. Graphics state is described in [graphics](graphics.md); controller persistence in [controllers](controllers.md). Installers stage into temporary `.install-<UUID>` (and `.d3dmetal-<UUID>`) directories under `Runtimes`, `Components` or `.graphics-views` and remove them on exit.
+This is the principal layout, not an exhaustive list of controller, compatibility, or transaction files. Graphics state is described in [graphics](graphics.md); controller persistence in [controllers](controllers.md). Installers stage into temporary `.install-<UUID>` (and `.d3dmetal-<UUID>`) directories under `Runtimes`, `Components` or `.graphics-views` and remove them on exit. Logs are the one category MagicWine prunes by itself ([`ProcessLogs`](../Sources/MagicWineCore/ProcessLogs.swift): newest 50 per folder within 256 MiB, never a log still being written); older flat `Logs/*.log` files from earlier versions stay in place under the same policy. See [debugging](debugging.md#4-inspect-the-right-evidence).
 
 Nothing in normal operation deletes a runtime, component, private view, or lock file: an old managed Wine stays for bottles pinned to it, a replaced component stays until no bottle needs it, and any change to the runtime or component files a view records (including metadata such as a re-consented quarantine removal) produces a new view next to the old one. [`StorageCleanup`](../Sources/MagicWineCore/StorageCleanup.swift) (CLI `cleanup`, **Downloads › Storage**) computes what nothing references from the bottles' pinned runtimes and component IDs, `settings.json`, and the exact view identities launch would use, and removes only entries confirmed from that plan while every bottle is idle. It never touches `Bottles/<UUID>/`; see [runtime lifecycle](runtime-lifecycle.md#reclaiming-storage) for the rules.
 
