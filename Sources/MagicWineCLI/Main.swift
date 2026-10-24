@@ -280,6 +280,26 @@ struct MagicWineCLI {
             for item in result.removed { print("Removed\t\(item.url.path)") }
             for item in result.skipped { print("Skipped (no longer removable)\t\(item.url.path)") }
             print("Removed \(result.removed.count) items, \(byteCount(result.reclaimedSize)).")
+        case "logs":
+            guard values.count == 1 || (values.count == 2 && ["--latest", "--path"].contains(values[1])) else {
+                throw argumentError("logs <bottle-UUID> [--latest|--path]")
+            }
+            let bottle = try await findBottle(values[0], store: store)
+            let entries = ProcessLogs.list(bottle: bottle.id, paths: paths)
+            guard values.count == 2 else {
+                let dates = ISO8601DateFormatter()
+                dates.timeZone = .current
+                for entry in entries {
+                    print("\(dates.string(from: entry.date))\t\(byteCount(entry.size))\t\(entry.operation)\t\(entry.detail ?? "-")\t\(entry.isActive ? "running" : "ended")\t\(entry.url.path)")
+                }
+                return
+            }
+            guard let latest = entries.first else { throw MagicWineError.setup("This bottle has no logs yet.") }
+            if values[1] == "--path" {
+                print(latest.url.path)
+            } else {
+                FileHandle.standardOutput.write(try Data(contentsOf: latest.url))
+            }
         default: throw argumentError("Unknown command: \(command)")
         }
     }
@@ -392,5 +412,8 @@ struct MagicWineCLI {
         List unused components, managed Wine runtimes, private graphics views, installer leftovers
         and lock files of deleted bottles with sizes (dry run); --apply removes them while all bottles are idle
         Current managed Wine and bundled components are kept unless --include-current
+      logs <bottle-UUID> [--latest|--path]
+        List the bottle's logs, newest first (date, size, operation, program, running/ended, path);
+        --latest prints the newest log, --path prints its path (for example to follow it with tail -f)
     """
 }

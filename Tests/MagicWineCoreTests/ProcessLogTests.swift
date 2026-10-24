@@ -273,4 +273,42 @@ struct ProcessLogTests {
         #expect(names.filter { $0.hasPrefix(kept.uuidString) }.count == 2)
         #expect(ProcessLogs.list(bottle: kept, paths: paths).count == 2)
     }
+
+    @Test func tailFollowsARunningLogWithinItsWindow() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = try ProcessLogFile.create(in: directory, operation: "launch", detail: "game.exe")
+        file.write(Data("first line that falls outside the window\n0024:err:module:load failed\nfixme:ntdll:stub\n".utf8))
+        var tail = ProcessLogTail(url: file.url, window: 40)
+
+        // Only the last 40 bytes, without the fragment the window starts in.
+        var update = try tail.read()
+        #expect(update.omittedEarlier && update.isActive && !update.reset)
+        #expect(update.lines.map(\.text) == ["fixme:ntdll:stub"])
+        #expect(update.lines.map(\.level) == [.fixme])
+
+        // An unfinished line waits for its newline while the operation runs.
+        file.write(Data("0030:warn:seh:partial".utf8))
+        #expect(try tail.read().lines.isEmpty)
+        file.write(Data(" exception\r\nprogram output\n".utf8))
+        update = try tail.read()
+        #expect(!update.reset && !update.omittedEarlier)
+        #expect(update.lines.map(\.text) == ["0030:warn:seh:partial exception", "program output"])
+        #expect(update.lines.map(\.level) == [.warning, .other])
+
+        // Once the log is closed, its last line needs no newline.
+        file.write(Data("err:winediag:last words".utf8))
+        file.close()
+        update = try tail.read()
+        #expect(!update.isActive)
+        #expect(update.lines.map(\.text) == ["err:winediag:last words"])
+        #expect(update.lines.map(\.level) == [.error])
+
+        // A replaced file restarts from its end.
+        try FileManager.default.removeItem(at: file.url)
+        try Data("new log\n".utf8).write(to: file.url)
+        update = try tail.read()
+        #expect(update.reset)
+        #expect(update.lines.map(\.text) == ["new log"])
+    }
 }

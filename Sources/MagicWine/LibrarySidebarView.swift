@@ -17,6 +17,7 @@ struct LibrarySidebarView: View {
     @State private var hoveredBottleID: Bottle.ID?
     @State private var hoveredDestination: LibraryDestination?
     @FocusState private var searchFocused: Bool
+    @Environment(\.openWindow) private var openWindow
 
     private var filteredBottles: [Bottle] {
         guard !search.isEmpty else { return model.bottles }
@@ -203,7 +204,7 @@ struct LibrarySidebarView: View {
         }
         .accessibilityAddTraits(selected ? .isSelected : [])
         .contextMenu {
-            Button("Reveal Logs") { model.revealLogs(for: bottle) }
+            Button("Show Logs…") { openWindow(id: BottleLogsView.windowID, value: bottle.id) }
             Button("Move Bottle to Trash…", role: .destructive) {
                 let current = model.activity(for: bottle)
                 guard !current.blocksPrefixMutation else { return }

@@ -395,9 +395,11 @@ final class AppModel: ObservableObject {
         Task {
             do {
                 let result = try await wine.launch(program, in: bottle, diagnostics: diagnostics) { start in
-                    // Steam or a game can run for hours; warn as soon as it starts.
-                    guard !start.warnings.isEmpty else { return }
                     Task { @MainActor in
+                        self.startLiveLog(LiveLog(id: launchID, programID: program.id, programName: program.name,
+                                                  url: start.logURL), in: bottle.id)
+                        // Steam or a game can run for hours; warn as soon as it starts.
+                        guard !start.warnings.isEmpty else { return }
                         self.recordNotice(BottleNotice(
                             title: "\(program.name) started with reduced compatibility",
                             message: start.warnings.joined(separator: "\n\n"), logURL: start.logURL), for: bottle.id)
@@ -410,6 +412,7 @@ final class AppModel: ObservableObject {
                         title: "Diagnostic launch of \(program.name) ended (exit code \(result.exitCode))",
                         message: "The log lists DLL load decisions (+loaddll), exceptions (+seh), and process starts (+process) in addition to Wine errors. Review it for personal paths before sharing." + summary,
                         logURL: result.logURL), for: bottle.id)
+                    logToShow = result.logURL
                 } else if result.exitCode != 0 {
                     // A normal quit with a nonzero code is status, not an operation failure.
                     let summary = ProcessLogSummary.summary(at: result.logURL)
@@ -420,6 +423,7 @@ final class AppModel: ObservableObject {
             } catch {
                 recordError(error, for: bottle.id)
             }
+            endLiveLog(launchID, in: bottle.id)
             guard bottles.contains(where: { $0.id == bottle.id }) else { return }
             var latest = activity(for: bottle)
             latest.runningLaunches.remove(launchID)
@@ -605,12 +609,11 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([drive])
     }
 
-    func revealLogs(for bottle: Bottle? = nil) {
-        if let bottle, let log = activity(for: bottle).logURL {
-            NSWorkspace.shared.activateFileViewerSelecting([log])
-        } else {
-            NSWorkspace.shared.activateFileViewerSelecting([paths.logsDirectory])
-        }
+    /// Wine and component installation logs; a bottle's logs have their own list.
+    func revealLogs() {
+        let library = ProcessLogs.libraryDirectory(paths: paths)
+        let folder = FileManager.default.fileExists(atPath: library.path) ? library : paths.logsDirectory
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
     func revealLog(_ log: URL) {
@@ -829,6 +832,31 @@ final class AppModel: ObservableObject {
             return nil
         }
     }
+
+    // MARK: - Logs
+
+    /// Logs of launches that are still running, per bottle, delivered when each started.
+    @Published private(set) var liveLogs: [UUID: [LiveLog]] = [:]
+    /// A log to open in a viewer window, consumed by the main window (diagnostic launches).
+    @Published var logToShow: URL?
+
+    func liveLogs(for bottle: Bottle) -> [LiveLog] { liveLogs[bottle.id] ?? [] }
+
+    func revealLogsFolder(for bottleID: UUID) {
+        let folder = ProcessLogs.bottleDirectory(bottleID, paths: paths)
+        NSWorkspace.shared.activateFileViewerSelecting([FileManager.default.fileExists(atPath: folder.path) ? folder : paths.logsDirectory])
+    }
+
+    private func startLiveLog(_ log: LiveLog, in bottleID: UUID) {
+        // The launch may already have ended before this start callback arrived.
+        guard activities[bottleID]?.runningLaunches.contains(log.id) == true else { return }
+        liveLogs[bottleID, default: []].append(log)
+    }
+
+    private func endLiveLog(_ launchID: UUID, in bottleID: UUID) {
+        liveLogs[bottleID]?.removeAll { $0.id == launchID }
+        if liveLogs[bottleID]?.isEmpty == true { liveLogs[bottleID] = nil }
+    }
 }
 
 /// A dismissible, non-error status for one bottle, tied to one specific process log.
@@ -837,4 +865,12 @@ struct BottleNotice: Identifiable {
     let title: String
     let message: String
     let logURL: URL
+}
+
+/// The log of one running launch; `id` is the launch.
+struct LiveLog: Identifiable {
+    let id: UUID
+    let programID: UUID
+    let programName: String
+    let url: URL
 }

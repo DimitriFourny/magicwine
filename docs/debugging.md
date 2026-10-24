@@ -89,7 +89,15 @@ Source: [Main.swift](../Sources/MagicWineCLI/Main.swift), [WineRuntime.swift](..
 
 ## 4. Inspect the right evidence
 
-The native bottle's **Reveal Logs** action opens the library logs. For an isolated CLI run, inspect `"$ROOT/Logs"`.
+In the app, the bottle's **Logs…** tool (also **Show Logs…** in the sidebar's context menu and **Bottle › Show Bottle Logs…**) lists that bottle's logs newest first with operation, program, date, size, and whether an operation is still writing it; double-click one to open it in the log viewer. Every **Show Log** button for a specific log (operation failures, exit-code and warning notices, alerts) opens the same viewer, and while a launch runs, **Show Log: <program>** under the running notice (or **Show Running Log** in the program's menu) follows its output live. The viewer shows at most the last 4 MiB of a log, polls a running log twice a second, filters Wine `err:`/`warn:`/`fixme:`/other lines and by text, supports the find bar (⌘F), **Copy** of the lines shown, and **Reveal in Finder**. The Wine and downloads screens' **Reveal Logs** opens `Logs/Library/`.
+
+From the CLI, for an isolated run inspect `"$ROOT/Logs"` or use:
+
+```sh
+"$CLI" --root "$ROOT" logs "$BOTTLE"            # newest first: date, size, operation, program, running/ended, path
+"$CLI" --root "$ROOT" logs "$BOTTLE" --latest   # print the newest log
+tail -f "$("$CLI" --root "$ROOT" logs "$BOTTLE" --path)"   # follow the newest log
+```
 
 | Location under the data root | Evidence |
 | --- | --- |
@@ -128,7 +136,7 @@ By default each bottle's **Wine debug output** is Quiet (`WINEDEBUG=fixme-all`):
 - `+process` prints process creation with command lines, so a launcher that starts the real game as a child, or dies before doing so, can be followed.
 - Wine's default classes are kept, so `err:` and `fixme:` lines for every channel stay in the log (and `ProcessLogSummary` still finds errors).
 
-Broader channels such as `+relay`, `+snoop`, or `+all` are deliberately not offered: they produce gigabytes within minutes and slow a game enough to change its behavior; use a disposable raw-Wine comparison for those. Even the diagnostic channels can make logs large and slow startup slightly, so use the normal launch otherwise. For LNK/URL programs the variables reach the `start` process and the program it starts; a URL handed to an already running launcher is not traced. When the program ends, the dashboard shows a notice with **Reveal Log** for that run's log, and the CLI prints `Diagnostic log (…): <path>` and the exit code. Review the log for personal paths before sharing.
+Broader channels such as `+relay`, `+snoop`, or `+all` are deliberately not offered: they produce gigabytes within minutes and slow a game enough to change its behavior; use a disposable raw-Wine comparison for those. Even the diagnostic channels can make logs large and slow startup slightly, so use the normal launch otherwise. For LNK/URL programs the variables reach the `start` process and the program it starts; a URL handed to an already running launcher is not traced. When the program ends, its log opens in the log viewer and the dashboard keeps a notice with **Show Log** for that run's log; the CLI prints `Diagnostic log (…): <path>` and the exit code. Review the log for personal paths before sharing.
 
 If deeper logging requires a source change, make that explicit in the research checkout and record it. A direct raw-Wine invocation bypasses MagicWine's preparation and can be a useful comparison only in a disposable prefix; it is not an equivalent reproduction of managed graphics/controller/runtime behavior. Do not manually modify a production bottle's overrides to force a diagnostic result.
 

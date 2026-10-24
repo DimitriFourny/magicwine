@@ -8,6 +8,7 @@ struct BottleDashboardView: View {
     let trash: () -> Void
     @State private var editingProgram: WindowsProgram?
     @State private var diagnosticProgram: WindowsProgram?
+    @Environment(\.openWindow) private var openWindow
 
     private var currentBottle: Bottle {
         model.bottles.first { $0.id == bottle.id } ?? bottle
@@ -209,12 +210,24 @@ struct BottleDashboardView: View {
             .padding(.horizontal, 4)
         }
         if activity.hasRunningPrograms, activity.title == nil, !activity.isStopping {
-            Label("Windows programs are running. Launch again to reopen a background app. Use its Exit command to quit; Stop ends all programs in this bottle.",
-                  systemImage: "play.circle")
-                .font(.callout)
-                .foregroundStyle(WineTheme.muted)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Windows programs are running. Launch again to reopen a background app. Use its Exit command to quit; Stop ends all programs in this bottle.",
+                      systemImage: "play.circle")
+                    .font(.callout)
+                    .foregroundStyle(WineTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                let live = model.liveLogs(for: currentBottle)
+                if !live.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(live) { log in
+                            Button("Show Log: \(log.programName)") { showLog(log.url) }
+                                .help("Follow the output of this running launch")
+                        }
+                    }
+                    .buttonStyle(WineButtonStyle())
+                }
+            }
+            .padding(.horizontal, 4)
         }
 
         if let error = activity.error {
@@ -225,7 +238,11 @@ struct BottleDashboardView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                     HStack(spacing: 9) {
-                        Button("Reveal Logs") { model.revealLogs(for: currentBottle) }
+                        if let log = activity.logURL {
+                            Button("Show Log") { showLog(log) }
+                        } else {
+                            Button("Show Logs") { showLogs() }
+                        }
                         Button("Dismiss") { model.dismissError(for: currentBottle) }
                     }
                     .buttonStyle(WineButtonStyle())
@@ -242,7 +259,7 @@ struct BottleDashboardView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                     HStack(spacing: 9) {
-                        Button("Reveal Log") { model.revealLog(notice.logURL) }
+                        Button("Show Log") { showLog(notice.logURL) }
                         Button("Dismiss") { model.dismissNotice(notice.id, for: currentBottle) }
                     }
                     .buttonStyle(WineButtonStyle())
@@ -393,6 +410,7 @@ struct BottleDashboardView: View {
                 Button("Edit…") { editingProgram = program }
                 Button("Launch with Diagnostics…") { diagnosticProgram = program }
                     .disabled(launchUnavailable)
+                runningLogButton(program)
                 Button("Remove from MagicWine", role: .destructive) {
                     model.removeProgram(program, in: currentBottle)
                 }
@@ -414,6 +432,7 @@ struct BottleDashboardView: View {
                 .disabled(launchUnavailable)
             Button("Edit…") { editingProgram = program }
                 .disabled(activity.blocksLibraryEdit)
+            runningLogButton(program)
             Button("Remove from MagicWine", role: .destructive) {
                 model.removeProgram(program, in: currentBottle)
             }
@@ -470,8 +489,8 @@ struct BottleDashboardView: View {
                 toolButton("Reveal C: Drive", icon: "internaldrive") { model.revealDrive(currentBottle) }
                     .disabled(!currentBottle.isInitialized)
                     .help("Reveal this bottle’s Windows drive in Finder")
-                toolButton("Reveal Logs", icon: "doc.text") { model.revealLogs(for: currentBottle) }
-                    .help("Reveal the latest operation log, or the logs folder")
+                toolButton("Logs…", icon: "doc.text") { showLogs() }
+                    .help("List this bottle’s logs and open them in the log viewer")
             }
             rowSeparator
             toolButton("Trash Bottle…", icon: "trash", destructive: true, action: trash)
@@ -489,6 +508,18 @@ struct BottleDashboardView: View {
         }
         .buttonStyle(WineButtonStyle())
     }
+
+    /// The newest running launch of `program`, if any.
+    @ViewBuilder
+    private func runningLogButton(_ program: WindowsProgram) -> some View {
+        if let log = model.liveLogs(for: currentBottle).last(where: { $0.programID == program.id }) {
+            Button("Show Running Log") { showLog(log.url) }
+        }
+    }
+
+    private func showLog(_ url: URL) { openWindow(id: LogViewerView.windowID, value: url) }
+
+    private func showLogs() { openWindow(id: BottleLogsView.windowID, value: currentBottle.id) }
 
     private var rowSeparator: some View {
         Rectangle()

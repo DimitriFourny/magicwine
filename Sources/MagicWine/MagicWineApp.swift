@@ -35,7 +35,7 @@ struct MagicWineApp: App {
                 }
                 .disabled(!canStopSelectedBottle)
                 Divider()
-                Button("Reveal Logs") { model.revealLogs(for: model.selectedBottle) }
+                ShowBottleLogsCommand(bottle: model.selectedBottle)
                 Button("Reload Bottles") { model.refreshBottles() }
                     .disabled(model.isLoading)
             }
@@ -48,6 +48,22 @@ struct MagicWineApp: App {
                 .background(WineTheme.background)
                 .preferredColorScheme(.dark)
         }
+
+        WindowGroup("Log", id: LogViewerView.windowID, for: URL.self) { $url in
+            if let url {
+                LogViewerView(url: url)
+                    .preferredColorScheme(.dark)
+            }
+        }
+        .defaultSize(width: 1000, height: 680)
+
+        WindowGroup("Bottle Logs", id: BottleLogsView.windowID, for: UUID.self) { $bottleID in
+            if let bottleID {
+                BottleLogsView(model: model, bottleID: bottleID)
+                    .preferredColorScheme(.dark)
+            }
+        }
+        .defaultSize(width: 760, height: 480)
     }
 
     private var canUseSelectedBottle: Bool {
@@ -63,11 +79,23 @@ struct MagicWineApp: App {
     }
 }
 
+/// Menu commands cannot read `openWindow` from the app; a view can.
+private struct ShowBottleLogsCommand: View {
+    let bottle: Bottle?
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Show Bottle Logs…") { if let bottle { openWindow(id: BottleLogsView.windowID, value: bottle.id) } }
+            .disabled(bottle == nil)
+    }
+}
+
 private struct LibraryView: View {
     @ObservedObject var model: AppModel
     @State private var trashTarget: Bottle?
     @State private var destination: LibraryDestination = .bottles
     @State private var search = ""
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(spacing: 0) {
@@ -102,6 +130,11 @@ private struct LibraryView: View {
         .background(WineTheme.background)
         .tint(WineTheme.accent)
         .buttonStyle(WineButtonStyle())
+        .onChange(of: model.logToShow) { _, url in
+            guard let url else { return }
+            openWindow(id: LogViewerView.windowID, value: url)
+            model.logToShow = nil
+        }
         .sheet(isPresented: $model.showsNewBottle) {
             NewBottleView(model: model)
         }
@@ -111,7 +144,7 @@ private struct LibraryView: View {
         ), presenting: model.notice) { notice in
             Button("OK", role: .cancel) { }
             if let log = notice.logURL {
-                Button("Reveal Log") { model.revealLog(log) }
+                Button("Show Log") { openWindow(id: LogViewerView.windowID, value: log) }
             }
         } message: { notice in
             Text(notice.message)
