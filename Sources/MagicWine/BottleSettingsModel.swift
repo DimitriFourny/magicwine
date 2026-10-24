@@ -3,8 +3,8 @@ import MagicWineCore
 import Observation
 
 /// A bottle's settings: graphics backend and component, display, synchronization, HUD,
-/// compatibility switches, and per-program launch options. Prefix changes run as
-/// exclusive `BottleActivityModel` operations; launch-only settings do not.
+/// compatibility switches, and per-program launch options and favorites. Prefix changes run
+/// as exclusive `BottleActivityModel` operations; metadata and launch-only settings do not.
 @Observable
 @MainActor
 final class BottleSettingsModel {
@@ -181,7 +181,7 @@ final class BottleSettingsModel {
         }
     }
 
-    // MARK: - Program launch options
+    // MARK: - Programs
 
     /// Metadata only, like Add/Remove Program: allowed while programs run, and the next
     /// launch of this program uses the new options. Errors return to the editor sheet.
@@ -190,5 +190,17 @@ final class BottleSettingsModel {
             throw MagicWineError.busy("This bottle’s operation must finish before the program is saved.", reason: .operationInProgress)
         }
         library.replace(try await store.updateProgram(program, from: original, in: library.current(bottle)))
+    }
+
+    /// Favorites are listed first. Metadata only: allowed while programs run.
+    func setFavorite(_ isFavorite: Bool, for program: WindowsProgram, in bottle: Bottle) {
+        guard !library.isLoading, !activity.activity(for: bottle).blocksLibraryEdit else { return }
+        Task {
+            do {
+                library.replace(try await store.setFavorite(isFavorite, programID: program.id, in: bottle))
+            } catch {
+                activity.recordError(error, for: bottle.id)
+            }
+        }
     }
 }

@@ -129,7 +129,7 @@ struct LibrarySidebarView: View {
                 } else if let title = activity.title {
                     rowSubtitle(title)
                 } else if activity.hasRunningPrograms {
-                    rowSubtitle("Windows programs running")
+                    rowSubtitle("Running: " + activity.runningProgramNames.joined(separator: ", "))
                 } else if !bottle.isInitialized {
                     rowSubtitle("Setup needed")
                 }

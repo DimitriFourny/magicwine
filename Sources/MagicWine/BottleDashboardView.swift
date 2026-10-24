@@ -12,6 +12,7 @@ struct BottleDashboardView: View {
     @State private var diagnosticProgram: WindowsProgram?
     /// Target of Bottle › Launch; clicking a program row selects it.
     @State private var selectedProgramID: UUID?
+    @AppStorage("programSort") private var programSort: ProgramSort = .name
     @Environment(\.openWindow) private var openWindow
     @Environment(\.fileImport) private var fileImport
     @State private var showsDependencies = false
@@ -221,7 +222,7 @@ struct BottleDashboardView: View {
         }
         if activity.hasRunningPrograms, activity.title == nil, !activity.isStopping {
             VStack(alignment: .leading, spacing: 8) {
-                Label("Windows programs are running. Launch again to reopen a background app. Use its Exit command to quit; Stop ends all programs in this bottle.",
+                Label("Running: \(activity.runningProgramNames.joined(separator: ", ")). Launch again to reopen a background app. Use its Exit command to quit; Stop ends all programs in this bottle.",
                       systemImage: "play.circle")
                     .font(.callout)
                     .foregroundStyle(WineTheme.muted)
@@ -348,15 +349,25 @@ struct BottleDashboardView: View {
         .padding(.vertical, 9)
     }
 
-    /// Programs matching the window's search; all of them when it is empty.
+    /// Programs matching the window's search, favorites first, then in the chosen order.
     private var visiblePrograms: [WindowsProgram] {
-        guard !programFilter.isEmpty else { return currentBottle.programs }
-        return currentBottle.programs.filter { $0.name.localizedStandardContains(programFilter) }
+        let programs = programFilter.isEmpty ? currentBottle.programs
+            : currentBottle.programs.filter { $0.name.localizedStandardContains(programFilter) }
+        return programSort.sorted(programs)
     }
 
     private var installedPrograms: some View {
         WineCard(title: "Installed Programs", icon: "square.grid.2x2", trailing: "\(currentBottle.programs.count) items") {
             let programs = visiblePrograms
+            if currentBottle.programs.count > 1 {
+                Picker("Sort programs", selection: $programSort) {
+                    ForEach(ProgramSort.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Favorites stay first")
+            }
             if currentBottle.programs.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     Label("No programs yet", systemImage: "app.dashed")
@@ -391,10 +402,19 @@ struct BottleDashboardView: View {
                 revision: model.library.iconRevision(for: currentBottle.id)
             )
             VStack(alignment: .leading, spacing: 4) {
-                Text(program.name)
-                    .font(.system(.callout, weight: .semibold))
-                    .lineLimit(1)
-                    .help(program.name)
+                HStack(spacing: 6) {
+                    Text(program.name)
+                        .font(.system(.callout, weight: .semibold))
+                        .lineLimit(1)
+                        .help(program.name)
+                    if activity.isRunning(program) {
+                        Text("Running")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(WineTheme.success)
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(WineTheme.success.opacity(0.12), in: Capsule())
+                    }
+                }
                 Text(displayPath(program.executablePath))
                     .font(.system(size: 12))
                     .foregroundStyle(WineTheme.muted)
@@ -402,8 +422,21 @@ struct BottleDashboardView: View {
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                     .help(program.executablePath)
+                Text(Self.history(of: program))
+                    .font(.system(size: 11))
+                    .foregroundStyle(WineTheme.muted)
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            Button { model.bottleSettings.setFavorite(!program.isFavorite, for: program, in: currentBottle) } label: {
+                Image(systemName: program.isFavorite ? "star.fill" : "star")
+                    .foregroundStyle(program.isFavorite ? Color.yellow : WineTheme.muted)
+            }
+            .buttonStyle(.borderless)
+            .disabled(activity.blocksLibraryEdit)
+            .accessibilityLabel(program.isFavorite ? "Remove \(program.name) from Favorites" : "Add \(program.name) to Favorites")
+            .help(program.isFavorite ? "Remove from Favorites" : "Add to Favorites; favorites are listed first")
             Button { model.activity.launch(program, in: currentBottle) } label: {
                 Text("Launch")
                     .font(.system(size: 14, weight: .semibold))
@@ -414,6 +447,7 @@ struct BottleDashboardView: View {
             .accessibilityLabel("Launch \(program.name)")
             Menu {
                 Button("Edit…") { editingProgram = program }
+                favoriteButton(program)
                 Button("Launch with Diagnostics…") { diagnosticProgram = program }
                     .disabled(launchUnavailable)
                 runningLogButton(program)
@@ -445,11 +479,26 @@ struct BottleDashboardView: View {
             Button("Edit…") { editingProgram = program }
                 .disabled(activity.blocksLibraryEdit)
             runningLogButton(program)
+            favoriteButton(program)
+                .disabled(activity.blocksLibraryEdit)
             Button("Remove from MagicWine", role: .destructive) {
                 model.activity.removeProgram(program, in: currentBottle)
             }
             .disabled(activity.blocksLibraryEdit)
         }
+    }
+
+    private func favoriteButton(_ program: WindowsProgram) -> some View {
+        Button(program.isFavorite ? "Remove from Favorites" : "Add to Favorites") {
+            model.bottleSettings.setFavorite(!program.isFavorite, for: program, in: currentBottle)
+        }
+    }
+
+    private static func history(of program: WindowsProgram) -> String {
+        guard let last = program.lastLaunchedAt else { return "Never launched from MagicWine" }
+        let played = program.playTime < 60 ? "under a minute"
+            : Duration.seconds(program.playTime).formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
+        return "Last launched \(last.formatted(.relative(presentation: .named))) · \(played) played"
     }
 
     private func displayPath(_ path: String) -> String {
@@ -541,5 +590,29 @@ struct BottleDashboardView: View {
             .fill(WineTheme.border)
             .frame(height: 1)
             .accessibilityHidden(true)
+    }
+}
+
+/// The dashboard's program order; favorites always come first.
+enum ProgramSort: String, CaseIterable {
+    case name
+    case recent
+
+    var title: String {
+        switch self {
+        case .name: "Name"
+        case .recent: "Recent"
+        }
+    }
+
+    /// Recent puts the latest launch first and never-launched programs last, by name.
+    func sorted(_ programs: [WindowsProgram]) -> [WindowsProgram] {
+        programs.sorted { left, right in
+            if left.isFavorite != right.isFavorite { return left.isFavorite }
+            if self == .recent, left.lastLaunchedAt != right.lastLaunchedAt {
+                return (left.lastLaunchedAt ?? .distantPast) > (right.lastLaunchedAt ?? .distantPast)
+            }
+            return left.name.localizedStandardCompare(right.name) == .orderedAscending
+        }
     }
 }

@@ -45,6 +45,13 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
     public var dllOverrides: DLLOverrides
     /// Rosetta AVX advertising for this program; `nil` follows the bottle's setting.
     public var advertiseAVX: Bool?
+    /// When MagicWine last started this program; see `BottleStore.recordLaunch`.
+    public internal(set) var lastLaunchedAt: Date?
+    /// Accumulated seconds from a program's start to the end of its processes; see
+    /// `BottleStore.addPlayTime`.
+    public internal(set) var playTime: TimeInterval
+    /// Listed first in the app; see `BottleStore.setFavorite`.
+    public internal(set) var isFavorite: Bool
 
     public init(id: UUID = UUID(), name: String, executablePath: String, arguments: [String] = [],
                 workingDirectory: String? = nil, environment: [String: String] = [:],
@@ -57,13 +64,28 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
         self.environment = environment
         self.dllOverrides = dllOverrides
         self.advertiseAVX = advertiseAVX
+        lastLaunchedAt = nil
+        playTime = 0
+        isFavorite = false
+    }
+
+    /// This record with `other`'s play history and favorite flag. Those change only through
+    /// their own `BottleStore` transitions, so editors and general saves never overwrite them.
+    func withLibraryMetadata(of other: WindowsProgram) -> WindowsProgram {
+        var program = self
+        program.lastLaunchedAt = other.lastLaunchedAt
+        program.playTime = other.playTime
+        program.isFavorite = other.isFavorite
+        return program
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, executablePath, arguments, workingDirectory, environment, dllOverrides, advertiseAVX
+        case lastLaunchedAt, playTime, isFavorite
     }
 
-    /// Records saved before launch options existed decode with empty options.
+    /// Records saved before launch options or play history existed decode with empty options,
+    /// no launches, and no favorite.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -74,9 +96,16 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
         environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
         dllOverrides = try container.decodeIfPresent(DLLOverrides.self, forKey: .dllOverrides) ?? .init()
         advertiseAVX = try container.decodeIfPresent(Bool.self, forKey: .advertiseAVX)
+        lastLaunchedAt = try container.decodeIfPresent(Date.self, forKey: .lastLaunchedAt)
+        playTime = try container.decodeIfPresent(TimeInterval.self, forKey: .playTime) ?? 0
+        guard playTime >= 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .playTime, in: container,
+                                                   debugDescription: "Play time must not be negative.")
+        }
+        isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
     }
 
-    /// Empty options are omitted, so unedited programs keep their original shape.
+    /// Empty options and history are omitted, so unedited programs keep their original shape.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -87,6 +116,9 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
         if !environment.isEmpty { try container.encode(environment, forKey: .environment) }
         if !dllOverrides.isEmpty { try container.encode(dllOverrides, forKey: .dllOverrides) }
         try container.encodeIfPresent(advertiseAVX, forKey: .advertiseAVX)
+        try container.encodeIfPresent(lastLaunchedAt, forKey: .lastLaunchedAt)
+        if playTime > 0 { try container.encode(playTime, forKey: .playTime) }
+        if isFavorite { try container.encode(true, forKey: .isFavorite) }
     }
 }
 

@@ -10,10 +10,28 @@ struct BottleActivity {
     var logURL: URL?
     var graphicsProgress: GraphicsSetupProgress?
     var graphicsSetupID: UUID?
-    var runningLaunches: Set<UUID> = []
+    /// Running launches by program ID. A program can have several: a tray launcher such as
+    /// Steam may be launched again to reopen it while its first launch still runs.
+    var running: [UUID: RunningProgram] = [:]
     var notices: [BottleNotice] = []
     var isChangingHUD = false
-    var hasRunningPrograms: Bool { !runningLaunches.isEmpty }
+    var hasRunningPrograms: Bool { !running.isEmpty }
+
+    func isRunning(_ program: WindowsProgram) -> Bool { running[program.id] != nil }
+
+    /// Names of the running programs, for the sidebar and dashboard.
+    var runningProgramNames: [String] {
+        running.values.map(\.name).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+}
+
+/// One program's overlapping launches and its play session.
+struct RunningProgram {
+    var name: String
+    var launches: Set<UUID> = []
+    /// `ProcessInfo.systemUptime` when the first of these launches started its process (sleep
+    /// is not counted); `nil` until then.
+    var startedAt: TimeInterval?
 }
 
 extension BottleActivity {
@@ -181,15 +199,14 @@ final class BottleActivityModel {
         // A launcher may stay alive in the Windows tray. Its lifetime must not
         // prevent another launch from reopening it or starting a game.
         let launchID = UUID()
-        state.runningLaunches.insert(launchID)
+        state.running[program.id, default: RunningProgram(name: program.name)].launches.insert(launchID)
         state.error = nil
         activities[bottle.id] = state
         Task {
             do {
                 let result = try await wine.launch(program, in: bottle, diagnostics: diagnostics) { start in
                     Task { @MainActor in
-                        self.startLiveLog(LiveLog(id: launchID, programID: program.id, programName: program.name,
-                                                  url: start.logURL), in: bottle.id)
+                        self.started(launchID, of: program, in: bottle, log: start.logURL)
                         // Steam or a game can run for hours; warn as soon as it starts.
                         guard !start.warnings.isEmpty else { return }
                         self.recordNotice(BottleNotice(
@@ -216,10 +233,48 @@ final class BottleActivityModel {
                 recordError(error, for: bottle.id)
             }
             endLiveLog(launchID, in: bottle.id)
-            guard library.contains(bottle.id) else { return }
-            var latest = activity(for: bottle)
-            latest.runningLaunches.remove(launchID)
-            activities[bottle.id] = latest
+            ended(launchID, of: program, in: bottle)
+        }
+    }
+
+    /// A launch's process started: follow its log, record the launch, and begin the
+    /// program's play session unless an earlier launch of it is still running.
+    private func started(_ launchID: UUID, of program: WindowsProgram, in bottle: Bottle, log: URL) {
+        // The launch may already have ended before this start callback arrived.
+        guard activities[bottle.id]?.running[program.id]?.launches.contains(launchID) == true else { return }
+        liveLogs[bottle.id, default: []].append(LiveLog(id: launchID, programID: program.id,
+                                                        programName: program.name, url: log))
+        update(bottle.id) { state in
+            if state.running[program.id]?.startedAt == nil {
+                state.running[program.id]?.startedAt = ProcessInfo.processInfo.systemUptime
+            }
+        }
+        let date = Date()
+        saveLibraryMetadata(of: bottle) { try await $0.recordLaunch(of: program.id, at: date, in: bottle) }
+    }
+
+    /// The program's last running launch ends its play session, which is added to its play time.
+    private func ended(_ launchID: UUID, of program: WindowsProgram, in bottle: Bottle) {
+        guard library.contains(bottle.id) else { return }
+        var latest = activity(for: bottle)
+        guard var entry = latest.running[program.id] else { return }
+        entry.launches.remove(launchID)
+        latest.running[program.id] = entry.launches.isEmpty ? nil : entry
+        activities[bottle.id] = latest
+        guard entry.launches.isEmpty, let startedAt = entry.startedAt else { return }
+        let duration = max(0, ProcessInfo.processInfo.systemUptime - startedAt)
+        saveLibraryMetadata(of: bottle) { try await $0.addPlayTime(duration, to: program.id, in: bottle) }
+    }
+
+    /// Play history is metadata only, like Add Program: saved while programs run.
+    private func saveLibraryMetadata(of bottle: Bottle,
+                                     _ transition: @escaping @MainActor (BottleStore) async throws -> Bottle) {
+        Task {
+            do {
+                library.replace(try await transition(store))
+            } catch {
+                recordError(error, for: bottle.id)
+            }
         }
     }
 
@@ -287,12 +342,6 @@ final class BottleActivityModel {
             if let logURL = presented.logURL { state.logURL = logURL }
         }
         activities[id] = state
-    }
-
-    private func startLiveLog(_ log: LiveLog, in bottleID: UUID) {
-        // The launch may already have ended before this start callback arrived.
-        guard activities[bottleID]?.runningLaunches.contains(log.id) == true else { return }
-        liveLogs[bottleID, default: []].append(log)
     }
 
     private func endLiveLog(_ launchID: UUID, in bottleID: UUID) {

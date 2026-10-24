@@ -80,12 +80,16 @@ public actor BottleStore {
             guard bottle.dependencies == current.dependencies else {
                 throw MagicWineError.conflict("Installed dependencies are recorded only by WineRuntime.installDependencies.")
             }
-            for program in bottle.programs {
-                if let saved = current.programs.first(where: { $0.id == program.id }), saved != program {
+            var normalized = bottle
+            for (index, program) in bottle.programs.enumerated() {
+                guard let saved = current.programs.first(where: { $0.id == program.id }) else { continue }
+                // Play history and favorites have their own transitions; keep the saved values.
+                let kept = program.withLibraryMetadata(of: saved)
+                if saved != kept {
                     throw MagicWineError.conflict("Program names and launch options must be changed through BottleStore.updateProgram.")
                 }
+                normalized.programs[index] = kept
             }
-            var normalized = bottle
             _ = normalizePrograms(in: &normalized)
             try saveUnlocked(normalized)
         }
@@ -282,13 +286,14 @@ public actor BottleStore {
             guard let index = current.programs.firstIndex(where: { $0.id == program.id }) else {
                 throw MagicWineError.conflict("\(original.name) is no longer saved in this bottle.")
             }
-            guard original.id == program.id, current.programs[index] == original else {
+            // Play history and favorites may change while the editor is open; they are kept.
+            guard original.id == program.id, current.programs[index] == original.withLibraryMetadata(of: current.programs[index]) else {
                 throw MagicWineError.conflict("\(original.name) was changed elsewhere.")
             }
             guard program.executablePath == original.executablePath else {
                 throw MagicWineError.invalidInput("A saved program's file cannot be changed. Add the other file as a new program.")
             }
-            var updated = program
+            var updated = program.withLibraryMetadata(of: current.programs[index])
             updated.name = try validatedName(program.name)
             try updated.validateLaunchOptions()
             if updated.workingDirectory != original.workingDirectory {
@@ -296,6 +301,46 @@ public actor BottleStore {
             }
             current.programs[index] = updated
             current.programs.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        }
+    }
+
+    /// MagicWine started `programID` at `date`. Metadata only, allowed while programs run;
+    /// a program removed in the meantime is not recorded.
+    public func recordLaunch(of programID: UUID, at date: Date, in bottle: Bottle) throws -> Bottle {
+        try updateLibraryMetadata(of: programID, in: bottle, requireProgram: false) { $0.lastLaunchedAt = date }
+    }
+
+    /// Adds one finished session (from the program's start until its processes ended) to its
+    /// play time. Metadata only; a program removed in the meantime is not recorded.
+    public func addPlayTime(_ duration: TimeInterval, to programID: UUID, in bottle: Bottle) throws -> Bottle {
+        guard duration.isFinite, duration >= 0 else {
+            throw MagicWineError.invalidInput("A play session must last zero or more seconds.")
+        }
+        return try updateLibraryMetadata(of: programID, in: bottle, requireProgram: false) { $0.playTime += duration }
+    }
+
+    /// Marks a program as a favorite, listed first in the app. Metadata only.
+    public func setFavorite(_ isFavorite: Bool, programID: UUID, in bottle: Bottle) throws -> Bottle {
+        try updateLibraryMetadata(of: programID, in: bottle, requireProgram: true) { $0.isFavorite = isFavorite }
+    }
+
+    /// The only writer of play history and favorites: applied to the saved program under the
+    /// bottle lock, so launch options or other history saved meanwhile are kept.
+    private func updateLibraryMetadata(of programID: UUID, in bottle: Bottle, requireProgram: Bool,
+                                       _ change: (inout WindowsProgram) -> Void) throws -> Bottle {
+        try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
+            var current = try loadUnlocked(bottle)
+            guard let index = current.programs.firstIndex(where: { $0.id == programID }) else {
+                guard !requireProgram else {
+                    throw MagicWineError.conflict("This program is no longer saved in this bottle.")
+                }
+                return current
+            }
+            let previous = current.programs[index]
+            change(&current.programs[index])
+            guard current.programs[index] != previous else { return current }
+            try saveUnlocked(current)
+            return current
         }
     }
 
