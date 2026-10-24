@@ -17,7 +17,7 @@ Requires macOS 14 or newer and Swift 6 developer tools (Xcode or Apple's Command
 open dist/MagicWine.app
 ```
 
-This creates an ad-hoc-signed development build, not a notarized release. The CLI is `dist/magicwine`; keep `dist/MagicWine_MagicWineCore.bundle` beside it.
+This creates an ad-hoc-signed development build, not a notarized release. The CLI is `dist/magicwine`, a wrapper for the copy inside `dist/MagicWine.app`; keep the wrapper beside the app.
 
 ## Try a game
 

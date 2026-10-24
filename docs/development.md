@@ -16,7 +16,29 @@ open dist/MagicWine.app
 ./dist/magicwine --help
 ```
 
-[build-app.sh](../scripts/build-app.sh) builds release executables, packages the native app and CLI, validates `Info.plist`, and ad-hoc signs the app. It is a local development distribution, not a Developer ID-signed or notarized release. Re-running replaces generated resource bundles under `dist/`; put no hand-maintained files there.
+[build-app.sh](../scripts/build-app.sh) builds release executables and assembles the app, with the CLI inside it, in a fresh staging directory under `dist/`, validates `Info.plist`, signs it, and then swaps the staging app into `dist/<name>.app`. Nothing from an earlier build survives inside the bundle, and a standalone `dist/MagicWine_MagicWineCore.bundle` left by older versions of the script is removed. Other apps in `dist/` are left alone; put no hand-maintained files in the generated paths. By default the app is ad-hoc signed: a local development distribution, not Developer ID-signed or notarized.
+
+### Versioning
+
+The checked-in `Resources/Info.plist` holds only the base version (`0.1.0`) and is never edited per build; the packager stamps the copy inside the bundle:
+
+- `CFBundleShortVersionString`: the newest reachable git tag matching `v<major>[.<minor>[.<patch>]]` with the `v` removed, otherwise the base version. A tag such as `v1.0-rc1` is rejected; override instead.
+- `CFBundleVersion`: the commit count (`git rev-list --count HEAD`), so use a non-shallow clone for meaningful numbers (CI fetches full history). Without git, the plist value is kept.
+- `MagicWineGitRevision`: the 12-character commit, suffixed `-dirty` when tracked files have uncommitted changes.
+
+`MAGICWINE_VERSION` and `MAGICWINE_BUILD` override the first two. `dist/magicwine --version` (also `version`) reads these from the enclosing app's `Info.plist` and prints, for example, `magicwine 0.1.0 (58) a8f7b11e8b1c-dirty`; the GUI sidebar shows the same short version.
+
+### Developer ID signing and notarization
+
+Both are opt-in through environment variables; nothing is signed with a real identity or submitted unless you set them:
+
+```sh
+MAGICWINE_SIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
+MAGICWINE_NOTARY_PROFILE="magicwine-notary" \
+./scripts/build-app.sh
+```
+
+`MAGICWINE_SIGN_IDENTITY` signs `magicwine-cli`, `MagicWine`, and then the bundle with the hardened runtime and a secure timestamp, then verifies the signature. `MAGICWINE_NOTARY_PROFILE` (a `xcrun notarytool store-credentials` keychain profile; it requires the identity) additionally zips the app, runs `notarytool submit --wait`, and staples the ticket. The repository's own builds never exercise this path, so treat the first run as unverified: the hardened runtime without extra entitlements is untested against a full Wine session, and Wine itself remains unsigned and un-notarized (see the runtime trust prompt).
 
 The script does not install Wine, accept runtime trust prompts, or rebuild the bundled graphics libraries. Wine can be installed later through the app or CLI with explicit consent. Rosetta installation and license review remain the user's responsibility.
 
@@ -44,24 +66,24 @@ The executable inside that renamed bundle is still `Contents/MacOS/MagicWine`. A
 
 ```text
 dist/
-├── magicwine
+├── magicwine                           # wrapper script for the bundled CLI
 ├── LICENSE
 ├── THIRD_PARTY_NOTICES.md
-├── MagicWine_MagicWineCore.bundle/
-│   └── Contents/Resources/             # pinned component payloads and notices
 └── MagicWine.app/
     └── Contents/
         ├── Info.plist
-        ├── MacOS/MagicWine
+        ├── MacOS/
+        │   ├── MagicWine
+        │   └── magicwine-cli
         └── Resources/
             ├── AppIcon.icns
             ├── LICENSE
             ├── THIRD_PARTY_NOTICES.md
-            ├── MagicWine_MagicWineCore.bundle/
+            ├── MagicWine_MagicWineCore.bundle/   # pinned component payloads and notices
             └── MagicWine_MagicWine.bundle/
 ```
 
-Keep the core resource bundle beside the CLI when moving it. `Bundle.module` lookup and runtime installation need these resources; a standalone copied executable is incomplete. GUI artwork is a separate processed bundle. Core payloads use `.copy` in [Package.swift](../Package.swift), including compressed native Wine images to preserve their pinned bytes.
+`dist/magicwine` is a small generated wrapper that `exec`s `MagicWine.app/Contents/MacOS/magicwine-cli` (it follows symlinks to find the app beside it), so scripts and docs can keep calling `./dist/magicwine` without a second copy of the 195 MB resource bundle. The CLI lives in `Contents/MacOS` (not `Contents/Helpers`) deliberately: `Bundle.main` then resolves to the app, and SwiftPM's `Bundle.module` finds `Contents/Resources/MagicWine_MagicWineCore.bundle`; from `Helpers` it would not. Its name differs from `MagicWine` because the default filesystem is case-insensitive. Moving the app keeps the CLI working; copying only the CLI binary out of the app leaves it without its resources (runtime installation, graphics, and gamepad payloads need them). `swift build` binaries under `.build` have no app bundle and report a development version. GUI artwork is a separate processed bundle. Core payloads use `.copy` in [Package.swift](../Package.swift), including compressed native Wine images to preserve their pinned bytes.
 
 Source archives, original upstream packages, and notices are runtime/distribution inputs, not build debris. Do not remove them to reduce repository size. [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) explains MIT versus component-specific license boundaries.
 
@@ -112,7 +134,7 @@ Use an absolute trusted Wine executable with its matching adjacent `wineserver`.
 | `test-mouse-pointer.sh` | Both MinGW GCC cross-compilers; patched WoW64 Wine; graphical input | Enabled/disabled mouse-pointer behavior and classic/raw delivery |
 | `test-wine-proxy.sh` | Both MinGW GCC cross-compilers; WinHTTP runtime | Argument handling and real loopback PAC evaluation; optional host-disabled WPAD check |
 | `test-wine-proxy.sh --native` | Patched source, configured Wine build, Apple clang; Rosetta on ARM | Actual native helper with controlled proxy dictionaries, including ABI/policy boundaries |
-| `test-remote-presentation.sh` | Built CLI and adjacent bundle; matching Metal-capable Wine; MinGW C++; compatible GPU/session; discoverable local D3DMetal if selected | Foreign-window presentation, resize/reparent/lifetime, GPU readback, HUD off/on |
+| `test-remote-presentation.sh` | Packaged CLI (`dist/magicwine`); matching Metal-capable Wine; MinGW C++; compatible GPU/session; discoverable local D3DMetal if selected | Foreign-window presentation, resize/reparent/lifetime, GPU readback, HUD off/on |
 | `test-msync.sh` | Python 3; both MinGW GCC cross-compilers; paired MSync-capable WoW64 Wine/server | Real waits, shared objects, mode agreement, and explicit off/on behavior |
 
 Exact invocations from the checkout:

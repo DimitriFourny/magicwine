@@ -29,6 +29,9 @@ jobs:
           # during checkout; the cache/pull steps below fetch them at most once
           # per distinct set of LFS objects, to conserve LFS bandwidth.
           lfs: false
+          # build-app.sh derives the version and build number from tags/commit count.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Compute LFS cache key
         id: lfs

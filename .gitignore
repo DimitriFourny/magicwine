@@ -11,3 +11,8 @@ xcuserdata/
 .env
 .env.*
 !.env.example
+
+# Recipe input caches (scripts/build-metal-wine.sh, build-wow64cpu.sh, build-dxmt.sh)
+/source-inputs/
+/inputs/
+/wine-development-inputs/
