@@ -106,7 +106,8 @@ struct BottleCommands: View {
         .keyboardShortcut(.return, modifiers: .command)
         .disabled(program == nil || !initialized || state.blocksLaunch)
         Button("Stop Windows Processes") { if let bottle { model.activity.stop(bottle) } }
-            .keyboardShortcut(".")
+            // Not ⌘., which macOS reserves for Cancel in sheets and dialogs.
+            .keyboardShortcut(".", modifiers: [.command, .shift])
             .disabled(bottle.map { !state.allowsStop(of: $0) } ?? true)
         Divider()
         Button("Show Bottle Logs…") { if let bottle { openWindow(id: BottleLogsView.windowID, value: bottle.id) } }

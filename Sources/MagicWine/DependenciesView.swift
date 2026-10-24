@@ -70,6 +70,16 @@ struct DependenciesView: View {
                 }
             }
         }
+        if let error = model.dependencies.statusErrors[bottle.id] {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Could not check installed dependencies", systemImage: "exclamationmark.triangle").font(.headline)
+                Text(error).font(.callout).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(WineTheme.danger.opacity(0.12)))
+        }
         if let error = model.dependencies.errors[bottle.id] {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Installation failed", systemImage: "exclamationmark.triangle").font(.headline)

@@ -8,7 +8,10 @@ import Observation
 final class DependenciesModel {
     private(set) var statuses: [UUID: [DependencyStatus]] = [:]
     private(set) var progress: [UUID: DependencyProgress] = [:]
+    /// The last installation failure; cleared when the next installation starts.
     private(set) var errors: [UUID: String] = [:]
+    /// The last failure to read the installed state; cleared by the next successful read.
+    private(set) var statusErrors: [UUID: String] = [:]
 
     @ObservationIgnored private let wine: WineRuntime
     @ObservationIgnored private let library: LibraryModel
@@ -27,8 +30,9 @@ final class DependenciesModel {
         Task {
             do {
                 statuses[bottle.id] = try await wine.dependencyStatus(in: bottle)
+                statusErrors[bottle.id] = nil
             } catch {
-                errors[bottle.id] = error.localizedDescription
+                statusErrors[bottle.id] = error.localizedDescription
             }
         }
     }

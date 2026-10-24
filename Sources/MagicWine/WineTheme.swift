@@ -114,14 +114,24 @@ struct WineButtonStyle: ButtonStyle {
 }
 
 struct WineCard<Content: View>: View {
-    let title: LocalizedStringKey
+    let title: Text
     let icon: String
     let trailing: String?
     @ViewBuilder let content: () -> Content
 
     init(title: LocalizedStringKey, icon: String, trailing: String? = nil,
          @ViewBuilder content: @escaping () -> Content) {
-        self.title = title
+        self.title = Text(title)
+        self.icon = icon
+        self.trailing = trailing
+        self.content = content
+    }
+
+    /// For titles already built at runtime (possibly localized, possibly containing user text
+    /// such as a program name), which must not be looked up as localization keys again.
+    init(verbatimTitle: String, icon: String, trailing: String? = nil,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.title = Text(verbatim: verbatimTitle)
         self.icon = icon
         self.trailing = trailing
         self.content = content
@@ -134,7 +144,7 @@ struct WineCard<Content: View>: View {
                     .font(WineTheme.Font.iconCard)
                     .foregroundStyle(WineTheme.muted)
                     .frame(width: 22)
-                Text(title).font(WineTheme.Font.heading)
+                title.font(WineTheme.Font.heading)
                 Spacer(minLength: 8)
                 if let trailing {
                     Text(trailing)

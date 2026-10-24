@@ -251,7 +251,7 @@ struct BottleDashboardView: View {
         }
 
         ForEach(activity.notices) { notice in
-            WineCard(title: LocalizedStringKey(notice.title), icon: "info.circle") {
+            WineCard(verbatimTitle: notice.title, icon: "info.circle") {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(notice.message)
                         .font(.callout)

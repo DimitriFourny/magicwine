@@ -63,7 +63,9 @@ private struct LibraryView: View {
     @State private var sheet: LibrarySheet?
     @State private var trashTarget: Bottle?
     @State private var notice: AppNotice?
-    @State private var pendingOpenURLs: [URL] = []
+    /// Files opened from Finder before the library finished loading, with whether Option was
+    /// held as each one opened (read then, not when the library finishes loading).
+    @State private var pendingOpenURLs: [(url: URL, preferringProgram: Bool)] = []
     /// Files opened from Finder that wait for the user to choose a bottle, one sheet at a time.
     @State private var openQueue: [OpenedFile] = []
     @State private var followUp: LibrarySheet?
@@ -117,10 +119,11 @@ private struct LibraryView: View {
         .focusedSceneValue(\.newBottle, WindowAction { presentNewBottle() })
         .environment(\.newBottle, WindowAction { presentNewBottle() })
         .onOpenURL { url in
+            let preferringProgram = NSEvent.modifierFlags.contains(.option)
             if model.library.isLoading {
-                pendingOpenURLs.append(url)
+                pendingOpenURLs.append((url, preferringProgram))
             } else {
-                enqueueOpen(url)
+                enqueueOpen(url, preferringProgram: preferringProgram)
             }
         }
         // Files opened from Finder go to an existing library window instead of a new one.
@@ -133,7 +136,7 @@ private struct LibraryView: View {
             guard !loading else { return }
             let urls = pendingOpenURLs
             pendingOpenURLs.removeAll()
-            for url in urls { enqueueOpen(url) }
+            for pending in urls { enqueueOpen(pending.url, preferringProgram: pending.preferringProgram) }
         }
         .onChange(of: model.notices.current?.id, initial: true) { claimNotice() }
         .onChange(of: activeState) { claimNotice() }
@@ -257,8 +260,8 @@ private struct LibraryView: View {
     }
 
     /// Holding Option while opening an EXE chooses Add as Program over Run Installer first.
-    private func enqueueOpen(_ url: URL) {
-        guard let file = model.openedFile(url, preferringProgram: NSEvent.modifierFlags.contains(.option)) else { return }
+    private func enqueueOpen(_ url: URL, preferringProgram: Bool) {
+        guard let file = model.openedFile(url, preferringProgram: preferringProgram) else { return }
         openQueue.append(file)
         presentNextOpen()
     }
@@ -325,7 +328,7 @@ private struct LibraryView: View {
                     Text("Standard uses Wine’s built-in graphics. Bundled DXVK translates Direct3D 9/10/11 through Vulkan/MoltenVK; bundled DXMT translates Direct3D 10/11 through Metal. Imported D3DMetal supports 64-bit Direct3D 11/12.")
                     Text("Wine includes MagicWine’s pinned, source-built driver for DXMT and D3DMetal. Standard is the default. Bundled DXMT needs Apple Silicon and macOS 15 or newer; D3DMetal uses your locally installed Apple libraries with the same managed Wine.")
                     Text("D3DMetal is not bundled or downloaded. MagicWine finds local libraries beside the bottle’s Wine or in CrossOver under Applications, and asks for a folder only when none are found. You remain responsible for the terms accompanying your libraries; experimental-backend consent does not accept their license.")
-                    Text("Components cannot be upgraded in place. Switch to Standard to restore the original files, then enable a backend again. Direct backend switches preserve the same originals.")
+                    Text("When a bottle uses an older bundled component, its graphics settings offer Update <backend> component, which installs the current component and switches the bottle’s graphics files in one step; the bottle’s Windows processes are stopped first. Components that are not recognized cannot be updated; switch the bottle to Standard first. Standard always restores the original Windows files, and direct backend switches preserve the same originals.")
                     Text("Changing graphics stops that bottle’s Windows processes.")
                     Text("Compatibility depends on the Windows program, Wine runtime, and graphics backend. DRM and anti-cheat compatibility are not guaranteed.")
                         .foregroundStyle(WineTheme.muted)

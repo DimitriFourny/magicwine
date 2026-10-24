@@ -52,7 +52,7 @@ struct OperationErrorCard: View {
     private var actions: [RecoveryAction] { error.actions.filter { $0.isAvailable(for: bottle) } }
 
     var body: some View {
-        WineCard(title: LocalizedStringKey(error.title), icon: "exclamationmark.triangle") {
+        WineCard(verbatimTitle: error.title, icon: "exclamationmark.triangle") {
             VStack(alignment: .leading, spacing: 12) {
                 Text(error.message)
                     .font(.callout)
