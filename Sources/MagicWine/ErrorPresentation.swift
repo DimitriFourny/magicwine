@@ -4,6 +4,8 @@ import MagicWineCore
 /// A failure as the app presents it: the message, surface-neutral guidance, the log that
 /// explains it, and what may fix it (`MagicWineError.recoveryActions`).
 struct PresentedError: Equatable {
+    /// The card's heading: what kind of failure this is.
+    let title: String
     let message: String
     let recoverySuggestion: String?
     let logURL: URL?
@@ -11,11 +13,13 @@ struct PresentedError: Equatable {
 
     init(_ error: any Error) {
         if let error = error as? MagicWineError {
+            title = if case .newerVersion = error { "Saved by a Newer MagicWine" } else { "Operation Failed" }
             message = error.errorDescription ?? error.localizedDescription
             recoverySuggestion = error.recoverySuggestion
             logURL = error.logURL
             actions = error.recoveryActions
         } else {
+            title = "Operation Failed"
             message = error.localizedDescription
             recoverySuggestion = nil
             logURL = nil
@@ -48,7 +52,7 @@ struct OperationErrorCard: View {
     private var actions: [RecoveryAction] { error.actions.filter { $0.isAvailable(for: bottle) } }
 
     var body: some View {
-        WineCard(title: "Operation Failed", icon: "exclamationmark.triangle") {
+        WineCard(title: error.title, icon: "exclamationmark.triangle") {
             VStack(alignment: .leading, spacing: 12) {
                 Text(error.message)
                     .font(.callout)

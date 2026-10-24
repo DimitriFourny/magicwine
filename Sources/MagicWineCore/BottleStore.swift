@@ -29,9 +29,7 @@ public actor BottleStore {
             let attributes = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard attributes.isDirectory == true, attributes.isSymbolicLink != true else { continue }
             let bottle = try await GraphicsPrefix.withLock(bottleDirectory: directory) {
-                let snapshot = try decoder.decode(Bottle.self, from: Data(contentsOf: directory.appendingPathComponent("bottle.json")))
-                guard snapshot.id == id else { throw MagicWineError.invalidBottle }
-                return try loadUnlocked(snapshot)
+                try loadUnlocked(id)
             }
             bottles.append(bottle)
         }
@@ -58,7 +56,7 @@ public actor BottleStore {
 
     public func save(_ bottle: Bottle) async throws {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            let current = try loadUnlocked(bottle, normalizePrograms: false)
+            let current = try loadUnlocked(bottle.id, normalizePrograms: false)
             guard bottle.graphics == current.graphics else {
                 throw MagicWineError.conflict("Graphics settings must be changed through WineRuntime.configureGraphics.")
             }
@@ -97,7 +95,7 @@ public actor BottleStore {
 
     public func delete(_ bottle: Bottle) async throws {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            _ = try loadUnlocked(bottle, normalizePrograms: false)
+            _ = try loadUnlocked(bottle.id, normalizePrograms: false)
             try FileManager.default.trashItem(at: directoryURL(for: bottle), resultingItemURL: nil)
         }
         // Logs belong to the bottle, but a leftover log never undoes a completed Trash.
@@ -106,7 +104,7 @@ public actor BottleStore {
 
     internal func current(_ bottle: Bottle) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            try loadUnlocked(bottle)
+            try loadUnlocked(bottle.id)
         }
     }
 
@@ -115,7 +113,7 @@ public actor BottleStore {
     /// pinned runtime another editor saved meanwhile are kept. Idempotent.
     internal func markInitialized(_ bottle: Bottle) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle)
+            var current = try loadUnlocked(bottle.id)
             guard !current.isInitialized else { return current }
             current.isInitialized = true
             try saveUnlocked(current)
@@ -126,7 +124,7 @@ public actor BottleStore {
     /// The runtime holds exclusive launch/lifetime leases and has verified Wine is idle.
     internal func setSynchronization(msyncEnabled: Bool, in bottle: Bottle) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle)
+            var current = try loadUnlocked(bottle.id)
             current.msyncEnabled = msyncEnabled
             try saveUnlocked(current)
             return current
@@ -136,7 +134,7 @@ public actor BottleStore {
     /// Only explicit, validated managed-runtime upgrades may replace the pinned descriptor.
     internal func setRuntime(_ runtime: RuntimeDescriptor, in bottle: Bottle) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle)
+            var current = try loadUnlocked(bottle.id)
             current.runtime = runtime
             try saveUnlocked(current)
             return current
@@ -150,7 +148,7 @@ public actor BottleStore {
                               componentUpdate: Bool = false) async throws -> Bottle {
         let directory = directoryURL(for: bottle)
         return try await GraphicsPrefix.withLock(bottleDirectory: directory) {
-            var current = try loadUnlocked(bottle)
+            var current = try loadUnlocked(bottle.id)
             guard current.isInitialized else {
                 throw MagicWineError.notInitialized("Set up this bottle before changing its graphics backend.")
             }
@@ -176,7 +174,7 @@ public actor BottleStore {
     /// cannot attach a HUD preference to a selection it never saw.
     internal func setGraphicsHUD(_ showHUD: Bool, in bottle: Bottle) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle)
+            var current = try loadUnlocked(bottle.id)
             guard current.graphics.backend == bottle.graphics.backend,
                   current.graphics.componentID == bottle.graphics.componentID else {
                 throw MagicWineError.conflict("This bottle's graphics backend changed before the HUD could be changed.")
@@ -200,7 +198,7 @@ public actor BottleStore {
     /// switches since, nothing is written.
     public func setCompatibility(_ options: CompatibilityOptions, in bottle: Bottle) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle)
+            var current = try loadUnlocked(bottle.id)
             guard current.compatibility == bottle.compatibility else {
                 throw MagicWineError.conflict("This bottle's compatibility settings were changed elsewhere.")
             }
@@ -215,7 +213,7 @@ public actor BottleStore {
     /// an earlier record of the same dependency is replaced.
     internal func recordDependency(_ record: InstalledDependency, in bottle: Bottle) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle)
+            var current = try loadUnlocked(bottle.id)
             current.dependencies.removeAll { $0.id == record.id }
             current.dependencies.append(record)
             try saveUnlocked(current)
@@ -225,7 +223,7 @@ public actor BottleStore {
 
     internal func displayNeedsUpdate(_ bottle: Bottle) async throws -> Bool {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            let current = try loadUnlocked(bottle)
+            let current = try loadUnlocked(bottle.id)
             return try BottleDisplay.needsUpdate(current.display, prefix: prefixURL(for: current))
         }
     }
@@ -233,7 +231,7 @@ public actor BottleStore {
     /// The runtime holds exclusive launch/lifetime leases and has waited for Wine to exit.
     internal func prepareDisplay(_ bottle: Bottle, configuration: DisplayConfiguration? = nil) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle)
+            var current = try loadUnlocked(bottle.id)
             if let configuration { current.display = configuration }
             let prefix = prefixURL(for: current)
             // Validate before retaining the original bytes for a failed metadata commit.
@@ -329,7 +327,7 @@ public actor BottleStore {
     private func updateLibraryMetadata(of programID: UUID, in bottle: Bottle, requireProgram: Bool,
                                        _ change: (inout WindowsProgram) -> Void) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle)
+            var current = try loadUnlocked(bottle.id)
             guard let index = current.programs.firstIndex(where: { $0.id == programID }) else {
                 guard !requireProgram else {
                     throw MagicWineError.conflict("This program is no longer saved in this bottle.")
@@ -404,8 +402,10 @@ public actor BottleStore {
         try encoder.encode(settings).write(to: paths.settingsURL, options: [.atomic])
     }
 
-    private func directoryURL(for bottle: Bottle) -> URL {
-        paths.bottlesDirectory.appendingPathComponent(bottle.id.uuidString, isDirectory: true)
+    private func directoryURL(for bottle: Bottle) -> URL { directoryURL(for: bottle.id) }
+
+    private func directoryURL(for id: UUID) -> URL {
+        paths.bottlesDirectory.appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
     private func validatedName(_ name: String) throws -> String {
@@ -414,8 +414,12 @@ public actor BottleStore {
         return trimmed
     }
 
-    private func validateOwnership(_ bottle: Bottle) throws {
-        let directory = directoryURL(for: bottle)
+    /// Reads bottle `id` under its lock: checks that its directory and metadata are its own,
+    /// decodes `bottle.json` once (refusing a newer format), and completes an interrupted
+    /// graphics transaction. Recovery never rewrites `bottle.json`, so the record decoded
+    /// before it is the one recovery kept.
+    private func loadUnlocked(_ id: UUID, normalizePrograms shouldNormalize: Bool = true) throws -> Bottle {
+        let directory = directoryURL(for: id)
         let attributes = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard attributes.isDirectory == true, attributes.isSymbolicLink != true,
               directory.resolvingSymlinksInPath().deletingLastPathComponent() == paths.bottlesDirectory.resolvingSymlinksInPath() else {
@@ -424,14 +428,9 @@ public actor BottleStore {
         let metadata = directory.appendingPathComponent("bottle.json")
         let metadataAttributes = try metadata.resourceValues(forKeys: [.isSymbolicLinkKey])
         guard metadataAttributes.isSymbolicLink != true else { throw MagicWineError.invalidBottle }
-        let current = try decoder.decode(Bottle.self, from: Data(contentsOf: metadata))
-        guard current.id == bottle.id else { throw MagicWineError.invalidBottle }
-    }
-
-    private func loadUnlocked(_ bottle: Bottle, normalizePrograms shouldNormalize: Bool = true) throws -> Bottle {
-        try validateOwnership(bottle)
-        try GraphicsPrefix.recover(bottleDirectory: directoryURL(for: bottle))
-        var current = try decoder.decode(Bottle.self, from: Data(contentsOf: directoryURL(for: bottle).appendingPathComponent("bottle.json")))
+        var current = try decoder.decode(Bottle.self, from: Data(contentsOf: metadata))
+        guard current.id == id else { throw MagicWineError.invalidBottle }
+        try GraphicsPrefix.recover(bottleDirectory: directory)
         if !current.hasDisplayConfiguration {
             current.display = try BottleDisplay.existingConfiguration(prefix: prefixURL(for: current)) ?? .init()
         }
@@ -461,7 +460,7 @@ public actor BottleStore {
     private func mutateCurrent(_ bottle: Bottle,
                                _ mutation: (inout Bottle, inout Set<WindowsShortcut.LaunchIdentity>) throws -> Void) async throws -> Bottle {
         try await GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
-            var current = try loadUnlocked(bottle, normalizePrograms: false)
+            var current = try loadUnlocked(bottle.id, normalizePrograms: false)
             var identities = normalizePrograms(in: &current)
             try mutation(&current, &identities)
             try saveUnlocked(current)

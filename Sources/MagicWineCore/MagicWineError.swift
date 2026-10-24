@@ -44,6 +44,9 @@ public enum MagicWineError: LocalizedError, Sendable {
     /// A refusal to follow links, adopt unexpected file types, or overwrite files
     /// MagicWine did not install.
     case unsafeFilesystem(String)
+    /// Saved data in a format newer than this build reads; it is left unchanged so no
+    /// field this build does not know is lost.
+    case newerVersion(String)
     case downloadFailed(String)
     /// Failures without a more specific kind (unexpected system errors, internal invariants).
     case setup(String)
@@ -60,6 +63,7 @@ public enum MagicWineError: LocalizedError, Sendable {
              .conflict(let message), .consentRequired(let message, _), .timedOut(let message, _),
              .operationFailed(let message, _, _), .runtimeIncompatible(let message, _), .componentInvalid(let message),
              .hostUnsupported(let message), .integrityFailure(let message), .unsafeFilesystem(let message),
+             .newerVersion(let message),
              .downloadFailed(let message), .setup(let message):
             message
         }
@@ -94,6 +98,7 @@ public enum MagicWineError: LocalizedError, Sendable {
 
     public var recoverySuggestion: String? {
         if case .busy(_, .operationInProgress, _) = self { return "Wait for it to finish, then try again." }
+        if case .newerVersion = self { return "Use the newer version of MagicWine that saved it; this version changes nothing in it." }
         let suggestions = recoveryActions.compactMap(\.suggestion)
         return suggestions.isEmpty ? nil : suggestions.joined(separator: " ")
     }

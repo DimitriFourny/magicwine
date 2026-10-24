@@ -169,30 +169,71 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
         self.dependencies = dependencies
     }
 
+    /// The `bottle.json` format this build writes. Records without `schemaVersion` are
+    /// `legacySchemaVersion`; a record of a newer version is refused (`newerVersion`)
+    /// rather than read and later saved without the fields this build does not know.
+    public static let currentSchemaVersion = 1
+    public static let legacySchemaVersion = 0
+
     private enum CodingKeys: String, CodingKey {
+        case schemaVersion
         case id, name, createdAt, runtime, isInitialized, programs, graphics, msyncEnabled, compatibility, dependencies
         case displayPreference = "display"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let version = container.contains(.schemaVersion)
+            ? try container.decode(Int.self, forKey: .schemaVersion) : Self.legacySchemaVersion
+        guard version <= Self.currentSchemaVersion else {
+            throw MagicWineError.newerVersion("This bottle was saved by a newer version of MagicWine (bottle format \(version); this version reads up to \(Self.currentSchemaVersion)).")
+        }
+        guard version >= Self.legacySchemaVersion else {
+            throw DecodingError.dataCorruptedError(forKey: .schemaVersion, in: container,
+                                                   debugDescription: "Invalid bottle format \(version).")
+        }
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         runtime = try container.decode(RuntimeDescriptor.self, forKey: .runtime)
         isInitialized = try container.decode(Bool.self, forKey: .isInitialized)
+        // A program's launch options, play history (`lastLaunchedAt`, `playTime`) and
+        // favorite flag are omitted while empty in every version, so in legacy and current
+        // records alike a missing one means none, zero, or not a favorite (`WindowsProgram`).
         programs = try container.decode([WindowsProgram].self, forKey: .programs)
-        if container.contains(.graphics) {
-            graphics = try container.decode(GraphicsConfiguration.self, forKey: .graphics)
-        } else {
-            graphics = .init()
+        // Migration of legacy (version 0) records, which predate these fields: a missing
+        // field takes what the record meant before it existed. Version 1 writes all of them
+        // (display once one is chosen), so they are missing only from legacy records.
+        // A present field must be valid (`null` too, except for the last two).
+        func migrated<T: Decodable>(_ key: CodingKeys, _ legacy: T) throws -> T {
+            container.contains(key) ? try container.decode(T.self, forKey: key) : legacy
         }
+        // Standard graphics, MSync on (the managed runtime's default).
+        graphics = try migrated(.graphics, GraphicsConfiguration())
+        msyncEnabled = try migrated(.msyncEnabled, true)
+        // No display yet: `BottleStore` adopts the prefix registry's (`hasDisplayConfiguration`).
         displayPreference = container.contains(.displayPreference)
             ? try container.decode(DisplayConfiguration.self, forKey: .displayPreference) : nil
-        msyncEnabled = container.contains(.msyncEnabled)
-            ? try container.decode(Bool.self, forKey: .msyncEnabled) : true
+        // Default launch switches and no recorded dependencies.
         compatibility = try container.decodeIfPresent(CompatibilityOptions.self, forKey: .compatibility) ?? .init()
         dependencies = try container.decodeIfPresent([InstalledDependency].self, forKey: .dependencies) ?? []
+    }
+
+    /// Always the current format; a display not chosen yet stays absent.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Self.currentSchemaVersion, forKey: .schemaVersion)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(runtime, forKey: .runtime)
+        try container.encode(isInitialized, forKey: .isInitialized)
+        try container.encode(programs, forKey: .programs)
+        try container.encode(graphics, forKey: .graphics)
+        try container.encode(msyncEnabled, forKey: .msyncEnabled)
+        try container.encode(compatibility, forKey: .compatibility)
+        try container.encode(dependencies, forKey: .dependencies)
+        try container.encodeIfPresent(displayPreference, forKey: .displayPreference)
     }
 }
 
