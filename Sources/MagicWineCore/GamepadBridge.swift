@@ -192,6 +192,9 @@ enum GamepadBridge {
     static let licenseName = "LICENSE-MAGICWINE-GAMEPAD.txt"
     static let dllNames = ["xinput1_1", "xinput1_2", "xinput1_3", "xinput1_4", "xinput9_1_0"]
     static var overrides: String { dllNames.joined(separator: ",") + "=n,b" }
+    /// Used when the bridge is skipped: a deterministic Wine builtin load order for
+    /// every managed name, regardless of which DLL bytes the prefix currently holds.
+    static var builtinOverrides: String { dllNames.joined(separator: ",") + "=b" }
 
     // Independently pinned outputs of scripts/build-gamepad-bridge.sh (MinGW GCC 16.2.0).
     private static let bundledI686SHA256 = "46876f2461034d5a7124738f3cc75fdcfc3720d529f0cccb6e96159b685f22ef"

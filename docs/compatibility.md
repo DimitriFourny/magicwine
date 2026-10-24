@@ -113,7 +113,7 @@ Production preparation in [RosettaCPUCompatibility.swift](../Sources/MagicWineCo
 
 For an eligible owned prefix, the installer verifies the bundled DLL, source, and license; retains the original and matching materials under `runtime-compatibility/wow64cpu-wine11.0-magicwine.1/`; and atomically replaces only the prefix's `system32/wow64cpu.dll`. An already managed DLL without its verified original backup is an error. Shared runtime files stay unchanged.
 
-[WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift) invokes this during initialized non-server launch preparation under the prefix lock, then adds `wow64cpu=n` only when applicable. It does not persist a registry-wide override.
+[WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift) invokes this during initialized non-server launch preparation under the prefix lock, then adds `wow64cpu=n` only when applicable. It does not persist a registry-wide override. The repair is optional for a launch: if it refuses (custom prefix DLL, damaged backup, missing bundled resources), the program still starts with no `wow64cpu` override, so Wine's builtin module loads, and the user receives a warning when the process starts. Some 32-bit programs can then crash under Rosetta.
 
 ## App-level launch corrections
 

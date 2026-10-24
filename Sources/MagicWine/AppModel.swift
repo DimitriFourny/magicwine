@@ -13,6 +13,7 @@ struct BottleActivity {
     var graphicsProgress: GraphicsSetupProgress?
     var graphicsSetupID: UUID?
     var runningLaunches: Set<UUID> = []
+    var notices: [BottleNotice] = []
     var hasRunningPrograms: Bool { !runningLaunches.isEmpty }
 }
 
@@ -390,7 +391,15 @@ final class AppModel: ObservableObject {
         activities[bottle.id] = state
         Task {
             do {
-                let result = try await wine.launch(program, in: bottle)
+                let result = try await wine.launch(program, in: bottle) { start in
+                    // Steam or a game can run for hours; warn as soon as it starts.
+                    guard !start.warnings.isEmpty else { return }
+                    Task { @MainActor in
+                        self.recordNotice(BottleNotice(
+                            title: "\(program.name) started with reduced compatibility",
+                            message: start.warnings.joined(separator: "\n\n"), logURL: start.logURL), for: bottle.id)
+                    }
+                }
                 recordLog(result.logURL, for: bottle.id)
             } catch {
                 recordError(error, for: bottle.id)
@@ -400,6 +409,24 @@ final class AppModel: ObservableObject {
             latest.runningLaunches.remove(launchID)
             activities[bottle.id] = latest
         }
+    }
+
+    func dismissNotice(_ id: UUID, for bottle: Bottle) {
+        guard var state = activities[bottle.id] else { return }
+        state.notices.removeAll { $0.id == id }
+        activities[bottle.id] = state
+    }
+
+    func revealLog(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func recordNotice(_ notice: BottleNotice, for id: UUID) {
+        guard bottles.contains(where: { $0.id == id }) else { return }
+        var state = activities[id] ?? BottleActivity()
+        // Keep the dashboard compact when a launcher is reopened repeatedly.
+        state.notices = Array((state.notices + [notice]).suffix(4))
+        activities[id] = state
     }
 
     func configure(_ bottle: Bottle) {
@@ -646,4 +673,12 @@ final class AppModel: ObservableObject {
             }
         }
     }
+}
+
+/// A dismissible, non-error status for one bottle, tied to one specific process log.
+struct BottleNotice: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let logURL: URL
 }

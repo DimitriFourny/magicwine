@@ -93,7 +93,11 @@ The installer runs under the prefix lock and preflights every destination before
 Bottles/<UUID>/runtime-compatibility/magicwine-xinput-v1/
 ```
 
-The backup contains `originals.json`, per-architecture originals, corresponding source, and the license. A missing/corrupt backup is not repaired by trusting the current DLL. Unknown native DLLs or inconsistent originals stop preparation rather than being overwritten.
+The backup contains `originals.json`, per-architecture originals, corresponding source, and the license. A missing/corrupt backup is not repaired by trusting the current DLL. Unknown native DLLs or inconsistent originals stop bridge preparation rather than being overwritten.
+
+Stopping bridge preparation does not stop the launch. The game starts without MagicWine's bridge, with Wine's builtin XInput forced for all five managed names (`=b`, which also bypasses application-local copies of those DLLs for that launch) and without `MAGICWINE_GAMEPAD_STATE`; saved profiles then do not apply. The same fallback is used when the controller service itself fails, for example on a malformed `Gamepads/profiles.json`, and in that case the prefix DLLs are not inspected or changed. The reason is shown as a warning when the program starts (dashboard notice, CLI stderr, and the top of the process log); see [runtime lifecycle](runtime-lifecycle.md#launch-preparation-and-ownership-handoff).
+
+The final per-DLL renames run only after every destination and the backup are revalidated. If one of those renames failed partway, the prefix would hold a mix of bridge and original DLLs with a complete backup; the next launch recognizes the installed bridge files and completes the set, and the forced builtin order keeps that launch deterministic.
 
 There is a deliberate exception for independently hashed Microsoft June 2010 XInput redistributables: those exact native DLLs are preserved, including if an installer replaces a managed bridge later. They use Microsoft's implementation, not MagicWine's profiles. Version strings and receipt claims do not establish this exception; exact architecture/name-specific hashes do.
 

@@ -103,7 +103,7 @@ The native bottle's **Reveal Logs** action opens the library logs. For an isolat
 | `Bottles/<UUID>/graphics/` | Active originals, transaction/recovery state, and renderer caches |
 | `Bottles/<UUID>/runtime-compatibility/` | CPU/XInput original backups and matching source/notices |
 
-Process logs start with the command/arguments; the complete environment is not logged. File modes restrict ordinary access but do not prevent secrets or personal paths appearing in application output. CLI errors use exit status 1 and print a diagnostic; that is not necessarily the Windows child's numeric exit code.
+Process logs start with the command/arguments, followed by any `Warning:` lines for launch integrations that were skipped (controller bridge or Rosetta CPU repair); the complete environment is not logged. File modes restrict ordinary access but do not prevent secrets or personal paths appearing in application output. CLI errors use exit status 1 and print a diagnostic; that is not necessarily the Windows child's numeric exit code.
 
 The presence of a backend log or cache directory does not prove the game reached a rendered frame. D3DMetal does not get the same dedicated backend log path from this implementation.
 

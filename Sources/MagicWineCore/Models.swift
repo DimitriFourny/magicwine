@@ -118,6 +118,20 @@ public struct OperationResult: Sendable {
     }
 }
 
+/// Delivered once, as soon as a Windows program's process has started; a game or
+/// launcher can then run for hours before its `OperationResult` arrives.
+public struct LaunchStart: Sendable {
+    public let logURL: URL
+    /// Optional compatibility integrations skipped for this launch. The program
+    /// still runs; each warning is also written at the top of its log.
+    public let warnings: [String]
+
+    public init(logURL: URL, warnings: [String]) {
+        self.logURL = logURL
+        self.warnings = warnings
+    }
+}
+
 public struct AppSettings: Codable, Sendable {
     public var customWinePath: String?
     public var preferredRuntimePath: String?

@@ -154,12 +154,16 @@ public actor WineRuntime {
                                  directory: installer.deletingLastPathComponent(), timeout: nil)
     }
 
-    public func launch(_ program: WindowsProgram, in bottle: Bottle) async throws -> OperationResult {
+    /// `onStart` runs once the program's process has started (for LNK/URL, once
+    /// `start /unix` has), with any skipped-integration warnings and its log.
+    public func launch(_ program: WindowsProgram, in bottle: Bottle,
+                       onStart: (@Sendable (LaunchStart) -> Void)? = nil) async throws -> OperationResult {
         let executable = try windowsFile(URL(fileURLWithPath: program.executablePath), extensions: ["exe", "lnk", "url"])
         let isShortcut = ["lnk", "url"].contains(executable.pathExtension.lowercased())
         let arguments = isShortcut ? ["start", "/unix", executable.path] : [executable.path]
         let result = try await execute(arguments: arguments, bottle: bottle,
-                                       directory: executable.deletingLastPathComponent(), timeout: nil)
+                                       directory: executable.deletingLastPathComponent(), timeout: nil,
+                                       onStart: onStart)
         if isShortcut {
             // ShellExecute launches shortcuts asynchronously. Observe the prefix's
             // server lifetime instead of start /wait's unreliable shortcut handle.
@@ -211,9 +215,9 @@ public actor WineRuntime {
         return result
     }
 
-    public func run(arguments: [String], in bottle: Bottle,
-                    timeout: TimeInterval? = nil) async throws -> OperationResult {
-        try await execute(arguments: arguments, bottle: bottle, directory: nil, timeout: timeout)
+    public func run(arguments: [String], in bottle: Bottle, timeout: TimeInterval? = nil,
+                    onStart: (@Sendable (LaunchStart) -> Void)? = nil) async throws -> OperationResult {
+        try await execute(arguments: arguments, bottle: bottle, directory: nil, timeout: timeout, onStart: onStart)
     }
 
     public func configureSynchronization(msyncEnabled: Bool, in bottle: Bottle) async throws -> Bottle {
@@ -388,7 +392,8 @@ public actor WineRuntime {
     }
 
     private func execute(arguments: [String], bottle: Bottle, directory: URL?, timeout: TimeInterval?,
-                         server: Bool = false, tracked: Bool = true, idleProbe: Bool = false) async throws -> OperationResult {
+                         server: Bool = false, tracked: Bool = true, idleProbe: Bool = false,
+                         onStart: (@Sendable (LaunchStart) -> Void)? = nil) async throws -> OperationResult {
         guard server || !settingsChanging.contains(bottle.id) else {
             throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
         }
@@ -455,23 +460,29 @@ public actor WineRuntime {
             }
         }
         var processEnvironment = environment(executable: wine, prefix: prefix, msyncEnabled: current.msyncEnabled)
+        var warnings: [String] = []
         if !server, current.isInitialized {
-            let gamepadEnvironment = try await GamepadService.shared.prepare(paths: paths)
+            let gamepad: Result<[String: String], any Error>
+            do { gamepad = .success(try await GamepadService.shared.prepare(paths: paths)) }
+            catch { gamepad = .failure(error) }
             // Main-actor discovery suspends this actor. Honor Stop before changing
             // prefix DLLs or spawning a process after that handoff.
             try Task.checkCancellation()
             if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
             let directory = prefix.deletingLastPathComponent()
-            let repaired = try GraphicsPrefix.withLock(bottleDirectory: directory) {
-                try RosettaCPUCompatibility.prepare(runtime: current.runtime, prefix: prefix,
-                                                     bottleDirectory: directory)
-            }
-            if repaired { processEnvironment["WINEDLLOVERRIDES", default: ""] += ";wow64cpu=n" }
-            let gamepadOverrides = try GraphicsPrefix.withLock(bottleDirectory: directory) {
-                try GamepadBridge.prepare(prefix: prefix, bottleDirectory: directory)
-            }
-            processEnvironment["WINEDLLOVERRIDES", default: ""] += ";" + gamepadOverrides
-            processEnvironment.merge(gamepadEnvironment) { _, gamepadValue in gamepadValue }
+            let integrations = try Self.prepareIntegrations(gamepad: gamepad, rosetta: {
+                try GraphicsPrefix.withLock(bottleDirectory: directory) {
+                    try RosettaCPUCompatibility.prepare(runtime: current.runtime, prefix: prefix,
+                                                         bottleDirectory: directory)
+                }
+            }, bridge: {
+                try GraphicsPrefix.withLock(bottleDirectory: directory) {
+                    try GamepadBridge.prepare(prefix: prefix, bottleDirectory: directory)
+                }
+            })
+            for override in integrations.overrides { processEnvironment["WINEDLLOVERRIDES", default: ""] += ";" + override }
+            processEnvironment.merge(integrations.environment) { _, gamepadValue in gamepadValue }
+            warnings = integrations.warnings
         }
         if !server, current.graphics.backend != .standard {
             let graphics = try prepareGraphicsLaunch(for: current, prefix: prefix, base: processEnvironment)
@@ -479,9 +490,10 @@ public actor WineRuntime {
             processEnvironment = graphics.environment
         }
         let id = UUID()
+        let log = logURL(name: "\(bottle.id.uuidString)-\(server ? "wineserver" : "wine")")
         let operation = ProcessOperation(executable: executable, arguments: arguments,
             environment: processEnvironment, directory: directory ?? prefix,
-            logURL: logURL(name: "\(bottle.id.uuidString)-\(server ? "wineserver" : "wine")"), timeout: timeout)
+            logURL: log, timeout: timeout, warnings: warnings)
         if tracked { active[bottle.id, default: [:]][id] = operation }
         defer {
             if tracked {
@@ -489,8 +501,13 @@ public actor WineRuntime {
                 if active[bottle.id]?.isEmpty == true { active[bottle.id] = nil }
             }
         }
-        do { return try await operation.run(onStart: { launch?.release() }) }
-        catch is CancellationError {
+        let started = LaunchStart(logURL: log, warnings: warnings)
+        do {
+            return try await operation.run(onStart: {
+                launch?.release()
+                onStart?(started)
+            })
+        } catch is CancellationError {
             if tracked { await cleanup(bottle) }
             throw CancellationError()
         } catch ProcessOperation.Interrupted.timedOut(let log) {
@@ -500,6 +517,39 @@ public actor WineRuntime {
             }
             throw MagicWineError.setup("Wine operation timed out. Log: \(log.path)")
         }
+    }
+
+    /// Launch-time compatibility integrations that must never prevent a program from
+    /// starting. A failed step skips only its own component, with a deterministic load
+    /// order and a warning; cancellation and Stop still propagate. Both prefix steps
+    /// validate everything before mutating and publish only through atomic renames.
+    internal static func prepareIntegrations(gamepad: Result<[String: String], any Error>,
+                                             rosetta: () throws -> Bool,
+                                             bridge: () throws -> String) throws -> LaunchIntegrations {
+        var result = LaunchIntegrations()
+        do {
+            if try rosetta() { result.overrides.append("wow64cpu=n") }
+        } catch let error where !isInterruption(error) {
+            // Without an override Wine loads its builtin system CPU module.
+            result.warnings.append("Rosetta CPU compatibility was skipped for this launch: \(error.localizedDescription) Wine's builtin wow64cpu.dll is used instead; some 32-bit programs may crash under Rosetta.")
+        }
+        do {
+            // A controller service failure also skips the bridge so the prefix is not
+            // changed for a component that could not run.
+            let environment = try gamepad.get()
+            result.overrides.append(try bridge())
+            result.environment = environment
+        } catch let error where !isInterruption(error) {
+            result.overrides.append(GamepadBridge.builtinOverrides)
+            result.warnings.append("MagicWine controller support was skipped for this launch: \(error.localizedDescription) Wine's builtin XInput is used instead, so saved controller profiles do not apply.")
+        }
+        return result
+    }
+
+    private static func isInterruption(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        if case .stopped? = error as? MagicWineError { return true }
+        return false
     }
 
     private func pendingStop(_ bottle: Bottle) throws -> MagicWineError {
@@ -716,4 +766,11 @@ public actor WineRuntime {
     private func logURL(name: String) -> URL {
         paths.logsDirectory.appendingPathComponent("\(name)-\(UUID().uuidString).log")
     }
+}
+
+/// Process-local result of `WineRuntime.prepareIntegrations`, appended in order.
+internal struct LaunchIntegrations: Sendable {
+    var overrides: [String] = []
+    var environment: [String: String] = [:]
+    var warnings: [String] = []
 }

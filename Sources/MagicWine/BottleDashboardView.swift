@@ -218,6 +218,23 @@ struct BottleDashboardView: View {
             }
         }
 
+        ForEach(activity.notices) { notice in
+            WineCard(title: notice.title, icon: "info.circle") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(notice.message)
+                        .font(.callout)
+                        .foregroundStyle(WineTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    HStack(spacing: 9) {
+                        Button("Reveal Log") { model.revealLog(notice.logURL) }
+                        Button("Dismiss") { model.dismissNotice(notice.id, for: currentBottle) }
+                    }
+                    .buttonStyle(WineButtonStyle())
+                }
+            }
+        }
+
         if !currentBottle.isInitialized {
             WineCard(title: "Finish Bottle Setup", icon: "shippingbox") {
                 VStack(alignment: .leading, spacing: 10) {

@@ -85,7 +85,7 @@ struct MagicWineCLI {
                 guard rest.count == 1, let id = UUID(uuidString: rest[0]), let program = bottle.programs.first(where: { $0.id == id }) else {
                     throw argumentError("launch <bottle-UUID> <program-UUID> (see apps)")
                 }
-                print("Log: \(try await runtime.launch(program, in: bottle).logURL.path)")
+                print("Log: \(try await runtime.launch(program, in: bottle, onStart: printWarnings).logURL.path)")
             case "stop": print("Log: \(try await runtime.stop(bottle).logURL.path)")
             case "configure": print("Log: \(try await runtime.configure(bottle).logURL.path)")
             case "synchronization":
@@ -145,7 +145,7 @@ struct MagicWineCLI {
                 print("\(updated.graphics.backend.rawValue)\t\(updated.graphics.componentID ?? "Wine default")\tHUD \(updated.graphics.showHUD ? "on" : "off")")
             case "exec":
                 guard !rest.isEmpty else { throw argumentError("exec <bottle-UUID> <wine-arguments…>") }
-                let result = try await runtime.run(arguments: rest, in: bottle)
+                let result = try await runtime.run(arguments: rest, in: bottle, onStart: printWarnings)
                 print(try String(contentsOf: result.logURL, encoding: .utf8))
             default: break
             }
@@ -162,6 +162,13 @@ struct MagicWineCLI {
 
     private static func printPrograms(_ bottle: Bottle) {
         for program in bottle.programs { print("\(program.id)\t\(program.name)\t\(program.executablePath)") }
+    }
+
+    /// Called as soon as Wine starts; a long-running program can exit much later.
+    private static let printWarnings: @Sendable (LaunchStart) -> Void = { start in
+        for warning in start.warnings {
+            FileHandle.standardError.write(Data("warning: \(warning)\n".utf8))
+        }
     }
 
     private static func synchronizationDescription(_ bottle: Bottle, runtime: WineRuntime) -> String {

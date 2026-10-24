@@ -8,6 +8,7 @@ final class ProcessOperation: @unchecked Sendable {
     private let lock = NSLock()
     private let logURL: URL
     private let timeout: TimeInterval?
+    private let warnings: [String]
     private var continuation: CheckedContinuation<OperationResult, any Error>?
     private var output: FileHandle?
     private var timer: DispatchWorkItem?
@@ -15,9 +16,10 @@ final class ProcessOperation: @unchecked Sendable {
     private var finished = false
 
     init(executable: URL, arguments: [String], environment: [String: String],
-         directory: URL?, logURL: URL, timeout: TimeInterval?) {
+         directory: URL?, logURL: URL, timeout: TimeInterval?, warnings: [String] = []) {
         self.logURL = logURL
         self.timeout = timeout
+        self.warnings = warnings
         process.executableURL = executable
         process.arguments = arguments
         process.environment = environment
@@ -51,7 +53,8 @@ final class ProcessOperation: @unchecked Sendable {
             output = handle
             let command = ([process.executableURL?.path ?? ""] + (process.arguments ?? []))
                 .map { String(reflecting: $0) }.joined(separator: " ")
-            try handle.write(contentsOf: Data(("Command: \(command)\n\n").utf8))
+            let notes = warnings.map { "Warning: \($0)\n" }.joined()
+            try handle.write(contentsOf: Data(("Command: \(command)\n\(notes)\n").utf8))
             process.standardOutput = handle
             process.standardError = handle
             process.standardInput = FileHandle.nullDevice
