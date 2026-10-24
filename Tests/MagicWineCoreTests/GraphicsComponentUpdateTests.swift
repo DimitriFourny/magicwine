@@ -230,9 +230,12 @@ struct GraphicsComponentUpdateTests {
         defer { fixture.remove() }
         let metadata = try Data(contentsOf: fixture.metadata)
 
-        await #expect(throws: MagicWineError.self) {
+        let refusal = try #require(await thrownError {
             _ = try await fixture.wine.updateGraphicsComponent(in: fixture.bottle, acceptExperimental: true)
-        }
+        })
+        // Only restoring Standard applies: the unknown component has no update.
+        guard case .componentInvalid = refusal else { Issue.record("Unexpected error: \(refusal)"); return }
+        #expect(refusal.recoveryActions.filter { $0.isAvailable(for: fixture.bottle) } == [.restoreStandardGraphics])
         await #expect(throws: MagicWineError.self) {
             _ = try await fixture.wine.configureGraphics(.dxvk, in: fixture.bottle, acceptExperimental: true)
         }

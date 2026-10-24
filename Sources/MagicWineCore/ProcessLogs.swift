@@ -217,7 +217,7 @@ final class ProcessLogFile: @unchecked Sendable {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var status = stat()
         guard lstat(directory.path, &status) == 0, status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
-            throw MagicWineError.setup("The log folder must be an ordinary folder, not a symbolic link: \(directory.path)")
+            throw MagicWineError.unsafeFilesystem("The log folder must be an ordinary folder, not a symbolic link: \(directory.path)")
         }
         let base = ProcessLogs.name(operation: operation, detail: detail, date: Date())
         for attempt in 1...100 {

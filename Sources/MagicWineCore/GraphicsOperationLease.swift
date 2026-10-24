@@ -15,14 +15,14 @@ final class GraphicsOperationLease: @unchecked Sendable {
         try Task.checkCancellation()
         let storage = try paths.bottlesDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard storage.isDirectory == true, storage.isSymbolicLink != true else {
-            throw MagicWineError.setup("The bottle storage directory must be an ordinary directory, not a symbolic link.")
+            throw MagicWineError.unsafeFilesystem("The bottle storage directory must be an ordinary directory, not a symbolic link.")
         }
         let directory = paths.bottlesDirectory.appendingPathComponent(".graphics-locks", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                attributes: [.posixPermissions: 0o700])
         let attributes = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard attributes.isDirectory == true, attributes.isSymbolicLink != true else {
-            throw MagicWineError.setup("The bottle graphics lock directory must be an ordinary directory, not a symbolic link.")
+            throw MagicWineError.unsafeFilesystem("The bottle graphics lock directory must be an ordinary directory, not a symbolic link.")
         }
         let file = directory.appendingPathComponent("\(bottleID.uuidString)-\(kind.rawValue).lock")
         let descriptor = open(file.path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, mode_t(S_IRUSR | S_IWUSR))
@@ -34,7 +34,7 @@ final class GraphicsOperationLease: @unchecked Sendable {
             var status = stat()
             guard fstat(descriptor, &status) == 0,
                   status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), status.st_nlink == 1 else {
-                throw MagicWineError.setup("The graphics operation lock must be a regular file without hard links.")
+                throw MagicWineError.unsafeFilesystem("The graphics operation lock must be a regular file without hard links.")
             }
             let deadline = ContinuousClock.now.advanced(by: timeout)
             while true {
@@ -47,7 +47,12 @@ final class GraphicsOperationLease: @unchecked Sendable {
                     throw MagicWineError.setup("Cannot acquire the graphics operation lock: \(String(cString: strerror(errno)))")
                 }
                 guard ContinuousClock.now < deadline else {
-                    throw MagicWineError.setup("Another MagicWine process is still launching or configuring this bottle. Wait for that operation to finish, then retry; no graphics files were changed by this operation.")
+                    // An exclusive lifetime lease waits for running Windows programs; every
+                    // other wait is for another launch or configuration.
+                    if kind == .lifetime && exclusive {
+                        throw MagicWineError.busy("Windows programs are still running in this bottle; no graphics files were changed by this operation.", reason: .programsRunning)
+                    }
+                    throw MagicWineError.busy("Another MagicWine process is still launching or configuring this bottle; no graphics files were changed by this operation.", reason: .operationInProgress)
                 }
                 // Nonblocking flock plus an async delay avoids parking a Swift executor.
                 try await Task.sleep(for: .milliseconds(100))

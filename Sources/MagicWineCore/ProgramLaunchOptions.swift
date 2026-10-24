@@ -41,22 +41,22 @@ extension WindowsProgram {
     public func validateLaunchOptions() throws {
         guard arguments.count <= Self.maximumArguments,
               arguments.allSatisfy({ !$0.contains("\0") && $0.utf8.count <= 32_768 }) else {
-            throw MagicWineError.setup("Use at most \(Self.maximumArguments) arguments without NUL characters.")
+            throw MagicWineError.invalidInput("Use at most \(Self.maximumArguments) arguments without NUL characters.")
         }
         if !supportsArgumentsAndDirectory, !arguments.isEmpty || workingDirectory != nil {
-            throw MagicWineError.setup("Arguments and a working directory apply only to EXE programs. Wine starts LNK and URL shortcuts with their own arguments and folder.")
+            throw MagicWineError.invalidInput("Arguments and a working directory apply only to EXE programs. Wine starts LNK and URL shortcuts with their own arguments and folder.")
         }
         if let workingDirectory {
             guard workingDirectory.hasPrefix("/"), !workingDirectory.contains("\0") else {
-                throw MagicWineError.setup("The working directory must be an absolute Mac folder path.")
+                throw MagicWineError.invalidInput("The working directory must be an absolute Mac folder path.")
             }
         }
         guard environment.count <= Self.maximumEnvironmentVariables else {
-            throw MagicWineError.setup("Use at most \(Self.maximumEnvironmentVariables) environment variables.")
+            throw MagicWineError.invalidInput("Use at most \(Self.maximumEnvironmentVariables) environment variables.")
         }
         for (key, value) in environment {
             if let problem = Self.environmentKeyProblem(key) ?? Self.environmentValueProblem(value) {
-                throw MagicWineError.setup("Environment variable \(key): \(problem)")
+                throw MagicWineError.invalidInput("Environment variable \(key): \(problem)")
             }
         }
     }
@@ -66,7 +66,7 @@ extension WindowsProgram {
         guard let workingDirectory else { return nil }
         var directory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: workingDirectory, isDirectory: &directory), directory.boolValue else {
-            throw MagicWineError.setup("The working directory for \(name) is missing or not a folder: \(workingDirectory). Edit the program to choose another folder or reset it.")
+            throw MagicWineError.invalidInput("The working directory for \(name) is missing or not a folder: \(workingDirectory). Edit the program to choose another folder or reset it.")
         }
         return URL(fileURLWithPath: workingDirectory, isDirectory: true).standardizedFileURL
     }
@@ -106,7 +106,7 @@ extension WindowsProgram {
                 }
             }
         }
-        guard quote == nil else { throw MagicWineError.setup("Close the quote in the arguments.") }
+        guard quote == nil else { throw MagicWineError.invalidInput("Close the quote in the arguments.") }
         if hasToken { result.append(token) }
         return result
     }

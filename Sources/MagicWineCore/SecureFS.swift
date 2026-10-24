@@ -4,13 +4,18 @@ import Foundation
 
 /// Shared no-follow filesystem checks for installers and compatibility code.
 /// Every path is inspected with `lstat` or opened with `O_NOFOLLOW`; symbolic
-/// links are never traversed. Size limits, hard-link tolerance and the error
+/// links are never traversed. Size limits, hard-link tolerance and the message
 /// prefix stay explicit at each call site, so components keep their own policy.
 struct SecureFS: Sendable {
-    let failure: @Sendable (String) -> MagicWineError
+    let prefix: String
 
-    init(_ failure: @escaping @Sendable (String) -> MagicWineError) { self.failure = failure }
-    init(prefix: String) { self.init { .setup(prefix + $0) } }
+    init(prefix: String) { self.prefix = prefix }
+
+    /// A filesystem safety refusal: links, unexpected file types or occupied destinations.
+    func failure(_ message: String) -> MagicWineError { .unsafeFilesystem(prefix + message) }
+
+    /// Content that is malformed, oversized, changed while read, or does not match its pin.
+    func integrity(_ message: String) -> MagicWineError { .integrityFailure(prefix + message) }
 
     /// Captures `errno` immediately: call before any other system call.
     func posixFailure(_ operation: String, _ url: URL) -> MagicWineError {
@@ -99,7 +104,7 @@ struct SecureFS: Sendable {
             try Task.checkCancellation()
             count += chunk.count
             guard count <= maximum else {
-                throw failure("File exceeds its \(Self.describe(maximum)) safety limit: \(url.path).")
+                throw integrity("File exceeds its \(Self.describe(maximum)) safety limit: \(url.path).")
             }
             try body(chunk)
         }
@@ -108,7 +113,7 @@ struct SecureFS: Sendable {
         guard let after = try statusIfPresent(url), count == before.st_size,
               Self.isRegularFile(after, maximum: maximum, allowsHardLinks: allowsHardLinks),
               allowsHardLinks ? Stamp(after).sameContent(as: Stamp(before)) : Stamp(after) == Stamp(before) else {
-            throw failure("File changed during validation: \(url.path).")
+            throw integrity("File changed during validation: \(url.path).")
         }
     }
 

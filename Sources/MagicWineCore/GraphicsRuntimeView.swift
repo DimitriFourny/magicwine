@@ -59,10 +59,10 @@ enum GraphicsRuntimeView {
     private static func plan(executable: URL, component: URL,
                              backend: GraphicsBackend) throws -> (receipt: Receipt, encoded: Data, identity: String) {
         guard let substitutions = backend.componentProvider?.viewSubstitutions, !substitutions.isEmpty else {
-            throw failure("A private graphics view is only needed for Metal backends.")
+            throw MagicWineError.invalidInput("Graphics runtime view: A private graphics view is only needed for Metal backends.")
         }
         guard executable.isFileURL, executable.deletingLastPathComponent().lastPathComponent == "bin" else {
-            throw failure("Select a compatible native Wine loader in its runtime's bin directory, not a wrapper or relocated executable.")
+            throw MagicWineError.runtimeIncompatible("Graphics runtime view: The bottle's Wine must be a native Wine loader in its runtime's bin directory, not a wrapper or relocated executable.", remedy: .chooseWine)
         }
         let runtime = executable.deletingLastPathComponent().deletingLastPathComponent().resolvingSymlinksInPath()
         let originalLoader = executable.resolvingSymlinksInPath()
@@ -78,7 +78,7 @@ enum GraphicsRuntimeView {
             FileManager.default.fileExists(atPath: runtime.appendingPathComponent($0 + "/x86_64-unix/ntdll.so").path)
         }
         guard wineRoots.count == 1, let wineRoot = wineRoots.first else {
-            throw failure("Expected exactly one x86_64 Wine library root (lib/wine or lib64/wine).")
+            throw MagicWineError.runtimeIncompatible("Graphics runtime view: Expected exactly one x86_64 Wine library root (lib/wine or lib64/wine).", remedy: .chooseWine)
         }
         let loaderName = "bin/" + executable.lastPathComponent
         var directories = Set<String>(["bin", wineRoot, String(wineRoot.split(separator: "/")[0])])
@@ -172,7 +172,7 @@ enum GraphicsRuntimeView {
         if parent.path.withCString({ mkdir($0, 0o700) }) != 0 {
             let code = errno
             guard code == EEXIST else {
-                throw failure("Cannot create the private-loader directory: \(String(cString: strerror(code))).")
+                throw MagicWineError.setup("Graphics runtime view: Cannot create the private-loader directory: \(String(cString: strerror(code))).")
             }
         }
         try requireDirectory(parent)
@@ -213,34 +213,34 @@ enum GraphicsRuntimeView {
         try requireDirectory(root)
         let receiptURL = root.appendingPathComponent("installation.json")
         try requireFile(receiptURL)
-        guard try readFile(receiptURL, maximum: 16 * 1_048_576) == encoded else { throw failure("The private loader receipt was changed.") }
+        guard try readFile(receiptURL, maximum: 16 * 1_048_576) == encoded else { throw fs.integrity("The private loader receipt was changed.") }
         let expected = Set(receipt.directories).union(receipt.copies.keys).union(receipt.links.keys).union(["installation.json"])
         var actual = Set<String>()
         var enumerationError: Error?
         guard let items = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [], options: [],
-            errorHandler: { _, error in enumerationError = error; return false }) else { throw failure("Cannot inspect private loader.") }
+            errorHandler: { _, error in enumerationError = error; return false }) else { throw MagicWineError.setup("Graphics runtime view: Cannot inspect private loader.") }
         let base = root.standardizedFileURL.path + "/"
         for case let entry as URL in items {
             let path = entry.standardizedFileURL.path
             guard path.hasPrefix(base) else { throw failure("Escaping private loader entry.") }
             let name = String(path.dropFirst(base.count))
-            guard expected.contains(name) else { throw failure("Unexpected private loader entry: \(name).") }
+            guard expected.contains(name) else { throw fs.integrity("Unexpected private loader entry: \(name).") }
             actual.insert(name)
             if let link = receipt.links[name] {
                 guard try inspect(entry).st_mode & mode_t(S_IFMT) == mode_t(S_IFLNK),
-                      try FileManager.default.destinationOfSymbolicLink(atPath: entry.path) == link.target else { throw failure("A private loader link changed: \(name).") }
+                      try FileManager.default.destinationOfSymbolicLink(atPath: entry.path) == link.target else { throw fs.integrity("A private loader link changed: \(name).") }
                 let target = URL(fileURLWithPath: link.target)
                 guard target.resolvingSymlinksInPath().path == target.path,
-                      Link(target, try inspect(target)) == link else { throw failure("The original runtime/provider changed: \(name).") }
+                      Link(target, try inspect(target)) == link else { throw fs.integrity("The original runtime/provider changed: \(name).") }
             } else if let expectedHash = receipt.hashes[name] {
                 // Wine creates hard-linked child launchers while running. Their content
                 // remains pinned; reject changed bytes rather than legitimate new names.
                 try requireFile(entry, allowHardLinks: true)
-                guard try hash(entry, allowHardLinks: true) == expectedHash else { throw failure("A private loader copy changed: \(name).") }
+                guard try hash(entry, allowHardLinks: true) == expectedHash else { throw fs.integrity("A private loader copy changed: \(name).") }
             } else if name != "installation.json" { try requireDirectory(entry) }
         }
         if let enumerationError { throw enumerationError }
-        guard actual == expected else { throw failure("The private loader is incomplete.") }
+        guard actual == expected else { throw fs.integrity("The private loader is incomplete.") }
     }
 
     private static let fs = SecureFS(prefix: "Graphics runtime view: ")
@@ -254,5 +254,6 @@ enum GraphicsRuntimeView {
     private static func hash(_ url: URL, allowHardLinks: Bool = false) throws -> String {
         try fs.sha256(url, maximum: fileMaximum, allowsHardLinks: allowHardLinks)
     }
+    /// A refusal to follow, adopt, or leave the runtime's and provider's own files.
     private static func failure(_ message: String) -> MagicWineError { fs.failure(message) }
 }

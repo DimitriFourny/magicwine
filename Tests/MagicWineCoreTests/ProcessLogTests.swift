@@ -98,9 +98,12 @@ struct ProcessLogTests {
         do {
             _ = try await fixture.wine.configureSynchronization(msyncEnabled: false, in: fixture.bottle)
             Issue.record("A live server must refuse the change.")
-        } catch {
-            let message = error.localizedDescription
-            let path = try #require(message.range(of: "Log: ").map { String(message[$0.upperBound...]) })
+        } catch let error as MagicWineError {
+            // A still-running server is a busy bottle whose probe log is reported, not embedded in the message.
+            guard case .busy(_, .programsRunning, _) = error else { Issue.record("Unexpected error: \(error)"); return }
+            #expect(error.recoveryActions.contains(.stopBottle))
+            let path = try #require(error.logURL).path
+            #expect(!(error.errorDescription ?? "").contains(path))
             #expect(URL(fileURLWithPath: path).deletingLastPathComponent() == fixture.bottleLogs)
             let log = try String(contentsOfFile: path, encoding: .utf8)
             #expect(log.hasPrefix("Command: "))

@@ -53,14 +53,14 @@ enum PEInspector {
         func word(_ data: Data, _ offset: Int) -> UInt16 {
             UInt16(data[data.startIndex + offset]) | UInt16(data[data.startIndex + offset + 1]) << 8
         }
-        guard size >= 64 else { throw fs.failure("Not a PE image: \(path).") }
+        guard size >= 64 else { throw fs.integrity("Not a PE image: \(path).") }
         let dos = try read(0, 64)
-        guard dos.count == 64, word(dos, 0) == 0x5a4d else { throw fs.failure("Not a PE image: \(path).") }
+        guard dos.count == 64, word(dos, 0) == 0x5a4d else { throw fs.integrity("Not a PE image: \(path).") }
         let offset = Int(UInt32(word(dos, 60)) | UInt32(word(dos, 62)) << 16)
-        guard offset >= 64, offset <= size - 24 else { throw fs.failure("Invalid PE header offset: \(path).") }
+        guard offset >= 64, offset <= size - 24 else { throw fs.integrity("Invalid PE header offset: \(path).") }
         let coff = try read(offset, min(26, size - offset))
         guard coff.count >= 24, Array(coff.prefix(4)) == [0x50, 0x45, 0, 0] else {
-            throw fs.failure("Invalid PE signature: \(path).")
+            throw fs.integrity("Invalid PE signature: \(path).")
         }
         let stub = try read(64, min(21, size - 64))
         return Header(offset: offset, machine: word(coff, 4), characteristics: word(coff, 22),
@@ -75,11 +75,11 @@ enum PEInspector {
               !requiresOptionalHeader || (header.optionalHeaderSize >= 2 &&
                 header.offset + 24 + Int(header.optionalHeaderSize) <= size &&
                 header.optionalHeaderMagic == nativeMagic) else {
-            throw fs.failure("The DLL has the wrong PE architecture or image type: \(path) (expected \(String(machine, radix: 16)), found \(String(header.machine, radix: 16))).")
+            throw fs.integrity("The DLL has the wrong PE architecture or image type: \(path) (expected \(String(machine, radix: 16)), found \(String(header.machine, radix: 16))).")
         }
         if !markers.isEmpty {
             guard let marker = header.wineMarker, markers.contains(marker) else {
-                throw fs.failure("Expected an unchanged Wine builtin DLL, not a native replacement: \(path).")
+                throw fs.integrity("Expected an unchanged Wine builtin DLL, not a native replacement: \(path).")
             }
         }
     }

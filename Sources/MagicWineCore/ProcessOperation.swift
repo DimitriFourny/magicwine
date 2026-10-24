@@ -126,7 +126,7 @@ final class ProcessOperation: @unchecked Sendable {
         }
         do {
             if let timeout, (!timeout.isFinite || timeout <= 0) {
-                throw MagicWineError.setup("The process timeout must be positive.")
+                throw MagicWineError.invalidInput("The process timeout must be positive.")
             }
             process.standardOutput = writeEnd
             process.standardError = writeEnd
@@ -213,8 +213,9 @@ final class ProcessOperation: @unchecked Sendable {
             case .notStarted(let error):
                 if error is CancellationError { return .failure(error) }
                 let log = try failureLog(note: "Could not start: \(error.localizedDescription)")
-                return .failure(MagicWineError.setup(
-                    "Could not start \(process.executableURL?.path ?? "process"): \(error.localizedDescription). Log: \(log.path). If macOS blocked this public Wine build, review Privacy & Security; MagicWine does not bypass Gatekeeper."))
+                return .failure(MagicWineError.operationFailed(
+                    "Could not start \(process.executableURL?.path ?? "process"): \(error.localizedDescription). If macOS blocked this public Wine build, review Privacy & Security; MagicWine does not bypass Gatekeeper.",
+                    logURL: log))
             }
         } catch {
             return .failure(error)

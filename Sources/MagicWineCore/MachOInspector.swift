@@ -25,11 +25,11 @@ enum MachOInspector {
         let fileSize = UInt64(status.st_size)
         func bytes(_ offset: UInt64, _ count: Int, within end: UInt64 = fileSize) throws -> Data {
             guard count >= 0, offset <= end, UInt64(count) <= end - offset else {
-                throw fs.failure("Truncated Mach-O data: \(url.path).")
+                throw fs.integrity("Truncated Mach-O data: \(url.path).")
             }
             try handle.seek(toOffset: offset)
             let data = try handle.read(upToCount: count) ?? Data()
-            guard data.count == count else { throw fs.failure("Mach-O changed during inspection: \(url.path).") }
+            guard data.count == count else { throw fs.integrity("Mach-O changed during inspection: \(url.path).") }
             return data
         }
         var slice: UInt64 = 0
@@ -37,34 +37,34 @@ enum MachOInspector {
         let magic = try bytes(0, 8)
         if universal, word(magic, 0, bigEndian: true) == 0xcafebabe {
             let count = Int(word(magic, 4, bigEndian: true))
-            guard (1...16).contains(count) else { throw fs.failure("Invalid universal Mach-O architecture table: \(url.path).") }
+            guard (1...16).contains(count) else { throw fs.integrity("Invalid universal Mach-O architecture table: \(url.path).") }
             let table = try bytes(8, count * 20)
             var found = false
             for index in 0..<count where word(table, index * 20, bigEndian: true) == x86_64 {
-                guard !found else { throw fs.failure("Duplicate x86_64 Mach-O slice: \(url.path).") }
+                guard !found else { throw fs.integrity("Duplicate x86_64 Mach-O slice: \(url.path).") }
                 found = true
                 slice = UInt64(word(table, index * 20 + 8, bigEndian: true))
                 sliceEnd = UInt64(word(table, index * 20 + 12, bigEndian: true))
             }
             guard found, slice <= fileSize, sliceEnd <= fileSize - slice else {
-                throw fs.failure("No valid x86_64 Mach-O slice: \(url.path).")
+                throw fs.integrity("No valid x86_64 Mach-O slice: \(url.path).")
             }
             sliceEnd += slice
         }
         let header = try bytes(slice, 32, within: sliceEnd)
         guard word(header, 0) == 0xfeedfacf, word(header, 4) == x86_64 else {
-            throw fs.failure("Expected \(universal ? "an" : "a thin") x86_64 Mach-O image: \(url.path).")
+            throw fs.integrity("Expected \(universal ? "an" : "a thin") x86_64 Mach-O image: \(url.path).")
         }
         let count = Int(word(header, 16)), size = Int(word(header, 20))
         guard count > 0, count <= 4096, size >= count * 8, size <= 1_048_576 else {
-            throw fs.failure("Invalid Mach-O load command bounds: \(url.path).")
+            throw fs.integrity("Invalid Mach-O load command bounds: \(url.path).")
         }
         let commands = try bytes(slice + 32, size, within: sliceEnd)
         func string(_ data: Data, _ offset: Int, _ end: Int) throws -> String {
             guard offset >= 0, offset < end, end <= data.count,
                   let zero = data[offset..<end].firstIndex(of: 0),
                   let value = String(data: data[offset..<zero], encoding: .utf8) else {
-                throw fs.failure("Malformed Mach-O string: \(url.path).")
+                throw fs.integrity("Malformed Mach-O string: \(url.path).")
             }
             return value
         }
@@ -73,43 +73,43 @@ enum MachOInspector {
         var minimumOS: UInt32?
         var symbols: (offset: UInt64, count: Int, strings: UInt64, stringSize: Int)?
         for _ in 0..<count {
-            guard cursor <= size - 8 else { throw fs.failure("Truncated Mach-O load command: \(url.path).") }
+            guard cursor <= size - 8 else { throw fs.integrity("Truncated Mach-O load command: \(url.path).") }
             let command = word(commands, cursor), length = Int(word(commands, cursor + 4))
             guard length >= 8, length % 8 == 0, length <= size - cursor else {
-                throw fs.failure("Invalid Mach-O load command size: \(url.path).")
+                throw fs.integrity("Invalid Mach-O load command size: \(url.path).")
             }
             switch command {
             case 0x0c, 0x80000018, 0x8000001f: // LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB
-                guard length >= 24 else { throw fs.failure("Truncated Mach-O dependency command: \(url.path).") }
+                guard length >= 24 else { throw fs.integrity("Truncated Mach-O dependency command: \(url.path).") }
                 let offset = Int(word(commands, cursor + 8))
-                guard offset >= 24, offset < length else { throw fs.failure("Invalid Mach-O dependency name: \(url.path).") }
+                guard offset >= 24, offset < length else { throw fs.integrity("Invalid Mach-O dependency name: \(url.path).") }
                 dependencies.insert(try string(commands, cursor + offset, cursor + length))
             case 0x8000001c: // LC_RPATH
-                guard length >= 16 else { throw fs.failure("Truncated Mach-O rpath: \(url.path).") }
+                guard length >= 16 else { throw fs.integrity("Truncated Mach-O rpath: \(url.path).") }
                 let offset = Int(word(commands, cursor + 8))
-                guard offset >= 12, offset < length else { throw fs.failure("Invalid Mach-O rpath name: \(url.path).") }
+                guard offset >= 12, offset < length else { throw fs.integrity("Invalid Mach-O rpath name: \(url.path).") }
                 rpaths.insert(try string(commands, cursor + offset, cursor + length))
             case 0x32: // LC_BUILD_VERSION
                 guard length >= 24, word(commands, cursor + 8) == 1 else {
-                    throw fs.failure("Expected a macOS Mach-O build target: \(url.path).")
+                    throw fs.integrity("Expected a macOS Mach-O build target: \(url.path).")
                 }
                 minimumOS = max(minimumOS ?? 0, word(commands, cursor + 12))
             case 0x24: // LC_VERSION_MIN_MACOSX
-                guard length >= 16 else { throw fs.failure("Truncated Mach-O deployment target: \(url.path).") }
+                guard length >= 16 else { throw fs.integrity("Truncated Mach-O deployment target: \(url.path).") }
                 minimumOS = max(minimumOS ?? 0, word(commands, cursor + 8))
             case 2: // LC_SYMTAB
-                guard length == 24, symbols == nil else { throw fs.failure("Invalid Mach-O symbol-table command: \(url.path).") }
+                guard length == 24, symbols == nil else { throw fs.integrity("Invalid Mach-O symbol-table command: \(url.path).") }
                 symbols = (UInt64(word(commands, cursor + 8)), Int(word(commands, cursor + 12)),
                            UInt64(word(commands, cursor + 16)), Int(word(commands, cursor + 20)))
             default: break
             }
             cursor += length
         }
-        guard cursor == size else { throw fs.failure("Unexpected trailing Mach-O load command data: \(url.path).") }
+        guard cursor == size else { throw fs.integrity("Unexpected trailing Mach-O load command data: \(url.path).") }
         var exports = Set<String>()
         if readExports, let symbols {
             guard symbols.count <= 1_048_576, symbols.stringSize <= 16 * 1_048_576 else {
-                throw fs.failure("Mach-O symbols exceed inspection bounds: \(url.path).")
+                throw fs.integrity("Mach-O symbols exceed inspection bounds: \(url.path).")
             }
             // Symbol and string offsets are relative to the start of the slice.
             let table = try bytes(slice + symbols.offset, symbols.count * 16, within: sliceEnd)

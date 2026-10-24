@@ -17,7 +17,7 @@ enum BundledArchive {
         try Task.checkCancellation()
         let hashing = Task.detached(priority: .utility) { try fs.sha256(archive, maximum: maximum) }
         let checksum = try await withTaskCancellationHandler { try await hashing.value } onCancel: { hashing.cancel() }
-        guard checksum == sha256 else { throw fs.failure("Archive SHA-256 mismatch. No component was installed.") }
+        guard checksum == sha256 else { throw fs.integrity("Archive SHA-256 mismatch. No component was installed.") }
         try Task.checkCancellation()
         let listing = try await RuntimeInstallation.tool("/usr/bin/tar", arguments: ["-tf", archive.path],
             paths: paths, name: toolPrefix + "-archive-list", timeout: 60)

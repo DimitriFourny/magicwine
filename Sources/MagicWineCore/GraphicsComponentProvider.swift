@@ -215,7 +215,7 @@ internal struct D3DMetalComponentProvider: GraphicsComponentProvider {
 
     func install(paths: ApplicationPaths, source: URL?,
                  progress: (@Sendable (GraphicsSetupProgress) -> Void)?) async throws -> URL {
-        guard let source else { throw MagicWineError.setup("Select a D3DMetal library folder.") }
+        guard let source else { throw MagicWineError.invalidInput("Select a D3DMetal library folder.") }
         return try await D3DMetalInstallation.install(paths: paths, source: source, progress: progress)
     }
 

@@ -171,10 +171,15 @@ struct BottleSynchronizationTests {
         defer { fixture.remove() }
         #expect(!fixture.wine.supportsMSync(fixture.bottle.runtime))
         #expect(fixture.wine.canUpgradeRuntime(fixture.bottle.runtime) == old)
-        await #expect(throws: MagicWineError.self) {
-            try await fixture.wine.configureSynchronization(msyncEnabled: false, in: fixture.bottle)
-        }
-        await #expect(throws: MagicWineError.self) { try await fixture.wine.upgradeRuntime(in: fixture.bottle) }
+        // An older managed runtime is fixed by updating Wine; custom Wine only by another bottle.
+        let msync = try #require(await thrownError {
+            _ = try await fixture.wine.configureSynchronization(msyncEnabled: false, in: fixture.bottle)
+        })
+        guard case .runtimeIncompatible = msync else { Issue.record("Unexpected error: \(msync)"); return }
+        #expect(msync.recoveryActions == [old ? .updateWine : .chooseWine])
+        let upgrade = try #require(await thrownError { _ = try await fixture.wine.upgradeRuntime(in: fixture.bottle) })
+        // The old bottle may upgrade, but the updated runtime is not installed yet.
+        #expect(upgrade.recoveryActions == [old ? .updateWine : .chooseWine])
         #expect(try await fixture.store.current(fixture.bottle) == fixture.bottle)
         #expect(!FileManager.default.fileExists(atPath: RuntimeInstallation.destination(paths: fixture.paths).path))
     }

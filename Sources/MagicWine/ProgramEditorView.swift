@@ -82,13 +82,13 @@ struct ProgramEditorView: View {
             }
             program.environment = [:]
             for variable in variables {
-                if let problem = variableProblem(variable) { throw MagicWineError.setup(problem) }
+                if let problem = variableProblem(variable) { throw MagicWineError.invalidInput(problem) }
                 let key = variable.key.trimmingCharacters(in: .whitespaces)
                 if !key.isEmpty { program.environment[key] = variable.value }
             }
             program.dllOverrides = DLLOverrides()
             for override in overrides where !override.name.trimmingCharacters(in: .whitespaces).isEmpty {
-                if let problem = overrideProblem(override) { throw MagicWineError.setup(problem) }
+                if let problem = overrideProblem(override) { throw MagicWineError.invalidInput(problem) }
                 try program.dllOverrides.set(override.mode, for: override.name)
             }
             program.advertiseAVX = advertiseAVX

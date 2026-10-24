@@ -60,29 +60,29 @@ public actor BottleStore {
         try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
             let current = try loadUnlocked(bottle, normalizePrograms: false)
             guard bottle.graphics == current.graphics else {
-                throw MagicWineError.setup("Graphics settings must be changed through WineRuntime.configureGraphics.")
+                throw MagicWineError.conflict("Graphics settings must be changed through WineRuntime.configureGraphics.")
             }
             guard bottle.display == current.display else {
-                throw MagicWineError.setup("Display settings must be changed through WineRuntime.configureDisplay.")
+                throw MagicWineError.conflict("Display settings must be changed through WineRuntime.configureDisplay.")
             }
             guard bottle.msyncEnabled == current.msyncEnabled else {
-                throw MagicWineError.setup("Synchronization settings must be changed through WineRuntime.configureSynchronization.")
+                throw MagicWineError.conflict("Synchronization settings must be changed through WineRuntime.configureSynchronization.")
             }
             guard bottle.runtime == current.runtime else {
-                throw MagicWineError.setup("The pinned runtime must be changed through WineRuntime.upgradeRuntime.")
+                throw MagicWineError.conflict("The pinned runtime must be changed through WineRuntime.upgradeRuntime.")
             }
             guard bottle.isInitialized == current.isInitialized else {
-                throw MagicWineError.setup("A bottle is marked initialized only by WineRuntime.initialize.")
+                throw MagicWineError.conflict("A bottle is marked initialized only by WineRuntime.initialize.")
             }
             guard bottle.compatibility == current.compatibility else {
-                throw MagicWineError.setup("Compatibility settings must be changed through BottleStore.setCompatibility.")
+                throw MagicWineError.conflict("Compatibility settings must be changed through BottleStore.setCompatibility.")
             }
             guard bottle.dependencies == current.dependencies else {
-                throw MagicWineError.setup("Installed dependencies are recorded only by WineRuntime.installDependencies.")
+                throw MagicWineError.conflict("Installed dependencies are recorded only by WineRuntime.installDependencies.")
             }
             for program in bottle.programs {
                 if let saved = current.programs.first(where: { $0.id == program.id }), saved != program {
-                    throw MagicWineError.setup("Program names and launch options must be changed through BottleStore.updateProgram.")
+                    throw MagicWineError.conflict("Program names and launch options must be changed through BottleStore.updateProgram.")
                 }
             }
             var normalized = bottle
@@ -148,11 +148,11 @@ public actor BottleStore {
         return try GraphicsPrefix.withLock(bottleDirectory: directory) {
             var current = try loadUnlocked(bottle)
             guard current.isInitialized else {
-                throw MagicWineError.setup("Initialize this bottle before changing its graphics backend.")
+                throw MagicWineError.notInitialized("Set up this bottle before changing its graphics backend.")
             }
             let previous = current.graphics
             guard !componentUpdate || (previous.backend == configuration.backend && previous.backend != .standard) else {
-                throw MagicWineError.setup("This bottle's graphics backend changed. Reload it before updating its component.")
+                throw MagicWineError.conflict("This bottle's graphics backend changed before its component could be updated.")
             }
             let metadata = directory.appendingPathComponent("bottle.json")
             let previousData = try Data(contentsOf: metadata)
@@ -175,13 +175,13 @@ public actor BottleStore {
             var current = try loadUnlocked(bottle)
             guard current.graphics.backend == bottle.graphics.backend,
                   current.graphics.componentID == bottle.graphics.componentID else {
-                throw MagicWineError.setup("This bottle's graphics backend changed. Reload it before changing the HUD.")
+                throw MagicWineError.conflict("This bottle's graphics backend changed before the HUD could be changed.")
             }
             guard current.isInitialized, current.graphics.backend != .standard else {
-                throw MagicWineError.setup("Standard graphics has no managed HUD. Choose DXVK, DXMT, or D3DMetal first.")
+                throw MagicWineError.invalidInput("Standard graphics has no managed HUD; only DXVK, DXMT, and D3DMetal have one.")
             }
             guard current.graphics.usesSupportedComponent else {
-                throw MagicWineError.setup("This bottle uses an unsupported \(current.graphics.backend.displayName) component. Choose Standard to restore its original graphics files, then enable the backend again.")
+                throw MagicWineError.componentInvalid("This bottle uses an unsupported \(current.graphics.backend.displayName) component.")
             }
             guard current.graphics.showHUD != showHUD else { return current }
             current.graphics.showHUD = showHUD
@@ -198,7 +198,7 @@ public actor BottleStore {
         try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
             var current = try loadUnlocked(bottle)
             guard current.compatibility == bottle.compatibility else {
-                throw MagicWineError.setup("This bottle's compatibility settings were changed elsewhere. Reload it and try again.")
+                throw MagicWineError.conflict("This bottle's compatibility settings were changed elsewhere.")
             }
             guard current.compatibility != options else { return current }
             current.compatibility = options
@@ -280,13 +280,13 @@ public actor BottleStore {
     public func updateProgram(_ program: WindowsProgram, from original: WindowsProgram, in bottle: Bottle) throws -> Bottle {
         try mutateCurrent(bottle) { current, _ in
             guard let index = current.programs.firstIndex(where: { $0.id == program.id }) else {
-                throw MagicWineError.setup("\(original.name) is no longer saved in this bottle. Reload the bottle and try again.")
+                throw MagicWineError.conflict("\(original.name) is no longer saved in this bottle.")
             }
             guard original.id == program.id, current.programs[index] == original else {
-                throw MagicWineError.setup("\(original.name) was changed elsewhere. Reload the bottle and edit it again.")
+                throw MagicWineError.conflict("\(original.name) was changed elsewhere.")
             }
             guard program.executablePath == original.executablePath else {
-                throw MagicWineError.setup("A saved program's file cannot be changed. Add the other file as a new program.")
+                throw MagicWineError.invalidInput("A saved program's file cannot be changed. Add the other file as a new program.")
             }
             var updated = program
             updated.name = try validatedName(program.name)

@@ -28,7 +28,7 @@ final class GamepadBridgeSession {
 
     init(paths: ApplicationPaths) throws {
         let root = paths.root.standardizedFileURL
-        guard root.isFileURL else { throw MagicWineError.setup("Gamepad sessions require a local application directory.") }
+        guard root.isFileURL else { throw MagicWineError.unsafeFilesystem("Gamepad sessions require a local application directory.") }
         if !FileManager.default.fileExists(atPath: root.path) {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
@@ -263,7 +263,7 @@ enum GamepadBridge {
               let x8664 = Bundle.module.url(forResource: componentID + "-x86_64", withExtension: "dll"),
               let source = Bundle.module.url(forResource: componentID + "-source", withExtension: "tar.gz"),
               let license = Bundle.module.url(forResource: licenseName, withExtension: nil) else {
-            throw MagicWineError.setup("The bundled XInput bridge is missing. Reinstall this MagicWine build; no controller DLL was replaced.")
+            throw MagicWineError.integrityFailure("The bundled XInput bridge is missing. Reinstall this MagicWine build; no controller DLL was replaced.")
         }
         return try install(prefix: prefix, bottleDirectory: bottleDirectory,
                            payload: Payload(i686: i686, x8664: x8664, source: source, license: license,
@@ -279,7 +279,7 @@ enum GamepadBridge {
         let prefix = prefix.standardizedFileURL
         guard bottle.isFileURL, prefix.isFileURL,
               prefix == bottle.appendingPathComponent("prefix", isDirectory: true) else {
-            throw MagicWineError.setup("The XInput bridge requires the bottle's owned prefix.")
+            throw MagicWineError.unsafeFilesystem("The XInput bridge requires the bottle's owned prefix.")
         }
         try validatePrefix(prefix, bottle: bottle)
         for (url, digest, maximum) in [(payload.i686, payload.i686SHA256, dllMaximum),
@@ -313,7 +313,7 @@ enum GamepadBridge {
             try matchOriginals(inspections, receipt: receipt)
         } else {
             guard inspections.allSatisfy({ $0.original != nil }) else {
-                throw MagicWineError.setup("A managed XInput DLL has no original backup. The bottle was left unchanged.")
+                throw MagicWineError.integrityFailure("A managed XInput DLL has no original backup. The bottle was left unchanged.")
             }
             receipt = Receipt(version: 1, originals: inspections.compactMap(\.original))
             if try !fs.exists(compatibility) {
@@ -336,7 +336,7 @@ enum GamepadBridge {
                     try manager.copyItem(at: windows.appendingPathComponent(destination.path), to: saved)
                 case "link":
                     guard let link = original.link, let content = inspection.content else {
-                        throw MagicWineError.setup("The XInput original link could not be preserved.")
+                        throw MagicWineError.integrityFailure("The XInput original link could not be preserved.")
                     }
                     try manager.createSymbolicLink(atPath: saved.path, withDestinationPath: link)
                     // Also retain the resolved bytes: a relative link is kept
@@ -374,7 +374,7 @@ enum GamepadBridge {
         let finalInspections = try destinations.map { try inspect(windows.appendingPathComponent($0.path), destination: $0) }
         try matchOriginals(finalInspections, receipt: receipt)
         guard finalInspections == inspections else {
-            throw MagicWineError.setup("An XInput DLL changed during preparation. No replacement was installed.")
+            throw MagicWineError.integrityFailure("An XInput DLL changed during preparation. No replacement was installed.")
         }
         for (temporary, destination) in staged {
             // Never truncate a loaded DLL or follow a destination symlink.
@@ -398,7 +398,7 @@ enum GamepadBridge {
         }
         let kind = status.st_mode & mode_t(S_IFMT)
         guard kind == mode_t(S_IFREG) || kind == mode_t(S_IFLNK) else {
-            throw MagicWineError.setup("The XInput path is neither a file nor a Wine link: \(url.path).")
+            throw MagicWineError.unsafeFilesystem("The XInput path is neither a file nor a Wine link: \(url.path).")
         }
         let link = kind == mode_t(S_IFLNK) ? try manager.destinationOfSymbolicLink(atPath: url.path) : nil
         let content = link != nil ? url.resolvingSymlinksInPath() : url
@@ -411,18 +411,18 @@ enum GamepadBridge {
                               content: content, preservesNative: true)
         }
         do { try validatePE(data, path: destination.path, machine: destination.machine, builtin: true) }
-        catch { throw MagicWineError.setup("The bottle has a custom or invalid \(destination.path). MagicWine will not overwrite it.") }
+        catch { throw MagicWineError.unsafeFilesystem("The bottle has a custom or invalid \(destination.path). MagicWine will not overwrite it.") }
         return Inspection(original: Original(path: destination.path, kind: link == nil ? "file" : "link",
                                              digest: digest, link: link), content: content)
     }
 
     private static func matchOriginals(_ inspections: [Inspection], receipt: Receipt) throws {
-        guard inspections.count == receipt.originals.count else { throw MagicWineError.setup("The XInput backup is incomplete.") }
+        guard inspections.count == receipt.originals.count else { throw MagicWineError.integrityFailure("The XInput backup is incomplete.") }
         for (inspection, original) in zip(inspections, receipt.originals) {
             // A pinned Microsoft redistributable may have replaced our bridge
             // since the original was saved. Preserve both it and the old backup.
             if !inspection.preservesNative, let current = inspection.original, current != original {
-                throw MagicWineError.setup("The original XInput DLL changed after backup: \(original.path). No custom file was overwritten.")
+                throw MagicWineError.unsafeFilesystem("The original XInput DLL changed after backup: \(original.path). No custom file was overwritten.")
             }
         }
     }
@@ -431,11 +431,11 @@ enum GamepadBridge {
         try fs.requireDirectory(backup)
         let entries = Set(try manager.contentsOfDirectory(atPath: backup.path))
         guard entries == Set(["originals.json", "system32", "syswow64", sourceName, licenseName]) else {
-            throw MagicWineError.setup("The XInput backup contains missing or unrecognized files.")
+            throw MagicWineError.integrityFailure("The XInput backup contains missing or unrecognized files.")
         }
         let receipt = try JSONDecoder().decode(Receipt.self, from: fs.read(backup.appendingPathComponent("originals.json"), maximum: 65_536))
         guard receipt.version == 1, receipt.originals.map(\.path) == destinations.map(\.path) else {
-            throw MagicWineError.setup("The XInput backup manifest has an unsupported layout.")
+            throw MagicWineError.integrityFailure("The XInput backup manifest has an unsupported layout.")
         }
         try verify(backup.appendingPathComponent(sourceName), digest: payload.sourceSHA256, maximum: sourceMaximum)
         try verify(backup.appendingPathComponent(licenseName), digest: payload.licenseSHA256, maximum: licenseMaximum)
@@ -449,24 +449,24 @@ enum GamepadBridge {
             let content: URL
             switch original.kind {
             case "absent":
-                guard original.digest == nil, original.link == nil else { throw MagicWineError.setup("An absent XInput original has invalid metadata.") }
+                guard original.digest == nil, original.link == nil else { throw MagicWineError.integrityFailure("An absent XInput original has invalid metadata.") }
                 continue
             case "file":
-                guard original.link == nil else { throw MagicWineError.setup("An XInput original has invalid link metadata.") }
+                guard original.link == nil else { throw MagicWineError.integrityFailure("An XInput original has invalid link metadata.") }
                 expected[directory, default: []].insert(saved.lastPathComponent)
                 content = saved
             case "link":
                 guard let link = original.link, (try? fs.fileTypeIfPresent(saved)) == mode_t(S_IFLNK),
                       try manager.destinationOfSymbolicLink(atPath: saved.path) == link else {
-                    throw MagicWineError.setup("An original XInput symbolic link was changed or lost.")
+                    throw MagicWineError.integrityFailure("An original XInput symbolic link was changed or lost.")
                 }
                 content = backup.appendingPathComponent(original.path + ".content")
                 expected[directory, default: []].formUnion([saved.lastPathComponent, content.lastPathComponent])
-            default: throw MagicWineError.setup("The XInput backup contains an unknown original type.")
+            default: throw MagicWineError.integrityFailure("The XInput backup contains an unknown original type.")
             }
             let data = try fs.read(content, maximum: dllMaximum)
             let digest = SecureFS.digest(data)
-            guard digest == original.digest else { throw MagicWineError.setup("The preserved XInput original failed its SHA-256 check.") }
+            guard digest == original.digest else { throw MagicWineError.integrityFailure("The preserved XInput original failed its SHA-256 check.") }
             let native = original.kind == "file" && digest == destination.redistributableDigest
             try validatePE(data, path: original.path, machine: destination.machine, builtin: !native)
         }
@@ -474,7 +474,7 @@ enum GamepadBridge {
             let url = backup.appendingPathComponent(directory, isDirectory: true)
             try fs.requireDirectory(url)
             guard Set(try manager.contentsOfDirectory(atPath: url.path)) == expected[directory] else {
-                throw MagicWineError.setup("The XInput original backup is incomplete or contains unrecognized files.")
+                throw MagicWineError.integrityFailure("The XInput original backup is incomplete or contains unrecognized files.")
             }
         }
         return receipt
@@ -483,7 +483,7 @@ enum GamepadBridge {
     /// Wine's own DLLs carry a builtin/placeholder marker; Microsoft and bundled
     /// bridge DLLs are native. The optional header is not inspected here.
     private static func validatePE(_ data: Data, path: String, machine: UInt16, builtin: Bool) throws {
-        guard data.count >= 128 else { throw MagicWineError.setup("Invalid XInput PE header.") }
+        guard data.count >= 128 else { throw MagicWineError.integrityFailure("Invalid XInput PE header.") }
         try PEInspector.validateDLL(data, path: path, machine: machine, requiresOptionalHeader: false,
                                     markers: builtin ? [.builtin, .placeholder] : [], fs: fs)
     }
@@ -491,7 +491,7 @@ enum GamepadBridge {
     private static func verify(_ url: URL, digest: String, maximum: Int) throws {
         guard digest.count == 64, digest.allSatisfy({ $0.isHexDigit }),
               try SecureFS.digest(fs.read(url, maximum: maximum)) == digest else {
-            throw MagicWineError.setup("XInput bridge SHA-256 mismatch: \(url.path). The bridge payload must be independently pinned before installation.")
+            throw MagicWineError.integrityFailure("XInput bridge SHA-256 mismatch: \(url.path). The bridge payload must be independently pinned before installation.")
         }
     }
 }

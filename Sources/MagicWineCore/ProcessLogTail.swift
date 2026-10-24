@@ -65,7 +65,7 @@ public struct ProcessLogTail: Sendable {
         defer { try? handle.close() }
         var status = stat()
         guard fstat(descriptor, &status) == 0, status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
-            throw MagicWineError.setup("The log is not an ordinary file: \(url.path)")
+            throw MagicWineError.unsafeFilesystem("The log is not an ordinary file: \(url.path)")
         }
         var reset = false
         if identity.map({ $0.0 != status.st_dev || $0.1 != status.st_ino }) ?? true || Int64(status.st_size) < offset {

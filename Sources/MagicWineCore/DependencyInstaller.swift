@@ -66,7 +66,7 @@ enum DependencyInstaller {
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
               http.url?.scheme == "https" else {
             try? FileManager.default.removeItem(at: file)
-            throw MagicWineError.setup("The download of \(request.url?.lastPathComponent ?? "a dependency") returned an unsuccessful or insecure HTTP response (\((response as? HTTPURLResponse)?.statusCode ?? 0)).")
+            throw MagicWineError.downloadFailed("The download of \(request.url?.lastPathComponent ?? "a dependency") returned an unsuccessful or insecure HTTP response (\((response as? HTTPURLResponse)?.statusCode ?? 0)).")
         }
         return file
     }
@@ -150,12 +150,12 @@ enum DependencyInstaller {
         try FileManager.default.moveItem(at: temporary, to: staged)
         try Task.checkCancellation()
         guard try await matches(staged, download) else {
-            throw MagicWineError.setup("\(download.fileName) does not match its pinned SHA-256 and size. It was discarded and nothing was installed.")
+            throw MagicWineError.integrityFailure("\(download.fileName) does not match its pinned SHA-256 and size. It was discarded and nothing was installed.")
         }
         if try !fs.publish(stage, to: directory) {
             // Another installer published the same pinned file first.
             guard try await matches(file, download) else {
-                throw MagicWineError.setup("The cached \(download.fileName) at \(file.path) does not match its pinned SHA-256.")
+                throw MagicWineError.integrityFailure("The cached \(download.fileName) at \(file.path) does not match its pinned SHA-256.")
             }
         }
         return file
@@ -179,7 +179,7 @@ enum DependencyInstaller {
         let members = files.map(\.member)
         guard members.allSatisfy({ !$0.isEmpty && !$0.contains("/") && !$0.contains("\\") && $0 != "." && $0 != ".." }),
               Set(members).count == members.count else {
-            throw MagicWineError.setup("Dependency archive members must be distinct plain file names.")
+            throw MagicWineError.integrityFailure("Dependency archive members must be distinct plain file names.")
         }
         let listing = try await RuntimeInstallation.tool("/usr/bin/tar", arguments: ["-tf", archive.path], paths: paths,
                                                          name: "dependency-list", timeout: 60)
@@ -187,7 +187,7 @@ enum DependencyInstaller {
         let entries = try RuntimeInstallation.boundedLog(listing.logURL, maximum: 1_048_576)
             .components(separatedBy: "\n").dropFirst(2).filter { !$0.isEmpty }
         for member in members where entries.filter({ $0 == member }).count != 1 {
-            throw MagicWineError.setup("\(archive.lastPathComponent) does not contain exactly one \(member).")
+            throw MagicWineError.integrityFailure("\(archive.lastPathComponent) does not contain exactly one \(member).")
         }
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false,
                                                 attributes: [.posixPermissions: 0o700])
@@ -198,7 +198,7 @@ enum DependencyInstaller {
         for file in files {
             let url = destination.appendingPathComponent(file.member)
             guard try fs.sha256(url, maximum: file.size) == file.sha256 else {
-                throw MagicWineError.setup("\(file.member) from \(archive.lastPathComponent) does not match its pinned SHA-256.")
+                throw MagicWineError.integrityFailure("\(file.member) from \(archive.lastPathComponent) does not match its pinned SHA-256.")
             }
             result[file] = url
         }
@@ -221,7 +221,7 @@ enum DependencyInstaller {
         for file in files {
             let components = file.destination.split(separator: "/")
             guard components.count == 2, !components.contains(where: { $0 == ".." || $0 == "." }) else {
-                throw MagicWineError.setup("Unsupported dependency destination: \(file.destination).")
+                throw MagicWineError.integrityFailure("Unsupported dependency destination: \(file.destination).")
             }
             let folder = windows.appendingPathComponent(String(components[0]), isDirectory: true)
             if file.fontName != nil, try !fs.exists(folder) {
@@ -234,11 +234,11 @@ enum DependencyInstaller {
                 continue
             }
             guard type == mode_t(S_IFREG) else {
-                throw MagicWineError.setup("\(target.path) is not an ordinary file. No dependency files were changed.")
+                throw MagicWineError.unsafeFilesystem("\(target.path) is not an ordinary file. No dependency files were changed.")
             }
             if try fs.sha256(target, maximum: max(file.size, 64 * 1_048_576), allowsHardLinks: true) == file.sha256 { continue }
             guard let machine = file.machine, try wineMarker(target, machine: machine) != nil else {
-                throw MagicWineError.setup("\(target.path) is a custom file that MagicWine did not install. It was left unchanged; remove it yourself to install this dependency.")
+                throw MagicWineError.unsafeFilesystem("\(target.path) is a custom file that MagicWine did not install. It was left unchanged; remove it yourself to install this dependency.")
             }
             pending.append(file)
         }
@@ -250,7 +250,7 @@ enum DependencyInstaller {
             try FileManager.default.copyItem(at: sources[file]!, to: temporary)
             staged.append((temporary, target))
             guard try fs.sha256(temporary, maximum: file.size) == file.sha256 else {
-                throw MagicWineError.setup("A staged copy of \(file.member) changed. No dependency files were changed.")
+                throw MagicWineError.integrityFailure("A staged copy of \(file.member) changed. No dependency files were changed.")
             }
         }
         for (temporary, target) in staged {
@@ -272,7 +272,7 @@ enum DependencyInstaller {
             return try handle.read(upToCount: count) ?? Data()
         }
         guard header.machine == machine, header.isDLL else {
-            throw MagicWineError.setup("\(url.path) is not a \(machine == PEInspector.i386 ? "32" : "64")-bit DLL. It was left unchanged.")
+            throw MagicWineError.unsafeFilesystem("\(url.path) is not a \(machine == PEInspector.i386 ? "32" : "64")-bit DLL. It was left unchanged.")
         }
         return header.wineMarker
     }

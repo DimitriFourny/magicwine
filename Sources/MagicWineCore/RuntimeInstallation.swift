@@ -45,7 +45,7 @@ struct RuntimeInstallation {
             progress?(.verifying)
             let checksum = try await hash(archive)
             guard checksum == archiveSHA256 else {
-                throw MagicWineError.setup("Wine archive SHA-256 mismatch. No runtime was installed.")
+                throw MagicWineError.integrityFailure("Wine archive SHA-256 mismatch. No runtime was installed.")
             }
             progress?(.extracting)
             let extraction = stage.appendingPathComponent("payload", isDirectory: true)
@@ -58,7 +58,7 @@ struct RuntimeInstallation {
                 !entry.hasPrefix("/") && !entry.contains("\\") &&
                 !entry.split(separator: "/").contains("..") &&
                 (entry == "Wine Stable.app" || entry.hasPrefix("Wine Stable.app/"))
-            }) else { throw MagicWineError.setup("The Wine archive contains unsafe or unexpected paths.") }
+            }) else { throw MagicWineError.integrityFailure("The Wine archive contains unsafe or unexpected paths.") }
             // macOS bsdtar rejects traversal through symlinks and escaping hard links by default.
             _ = try await tool("/usr/bin/tar", arguments: ["-xf", archive.path, "-C", extraction.path,
                     "--no-same-owner", "--no-same-permissions"], paths: paths, name: "archive-extract", timeout: 180)
@@ -86,7 +86,9 @@ struct RuntimeInstallation {
                 throw CancellationError()
             }
             try? append("Failure: \(error.localizedDescription)\n", to: logURL)
-            throw MagicWineError.setup("Wine installation failed: \(error.localizedDescription)\nInstallation log: \(logURL.path)")
+            // A network failure is worth retrying; the log keeps the details either way.
+            let underlying = error is URLError ? MagicWineError.downloadFailed(error.localizedDescription) : error
+            throw MagicWineError.failed("Wine installation failed: \(error.localizedDescription)", logURL: logURL, underlying: underlying)
         }
     }
 
@@ -111,20 +113,20 @@ struct RuntimeInstallation {
     @discardableResult
     static func validateCachedRuntime(at destination: URL, paths: ApplicationPaths) throws -> [String: String] {
         guard destination.standardizedFileURL == self.destination(paths: paths).standardizedFileURL else {
-            throw MagicWineError.setup("The cached Wine installation path does not match the pinned runtime.")
+            throw MagicWineError.integrityFailure("The cached Wine installation path does not match the pinned runtime.")
         }
         try validateManagedDirectory(destination, paths: paths)
         _ = try validateLayout(at: destination)
         let receiptURL = destination.appendingPathComponent("installation.json")
         guard try fs.fileType(receiptURL) == mode_t(S_IFREG) else {
-            throw MagicWineError.setup("The cached Wine installation receipt is not an ordinary file.")
+            throw MagicWineError.unsafeFilesystem("The cached Wine installation receipt is not an ordinary file.")
         }
         let receipt = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: receiptURL))
         guard receipt["source"] == source.absoluteString,
               receipt["sha256"] == archiveSHA256,
               receipt["version"] == version,
               receipt["driverComponentID"] == WineMetalDriver.componentID else {
-            throw MagicWineError.setup("The cached Wine installation receipt does not match the pinned archive and driver.")
+            throw MagicWineError.integrityFailure("The cached Wine installation receipt does not match the pinned archive and driver.")
         }
         let executable = destination.appendingPathComponent(relativeExecutable)
         try WineMetalDriver.validate(at: executable)
@@ -140,7 +142,7 @@ struct RuntimeInstallation {
             timeout: timeout)
         do { return try await operation.run() }
         catch ProcessOperation.Interrupted.timedOut(let log) {
-            throw MagicWineError.setup("\(name) timed out. Log: \(log.path)")
+            throw MagicWineError.timedOut("\(name) timed out.", logURL: log)
         }
     }
 
@@ -148,14 +150,14 @@ struct RuntimeInstallation {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
         let data = try file.read(upToCount: maximum + 1) ?? Data()
-        guard data.count <= maximum else { throw MagicWineError.setup("Log exceeds its inspection limit: \(url.path)") }
+        guard data.count <= maximum else { throw MagicWineError.integrityFailure("Log exceeds its inspection limit: \(url.path)") }
         return String(decoding: data, as: UTF8.self)
     }
 
     private static func checkHTTP(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
               http.url?.scheme == "https" else {
-            throw MagicWineError.setup("Wine download returned an unsuccessful or insecure HTTP response (\((response as? HTTPURLResponse)?.statusCode ?? 0)).")
+            throw MagicWineError.downloadFailed("Wine download returned an unsuccessful or insecure HTTP response (\((response as? HTTPURLResponse)?.statusCode ?? 0)).")
         }
     }
 
@@ -171,12 +173,12 @@ struct RuntimeInstallation {
               try fs.fileType(paths.root) == mode_t(S_IFDIR),
               try fs.fileType(managed) == mode_t(S_IFDIR),
               target.resolvingSymlinksInPath().path.hasPrefix(managed.resolvingSymlinksInPath().path + "/") else {
-            throw MagicWineError.setup("Quarantine removal is restricted to ordinary directories inside MagicWine's managed Runtimes directory.")
+            throw MagicWineError.unsafeFilesystem("Quarantine removal is restricted to ordinary directories inside MagicWine's managed Runtimes directory.")
         }
         var current = target
         while current.path != managed.path {
             guard try fs.fileType(current) == mode_t(S_IFDIR) else {
-                throw MagicWineError.setup("The managed Wine installation contains a symbolic link or non-directory root: \(current.path)")
+                throw MagicWineError.unsafeFilesystem("The managed Wine installation contains a symbolic link or non-directory root: \(current.path)")
             }
             current.deleteLastPathComponent()
         }
@@ -185,7 +187,7 @@ struct RuntimeInstallation {
     private static func validateLayout(at root: URL) throws -> [URL] {
         let app = root.appendingPathComponent("Wine Stable.app", isDirectory: true)
         guard try fs.fileType(app) == mode_t(S_IFDIR) else {
-            throw MagicWineError.setup("Wine Stable.app must be an ordinary directory.")
+            throw MagicWineError.unsafeFilesystem("Wine Stable.app must be an ordinary directory.")
         }
         let base = root.resolvingSymlinksInPath().standardizedFileURL.path + "/"
         var enumerationError: Error?
@@ -200,18 +202,18 @@ struct RuntimeInstallation {
         var targets = [app]
         for item in enumerator {
             guard let entry = item as? URL else {
-                throw MagicWineError.setup("Wine Stable.app enumeration returned an invalid entry.")
+                throw MagicWineError.integrityFailure("Wine Stable.app enumeration returned an invalid entry.")
             }
             let type = try fs.fileType(entry)
             guard entry.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(base) else {
-                throw MagicWineError.setup("The Wine archive contains an escaping symbolic link: \(entry.path)")
+                throw MagicWineError.unsafeFilesystem("The Wine archive contains an escaping symbolic link: \(entry.path)")
             }
             if type == mode_t(S_IFLNK) {
                 enumerator.skipDescendants()
             } else if type == mode_t(S_IFREG) || type == mode_t(S_IFDIR) {
                 targets.append(entry)
             } else {
-                throw MagicWineError.setup("The Wine archive contains an unsupported filesystem entry: \(entry.path)")
+                throw MagicWineError.unsafeFilesystem("The Wine archive contains an unsupported filesystem entry: \(entry.path)")
             }
         }
         if let enumerationError { throw enumerationError }
@@ -220,7 +222,7 @@ struct RuntimeInstallation {
             guard FileManager.default.isExecutableFile(atPath: executable.path),
                   executable.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(base),
                   try fs.fileType(executable.resolvingSymlinksInPath()) == mode_t(S_IFREG) else {
-                throw MagicWineError.setup("The Wine archive is missing its executable \(name).")
+                throw MagicWineError.integrityFailure("The Wine archive is missing its executable \(name).")
             }
         }
         return targets
@@ -237,7 +239,7 @@ struct RuntimeInstallation {
             let resolved = target.resolvingSymlinksInPath().standardizedFileURL.path
             guard (type == mode_t(S_IFREG) || type == mode_t(S_IFDIR)),
                   resolved == base || resolved.hasPrefix(base + "/") else {
-                throw MagicWineError.setup("The Wine bundle changed during quarantine removal: \(target.path)")
+                throw MagicWineError.unsafeFilesystem("The Wine bundle changed during quarantine removal: \(target.path)")
             }
             let result = target.path.withCString { removexattr($0, "com.apple.quarantine", XATTR_NOFOLLOW) }
             if result == 0 {
@@ -261,7 +263,7 @@ struct RuntimeInstallation {
         let receiptURL = root.appendingPathComponent("installation.json")
         if FileManager.default.fileExists(atPath: receiptURL.path) {
             guard try fs.fileType(receiptURL) == mode_t(S_IFREG) else {
-                throw MagicWineError.setup("The Wine installation receipt is not an ordinary file.")
+                throw MagicWineError.unsafeFilesystem("The Wine installation receipt is not an ordinary file.")
             }
             // Preserve the cached receipt's attributes outside the quarantine-removal scope.
             let handle = try FileHandle(forWritingTo: receiptURL)

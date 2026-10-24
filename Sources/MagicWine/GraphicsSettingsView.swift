@@ -25,13 +25,18 @@ struct GraphicsSettingsView: View {
         model.isLoading || state.blocksPrefixMutation
     }
 
-    private func backendNotice(_ backend: GraphicsBackend) -> String {
+    static func backendNotice(_ backend: GraphicsBackend) -> String {
         switch backend {
         case .standard: ""
         case .dxvk: WineRuntime.dxvkNotice
         case .dxmt: WineRuntime.dxmtNotice
         case .d3dmetal: WineRuntime.d3dMetalNotice
         }
+    }
+
+    /// The consent shown before `AppModel.updateGraphicsComponent(in:)`.
+    static func componentUpdateMessage(for bottle: Bottle) -> String {
+        backendNotice(bottle.graphics.backend) + "\n\nUpdating stops this bottle’s Windows processes, then replaces its \(bottle.graphics.backend.displayName) files in one recoverable step. Choose Standard at any time to restore its original graphics files."
     }
 
     private var selectedDetails: String {
@@ -231,7 +236,7 @@ struct GraphicsSettingsView: View {
             .disabled(unavailable)
             Button("Cancel", role: .cancel) { }
         } message: { selection in
-            Text(backendNotice(selection.backend) + "\n\nChanging graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files.")
+            Text(Self.backendNotice(selection.backend) + "\n\nChanging graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files.")
         }
         .alert("Update \(pendingUpdate?.graphics.backend.displayName ?? "") component?",
                isPresented: Binding(
@@ -244,7 +249,7 @@ struct GraphicsSettingsView: View {
             .disabled(unavailable)
             Button("Cancel", role: .cancel) { }
         } message: { bottle in
-            Text(backendNotice(bottle.graphics.backend) + "\n\nUpdating stops this bottle’s Windows processes, then replaces its \(bottle.graphics.backend.displayName) files in one recoverable step. Choose Standard at any time to restore its original graphics files.")
+            Text(Self.componentUpdateMessage(for: bottle))
         }
     }
 

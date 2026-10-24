@@ -109,14 +109,14 @@ public actor WineRuntime {
         let output: Data
         do { output = try await operation.probe().output }
         catch ProcessOperation.Interrupted.timedOut(let log) {
-            throw MagicWineError.runtimeUnavailable("Wine version inspection timed out for \(executable.path). If macOS is blocking a custom Wine installation, review System Settings > Privacy & Security. For managed Wine, run Install / Update Wine again and accept the unsigned-runtime confirmation. Log: \(log.path)")
+            throw MagicWineError.runtimeUnavailable("Wine version inspection timed out for \(executable.path). If macOS is blocking a custom Wine installation, review System Settings > Privacy & Security. Managed Wine runs only after you confirm that you trust the unsigned build when installing it.", logURL: log)
         }
         guard let version = String(decoding: output, as: UTF8.self).components(separatedBy: .newlines)
                 .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
                 .first(where: { $0.lowercased().hasPrefix("wine-") || $0.lowercased().hasPrefix("wine ") }),
               version.count <= 256 else {
             let log = try operation.recordProbeLog(note: "No Wine version was reported.")
-            throw MagicWineError.runtimeUnavailable("The selected executable did not report a Wine version. Log: \(log.path)")
+            throw MagicWineError.runtimeUnavailable("The selected executable did not report a Wine version.", logURL: log)
         }
         return RuntimeDescriptor(executableURL: executable, version: version)
     }
@@ -124,9 +124,9 @@ public actor WineRuntime {
     public func installRuntime(acceptUnsigned: Bool,
                                progress: (@Sendable (WineInstallationProgress) -> Void)? = nil) async throws -> RuntimeDescriptor {
         guard acceptUnsigned else {
-            throw MagicWineError.setup("Installing managed Wine requires consent to run unsigned third-party code and remove its download quarantine.")
+            throw MagicWineError.consentRequired("Installing managed Wine requires consent to run unsigned third-party code and remove its download quarantine.", .unsignedWine)
         }
-        guard !installing else { throw MagicWineError.setup("A managed Wine installation is already in progress.") }
+        guard !installing else { throw MagicWineError.busy("A managed Wine installation is already in progress.", reason: .operationInProgress) }
         installing = true
         defer { installing = false }
         let executable = try await RuntimeInstallation.install(paths: paths, progress: progress)
@@ -143,13 +143,13 @@ public actor WineRuntime {
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0 else {
             await cleanup(bottle)
-            throw MagicWineError.setup("Bottle setup timed out. Log: \(result.logURL.path)")
+            throw MagicWineError.timedOut("Bottle setup timed out.", logURL: result.logURL)
         }
         try await serverCommand("-w", in: bottle, timeout: remaining)
         let prefix = try prefixURL(for: bottle)
         guard FileManager.default.fileExists(atPath: prefix.appendingPathComponent("system.reg").path),
               FileManager.default.fileExists(atPath: prefix.appendingPathComponent("user.reg").path) else {
-            throw MagicWineError.setup("Wine exited without creating the bottle registry. Setup log: \(result.logURL.path)")
+            throw MagicWineError.operationFailed("Wine exited without creating the bottle registry.", logURL: result.logURL)
         }
         // `wineboot -u` stages the DLLs Wine's own services had mapped; Wine would only apply
         // them when the next session starts, after the first launch prepared its prefix DLLs.
@@ -242,14 +242,16 @@ public actor WineRuntime {
 
     public func configureSynchronization(msyncEnabled: Bool, in bottle: Bottle) async throws -> Bottle {
         guard !settingsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Settings setup is already in progress for this bottle.")
+            throw MagicWineError.busy("Settings setup is already in progress for this bottle.", reason: .operationInProgress)
         }
         settingsChanging.insert(bottle.id)
         defer { settingsChanging.remove(bottle.id) }
         let (current, launch, lifetime) = try await idleBottle(bottle)
         defer { lifetime.release(); launch.release() }
         guard supportsMSync(current.runtime) else {
-            throw MagicWineError.setup("MSync requires the updated MagicWine-managed Wine runtime. Choose Update Wine in this bottle’s dashboard, or run install-wine --accept-unsigned followed by runtime upgrade in the CLI. Custom Wine is unchanged.")
+            // Only an older managed runtime can switch in place; custom Wine is never changed.
+            throw MagicWineError.runtimeIncompatible("MSync requires the updated MagicWine-managed Wine runtime. This bottle's Wine is unchanged.",
+                                                     remedy: canUpgradeRuntime(current.runtime) ? .updateWine : .chooseWine)
         }
         try Task.checkCancellation()
         return try await store.setSynchronization(msyncEnabled: msyncEnabled, in: current)
@@ -258,18 +260,18 @@ public actor WineRuntime {
     /// Explicit adoption only: never downloads Wine or changes quarantine/trust settings.
     public func upgradeRuntime(in bottle: Bottle) async throws -> Bottle {
         guard !settingsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Settings setup is already in progress for this bottle.")
+            throw MagicWineError.busy("Settings setup is already in progress for this bottle.", reason: .operationInProgress)
         }
         settingsChanging.insert(bottle.id)
         defer { settingsChanging.remove(bottle.id) }
         let (current, launch, lifetime) = try await idleBottle(bottle)
         defer { lifetime.release(); launch.release() }
         guard canUpgradeRuntime(current.runtime) else {
-            throw MagicWineError.setup("Only a bottle pinned to an older MagicWine-managed Metal Wine runtime can use this upgrade.")
+            throw MagicWineError.runtimeIncompatible("Only a bottle pinned to an older MagicWine-managed Metal Wine runtime can use this upgrade.", remedy: .chooseWine)
         }
         let executable = managedExecutableURL
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-            throw MagicWineError.setup("The updated Wine runtime is not installed. Choose Update Wine in this bottle’s dashboard to install and switch in one step, or run install-wine --accept-unsigned before retrying runtime upgrade in the CLI.")
+            throw MagicWineError.runtimeUnavailable("The updated Wine runtime is not installed.", remedy: .updateWine)
         }
         try RuntimeInstallation.validateCachedRuntime(at: RuntimeInstallation.destination(paths: paths), paths: paths)
         try validateGraphicsRuntime(current.graphics.backend, executable: executable)
@@ -280,7 +282,7 @@ public actor WineRuntime {
 
     private func idleBottle(_ bottle: Bottle) async throws -> (Bottle, GraphicsOperationLease, GraphicsOperationLease) {
         guard active[bottle.id]?.isEmpty != false, pendingLaunches[bottle.id]?.isEmpty != false else {
-            throw MagicWineError.setup("Close this bottle's Windows programs or use Stop before changing synchronization or Wine.")
+            throw MagicWineError.busy("This bottle's Windows programs are running; synchronization and Wine change only while it is idle.", reason: .programsRunning)
         }
         try paths.prepare()
         let launch = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
@@ -306,7 +308,7 @@ public actor WineRuntime {
 
     public func configureDisplay(retinaEnabled: Bool, in bottle: Bottle) async throws -> Bottle {
         guard !settingsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Graphics or display setup is already in progress for this bottle.")
+            throw MagicWineError.busy("Graphics or display setup is already in progress for this bottle.", reason: .operationInProgress)
         }
         settingsChanging.insert(bottle.id)
         defer { settingsChanging.remove(bottle.id) }
@@ -316,7 +318,7 @@ public actor WineRuntime {
         defer { launch.release() }
         let current = try await store.current(bottle)
         guard current.isInitialized else {
-            throw MagicWineError.setup("Initialize this bottle before changing its display settings.")
+            throw MagicWineError.notInitialized("Set up this bottle before changing its display settings.")
         }
         let configuration = DisplayConfiguration(retinaEnabled: retinaEnabled)
         if current.display == configuration, try await !store.displayNeedsUpdate(current) { return current }
@@ -333,16 +335,16 @@ public actor WineRuntime {
                                   componentSource: URL? = nil,
                                   progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> Bottle {
         guard backend == .standard || acceptExperimental else {
-            throw MagicWineError.setup("\(backend.displayName) is experimental third-party code. Confirm its installation before enabling it.")
+            throw MagicWineError.consentRequired("\(backend.displayName) is experimental third-party code and needs confirmation before it is enabled.", .experimentalGraphics)
         }
         guard componentSource == nil || backend == .d3dmetal else {
-            throw MagicWineError.setup("A graphics library import folder is only supported for D3DMetal.")
+            throw MagicWineError.invalidInput("A graphics library import folder is only supported for D3DMetal.")
         }
         guard !settingsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Graphics or display setup is already in progress for this bottle.")
+            throw MagicWineError.busy("Graphics or display setup is already in progress for this bottle.", reason: .operationInProgress)
         }
         guard backend == .standard || !installingGraphics.contains(backend) else {
-            throw MagicWineError.setup("Another \(backend.displayName) installation is in progress. Wait for it to finish before configuring another bottle.")
+            throw MagicWineError.busy("Another \(backend.displayName) installation is in progress for another bottle.", reason: .operationInProgress)
         }
         settingsChanging.insert(bottle.id)
         if backend != .standard { installingGraphics.insert(backend) }
@@ -356,22 +358,22 @@ public actor WineRuntime {
         defer { launch.release() }
         let current = try await store.current(bottle)
         guard current.isInitialized else {
-            throw MagicWineError.setup("Initialize this bottle before changing its graphics backend.")
+            throw MagicWineError.notInitialized("Set up this bottle before changing its graphics backend.")
         }
         guard backend == .standard || current.graphics.backend != backend || graphicsProviders.supports(current.graphics) else {
-            throw MagicWineError.setup("This bottle uses an unsupported \(backend.displayName) component (\(current.graphics.componentID ?? "none")) that cannot be updated in place. Choose Standard to restore this bottle's original graphics files, then enable the backend again.")
+            throw MagicWineError.componentInvalid("This bottle uses an unsupported \(backend.displayName) component (\(current.graphics.componentID ?? "none")) that cannot be updated in place.")
         }
         let retainingComponent = backend != .standard && current.graphics.backend == backend
         var source = componentSource
         if backend == .d3dmetal {
             guard !retainingComponent || componentSource == nil else {
-                throw MagicWineError.setup("Choose Standard before importing a different D3DMetal component.")
+                throw MagicWineError.componentInvalid("This bottle already uses an imported D3DMetal component; a different one can be imported only after Standard graphics is restored.")
             }
             if !retainingComponent && source == nil {
                 source = Self.discoverD3DMetalSource(executable: current.runtime.executableURL)
             }
             guard retainingComponent || source != nil else {
-                throw MagicWineError.setup("No local D3DMetal libraries were found beside this bottle's Wine or in an installed CrossOver. Select a library folder or pass --import <folder>; MagicWine does not download or license Apple libraries for you.")
+                throw MagicWineError.invalidInput("No local D3DMetal libraries were found beside this bottle's Wine or in an installed CrossOver. Import a library folder instead; MagicWine does not download or license Apple libraries for you.")
             }
         }
         try validateGraphicsRuntime(backend, executable: current.runtime.executableURL)
@@ -416,19 +418,19 @@ public actor WineRuntime {
                                         progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> Bottle {
         let backend = bottle.graphics.backend
         guard let provider = graphicsProviders[backend] else {
-            throw MagicWineError.setup("Standard graphics has no component to update.")
+            throw MagicWineError.invalidInput("Standard graphics has no component to update.")
         }
         guard let target = provider.currentComponentID else {
-            throw MagicWineError.setup("\(backend.displayName) components are your imported libraries; MagicWine has no newer version to install. Choose Standard, then import the libraries again to change them.")
+            throw MagicWineError.componentInvalid("\(backend.displayName) components are your imported libraries; MagicWine has no newer version to install.")
         }
         guard acceptExperimental else {
-            throw MagicWineError.setup("\(backend.displayName) is experimental third-party code. Confirm installing \(target) before updating this bottle's component.")
+            throw MagicWineError.consentRequired("\(backend.displayName) is experimental third-party code; installing \(target) for this bottle needs confirmation.", .experimentalGraphics)
         }
         guard !settingsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Graphics or display setup is already in progress for this bottle.")
+            throw MagicWineError.busy("Graphics or display setup is already in progress for this bottle.", reason: .operationInProgress)
         }
         guard !installingGraphics.contains(backend) else {
-            throw MagicWineError.setup("Another \(backend.displayName) installation is in progress. Wait for it to finish before configuring another bottle.")
+            throw MagicWineError.busy("Another \(backend.displayName) installation is in progress for another bottle.", reason: .operationInProgress)
         }
         settingsChanging.insert(bottle.id)
         installingGraphics.insert(backend)
@@ -442,11 +444,11 @@ public actor WineRuntime {
         defer { launch.release() }
         let current = try await store.current(bottle)
         guard current.isInitialized, current.graphics.backend == backend else {
-            throw MagicWineError.setup("This bottle's graphics backend changed. Reload it before updating its component.")
+            throw MagicWineError.conflict("This bottle's graphics backend changed before its component could be updated.")
         }
         guard current.graphics.componentID != target else { return current }
         guard graphicsProviders.supports(current.graphics) else {
-            throw MagicWineError.setup("This bottle uses an unsupported \(backend.displayName) component (\(current.graphics.componentID ?? "none")) that cannot be updated in place. Choose Standard to restore this bottle's original graphics files, then enable \(backend.displayName) again.")
+            throw MagicWineError.componentInvalid("This bottle uses an unsupported \(backend.displayName) component (\(current.graphics.componentID ?? "none")) that cannot be updated in place.")
         }
         try provider.validateRuntime(current.runtime.executableURL)
         progress?(.stopping)
@@ -474,7 +476,7 @@ public actor WineRuntime {
     /// concurrent graphics, display, synchronization, and runtime changes.
     public func setGraphicsHUD(_ showHUD: Bool, in bottle: Bottle) async throws -> Bottle {
         guard !settingsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Graphics or display setup is already in progress for this bottle.")
+            throw MagicWineError.busy("Graphics or display setup is already in progress for this bottle.", reason: .operationInProgress)
         }
         settingsChanging.insert(bottle.id)
         defer { settingsChanging.remove(bottle.id) }
@@ -497,7 +499,7 @@ public actor WineRuntime {
                          exitStatusIsResult: Bool = false, program: WindowsProgram? = nil,
                          diagnostics: Bool = false, log logName: LogName? = nil) async throws -> OperationResult {
         guard !settingsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
+            throw MagicWineError.busy("This bottle's graphics or display setup must finish before Windows programs run.", reason: .operationInProgress)
         }
         try paths.prepare()
         let handoffID = UUID()
@@ -525,14 +527,14 @@ public actor WineRuntime {
         try Task.checkCancellation()
         if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
         guard !settingsChanging.contains(bottle.id) else {
-            throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
+            throw MagicWineError.busy("This bottle's graphics or display setup must finish before Windows programs run.", reason: .operationInProgress)
         }
         let prefix = try prefixURL(for: current)
         // The descriptor is pinned, never fall back to whichever Wine is in PATH today.
         let wine = current.runtime.executableURL.standardizedFileURL
         try validateExecutable(wine)
         guard FileManager.default.isExecutableFile(atPath: wine.path) else {
-            throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(wine.path). Select an intact Wine distribution; this bottle was not migrated.")
+            throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(wine.path). Restore that Wine installation; this bottle was not migrated.")
         }
         // Options come from the saved record; hand-edited metadata is validated again.
         let savedProgram = try program.map { requested in
@@ -562,7 +564,8 @@ public actor WineRuntime {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                throw MagicWineError.setup("Could not apply this bottle's Retina / HiDPI settings. Close its Windows programs or use Stop, then retry. \(error.localizedDescription)")
+                throw MagicWineError.busy("Could not apply this bottle's Retina / HiDPI settings while its Windows programs run. \(error.localizedDescription)",
+                                          reason: .programsRunning, logURL: (error as? MagicWineError)?.logURL)
             }
         }
         let lifetime = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
@@ -622,7 +625,7 @@ public actor WineRuntime {
             throw CancellationError()
         } catch ProcessOperation.Interrupted.timedOut(let log) {
             await cleanup(bottle)
-            throw MagicWineError.setup("Wine operation timed out. Log: \(log.path)")
+            throw MagicWineError.timedOut("Wine operation timed out.", logURL: log)
         }
     }
 
@@ -641,7 +644,7 @@ public actor WineRuntime {
         try validateExecutable(wine)
         let server = wine.deletingLastPathComponent().appendingPathComponent("wineserver")
         guard FileManager.default.isExecutableFile(atPath: server.path) else {
-            throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(server.path). Select an intact Wine distribution; this bottle was not migrated.")
+            throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(server.path). Restore that Wine installation; this bottle was not migrated.")
         }
         let plan = LaunchPlanner.plan(LaunchRequest(
             inherited: ProcessInfo.processInfo.environment, runtime: runtimeFacts(for: wine),
@@ -669,9 +672,10 @@ public actor WineRuntime {
         } catch ProcessOperation.Interrupted.timedOut(let log) {
             if tracked { await cleanup(bottle) }
             if idleProbe {
-                throw MagicWineError.setup("This bottle's Wine server is still running. Close its Windows programs or use Stop before changing synchronization or Wine. Log: \(log.path)")
+                throw MagicWineError.busy("This bottle's Wine server is still running, so synchronization and Wine cannot change now.",
+                                          reason: .programsRunning, logURL: log)
             }
-            throw MagicWineError.setup("Wine operation timed out. Log: \(log.path)")
+            throw MagicWineError.timedOut("Wine operation timed out.", logURL: log)
         }
         guard status == 0 || status == tolerated else {
             throw MagicWineError.processFailed(exitCode: status, logURL: try operation.recordProbeLog(note: "Exited with status \(status)."))
@@ -734,7 +738,8 @@ public actor WineRuntime {
         do {
             try await completePendingBoot(bottle, prefix: prefix, deadline: Date().addingTimeInterval(180))
         } catch let error where !Self.isInterruption(error) {
-            throw MagicWineError.setup("Wine could not finish this bottle's pending prefix update before the launch. Close its Windows programs or use Stop, then retry. \(error.localizedDescription)")
+            throw MagicWineError.busy("Wine could not finish this bottle's pending prefix update before the launch. \(error.localizedDescription)",
+                                      reason: .programsRunning, logURL: (error as? MagicWineError)?.logURL)
         }
     }
 
@@ -746,7 +751,7 @@ public actor WineRuntime {
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0 else {
             await cleanup(bottle)
-            throw MagicWineError.setup("Wine's pending prefix update timed out.")
+            throw MagicWineError.timedOut("Wine's pending prefix update timed out.")
         }
         let wine = bottle.runtime.executableURL.standardizedFileURL
         let plan = LaunchPlanner.plan(LaunchRequest(
@@ -772,7 +777,7 @@ public actor WineRuntime {
             throw CancellationError()
         } catch ProcessOperation.Interrupted.timedOut(let log) {
             await cleanup(bottle)
-            throw MagicWineError.setup("Wine's pending prefix update timed out. Log: \(log.path)")
+            throw MagicWineError.timedOut("Wine's pending prefix update timed out.", logURL: log)
         }
         try await serverCommand("-w", in: bottle, timeout: max(deadline.timeIntervalSinceNow, 1), tracked: true)
     }
@@ -842,10 +847,10 @@ public actor WineRuntime {
 
     private func graphicsComponent(_ configuration: GraphicsConfiguration) throws -> (provider: any GraphicsComponentProvider, root: URL) {
         guard let componentID = configuration.componentID else {
-            throw MagicWineError.setup("This bottle has no pinned \(configuration.backend.displayName) component. Choose Standard to restore its original graphics files, then enable the backend again.")
+            throw MagicWineError.componentInvalid("This bottle has no pinned \(configuration.backend.displayName) component.")
         }
         guard let provider = graphicsProviders[configuration.backend] else {
-            throw MagicWineError.setup("Standard graphics does not use a graphics component.")
+            throw MagicWineError.invalidInput("Standard graphics does not use a graphics component.")
         }
         return (provider, try provider.validate(componentID: componentID, paths: paths))
     }
@@ -874,7 +879,7 @@ public actor WineRuntime {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let attributes = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard attributes.isDirectory == true, attributes.isSymbolicLink != true else {
-                throw MagicWineError.setup("The graphics cache/log directory must not be a symbolic link: \(folder.path)")
+                throw MagicWineError.unsafeFilesystem("The graphics cache/log directory must not be a symbolic link: \(folder.path)")
             }
         }
         return GraphicsFolders(cache: cache, logs: logs)
@@ -909,7 +914,7 @@ public actor WineRuntime {
         #if arch(arm64)
         if try requiresRosetta(executable),
            !FileManager.default.fileExists(atPath: "/Library/Apple/usr/libexec/oah/libRosettaRuntime") {
-            throw MagicWineError.runtimeUnavailable("This x86_64 Wine build requires Rosetta. Install Rosetta through Apple's macOS prompt or run /usr/sbin/softwareupdate --install-rosetta in Terminal and review Apple's license yourself. MagicWine will not accept it for you.")
+            throw MagicWineError.runtimeUnavailable("This x86_64 Wine build requires Rosetta.", remedy: .installRosetta)
         }
         #endif
     }
@@ -951,15 +956,15 @@ public actor WineRuntime {
         let items = DependencyCatalog.items.filter { requested.contains($0.id) }
         guard !requested.isEmpty, items.count == requested.count else {
             let unknown = requested.subtracting(DependencyCatalog.items.map(\.id)).sorted()
-            throw MagicWineError.setup(requested.isEmpty ? "Choose at least one dependency to install."
-                                       : "Unknown dependency: \(unknown.joined(separator: ", ")).")
+            throw MagicWineError.invalidInput(requested.isEmpty ? "Choose at least one dependency to install."
+                                              : "Unknown dependency: \(unknown.joined(separator: ", ")).")
         }
         guard acceptLicense else {
             let terms = items.map { "\($0.name): \($0.license.name) (\($0.license.url.absoluteString))" }
-            throw MagicWineError.setup("Installing these dependencies requires accepting their licenses:\n" + terms.joined(separator: "\n"))
+            throw MagicWineError.consentRequired("Installing these dependencies requires accepting their licenses:\n" + terms.joined(separator: "\n"), .dependencyLicenses)
         }
         guard !settingsChanging.contains(bottle.id), dependencyInstalls[bottle.id] == nil else {
-            throw MagicWineError.setup("Wait for this bottle's current setup to finish before installing dependencies.")
+            throw MagicWineError.busy("This bottle's current setup must finish before dependencies are installed.", reason: .operationInProgress)
         }
         try paths.prepare()
         // Held open for the whole installation so retention never removes it meanwhile.
@@ -984,7 +989,8 @@ public actor WineRuntime {
             }
             if case .stopped? = error as? MagicWineError { throw error }
             Self.note("Failure: \(error.localizedDescription)", in: log)
-            throw MagicWineError.setup("\(error.localizedDescription)\nDependency log: \(log.url.path)")
+            throw (error as? MagicWineError)?.withLog(log.url)
+                ?? MagicWineError.operationFailed(error.localizedDescription, logURL: log.url)
         }
     }
 
@@ -992,7 +998,7 @@ public actor WineRuntime {
                                           progress: (@Sendable (DependencyProgress) -> Void)?) async throws -> DependencyInstallResult {
         var current = try await store.current(bottle)
         guard current.isInitialized else {
-            throw MagicWineError.setup("Initialize this bottle before installing dependencies.")
+            throw MagicWineError.notInitialized("Set up this bottle before installing dependencies.")
         }
         let prefix = try prefixURL(for: current)
         for item in items {
@@ -1048,7 +1054,7 @@ public actor WineRuntime {
                 case .place(let files):
                     let sources = extracted.filter { files.contains($0.key) }
                     guard sources.count == files.count else {
-                        throw MagicWineError.setup("\(item.name): not every file was extracted.")
+                        throw MagicWineError.integrityFailure("\(item.name): not every file was extracted.")
                     }
                     try await withIdleBottleForDependencies(current, log: log) {
                         try GraphicsPrefix.withLock(bottleDirectory: prefix.deletingLastPathComponent()) {
@@ -1072,7 +1078,7 @@ public actor WineRuntime {
             progress?(.checking(id: item.id))
             let status = DependencyInstaller.status(of: item, prefix: prefix, record: nil)
             guard status.isInstalled else {
-                throw MagicWineError.setup("\(item.name) did not pass its post-install check. Missing: \(status.missing.prefix(6).joined(separator: ", "))\(status.missing.count > 6 ? ", …" : "").")
+                throw MagicWineError.operationFailed("\(item.name) did not pass its post-install check. Missing: \(status.missing.prefix(6).joined(separator: ", "))\(status.missing.count > 6 ? ", …" : "").", logURL: log.url)
             }
             // Whole seconds round-trip exactly through bottle.json, so later saves compare equal.
             let installedAt = Date(timeIntervalSinceReferenceDate: Date().timeIntervalSinceReferenceDate.rounded(.down))
@@ -1102,9 +1108,9 @@ public actor WineRuntime {
         let lifetime: GraphicsOperationLease
         do {
             (_, launch, lifetime) = try await idleBottle(bottle)
-        } catch MagicWineError.setup(let detail) {
+        } catch MagicWineError.busy(let detail, _, _) {
             Self.note("Bottle not idle: \(detail)", in: log)
-            throw MagicWineError.setup("Close this bottle's Windows programs or use Stop before installing dependencies.")
+            throw MagicWineError.busy("This bottle's Windows programs are running; dependencies install only while it is idle.", reason: .programsRunning)
         }
         defer { lifetime.release(); launch.release() }
         try body()

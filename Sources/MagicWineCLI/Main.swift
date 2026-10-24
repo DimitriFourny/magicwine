@@ -5,26 +5,34 @@ import Darwin
 @main
 struct MagicWineCLI {
     static func main() async {
+        var arguments = Array(CommandLine.arguments.dropFirst())
+        var root: URL?
+        var store: BottleStore?
         do {
-            try await execute(Array(CommandLine.arguments.dropFirst()))
+            if arguments.first == "--root" {
+                guard arguments.count >= 3 else { throw MagicWineError.invalidInput("--root requires a directory and command.") }
+                root = URL(fileURLWithPath: arguments[1], isDirectory: true)
+                arguments.removeFirst(2)
+            }
+            if arguments.first == "--version" || arguments.first == "version" { print(versionDescription); return }
+            let paths = ApplicationPaths(root: root)
+            ProcessLogs.prune(paths: paths)
+            let bottles = BottleStore(paths: paths)
+            store = bottles
+            try await execute(arguments, paths: paths, store: bottles)
         } catch {
-            FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8))
+            // Every bottle command names its bottle with the first UUID argument.
+            let bottleID = arguments.dropFirst().lazy.compactMap { UUID(uuidString: $0) }.first
+            var bottle: Bottle?
+            if let bottleID, let store { bottle = try? await store.list().first { $0.id == bottleID } }
+            let invocation = root.map { "magicwine --root \(shellQuoted($0.path))" } ?? "magicwine"
+            let report = CommandLineErrorReport.render(error, bottleID: bottleID, bottle: bottle, invocation: invocation)
+            FileHandle.standardError.write(Data((report + "\n").utf8))
             exit(1)
         }
     }
 
-    private static func execute(_ input: [String]) async throws {
-        var arguments = input
-        var root: URL?
-        if arguments.first == "--root" {
-            guard arguments.count >= 3 else { throw MagicWineError.setup("--root requires a directory and command.") }
-            root = URL(fileURLWithPath: arguments[1], isDirectory: true)
-            arguments.removeFirst(2)
-        }
-        if arguments.first == "--version" || arguments.first == "version" { print(versionDescription); return }
-        let paths = ApplicationPaths(root: root)
-        ProcessLogs.prune(paths: paths)
-        let store = BottleStore(paths: paths)
+    private static func execute(_ arguments: [String], paths: ApplicationPaths, store: BottleStore) async throws {
         let runtime = WineRuntime(paths: paths, store: store)
         guard let command = arguments.first else { print(usage); return }
         let values = Array(arguments.dropFirst())
@@ -34,7 +42,7 @@ struct MagicWineCLI {
             for candidate in await runtime.discover() { print("\(candidate.version)\t\(candidate.executableURL.path)") }
         case "install-wine":
             guard !values.isEmpty else {
-                throw MagicWineError.setup("Wine is unsigned and not notarized by Apple. Use install-wine --accept-unsigned to download the Gcenx Wine build with MagicWine’s bundled, pinned source-built DXMT driver bridge. DXMT is also bundled, so enabling it needs no additional download. MagicWine verifies the download checksum and removes only the managed Wine bundle's quarantine. A checksum is not a malware assessment; system-wide security settings are unchanged.")
+                throw MagicWineError.consentRequired("Wine is unsigned and not notarized by Apple. Installing it downloads the Gcenx Wine build with MagicWine’s bundled, pinned source-built DXMT driver bridge. DXMT is also bundled, so enabling it needs no additional download. MagicWine verifies the download checksum and removes only the managed Wine bundle's quarantine. A checksum is not a malware assessment; system-wide security settings are unchanged.", .unsignedWine)
             }
             guard values == ["--accept-unsigned"] else {
                 throw argumentError("install-wine --accept-unsigned")
@@ -373,7 +381,13 @@ struct MagicWineCLI {
         return bottle.msyncEnabled ? "msync" : "server"
     }
 
-    private static func argumentError(_ detail: String) -> MagicWineError { .setup("\(detail)\nRun magicwine --help for usage.") }
+    private static func argumentError(_ detail: String) -> MagicWineError { .invalidInput("\(detail)\nRun magicwine --help for usage.") }
+
+    /// A path as one shell word, for commands suggested in error hints.
+    private static func shellQuoted(_ text: String) -> String {
+        let plain = text.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "/._-+,:@".contains($0)) }
+        return plain && !text.isEmpty ? text : "'" + text.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
+    }
 
     private static func byteCount(_ size: Int64) -> String { ByteCountFormatter.string(fromByteCount: size, countStyle: .file) }
 

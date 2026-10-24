@@ -112,7 +112,7 @@ public enum StorageCleanup {
     }
 
     static func candidates(paths: ApplicationPaths, bottles: [Bottle], settings: AppSettings) throws -> [StorageCleanupItem] {
-        guard try fileType(paths.root) == S_IFDIR else { throw failure("The library root must be an ordinary directory: \(paths.root.path).") }
+        guard try fileType(paths.root) == S_IFDIR else { throw unsafe("The library root must be an ordinary directory: \(paths.root.path).") }
         let now = Date()
         var items: [StorageCleanupItem] = []
         func item(_ category: StorageCleanupItem.Category, _ parent: [String], _ name: String, reason: String,
@@ -270,7 +270,7 @@ public enum StorageCleanup {
         switch try fileType(directory) {
         case nil: return []
         case S_IFDIR: return try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
-        default: throw failure("\(directory.path) must be an ordinary directory, not a link.")
+        default: throw unsafe("\(directory.path) must be an ordinary directory, not a link.")
         }
     }
 
@@ -310,24 +310,24 @@ public enum StorageCleanup {
     /// Serializes cleanups across processes; installers and launches use their own leases.
     private static func acquireCleanupLock(paths: ApplicationPaths) throws -> Int32 {
         guard try fileType(paths.bottlesDirectory) == S_IFDIR else {
-            throw failure("The bottle storage directory must be an ordinary directory, not a link.")
+            throw unsafe("The bottle storage directory must be an ordinary directory, not a link.")
         }
         let directory = paths.bottlesDirectory.appendingPathComponent(locksName, isDirectory: true)
         if directory.path.withCString({ mkdir($0, 0o700) }) != 0, errno != EEXIST {
             throw failure("Cannot create the lock directory: \(String(cString: strerror(errno))).")
         }
-        guard try fileType(directory) == S_IFDIR else { throw failure("The lock directory must be an ordinary directory, not a link.") }
+        guard try fileType(directory) == S_IFDIR else { throw unsafe("The lock directory must be an ordinary directory, not a link.") }
         let descriptor = open(directory.appendingPathComponent("storage-cleanup.lock").path,
                               O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, mode_t(S_IRUSR | S_IWUSR))
         guard descriptor >= 0 else { throw failure("Cannot open the storage cleanup lock: \(String(cString: strerror(errno))).") }
         var status = stat()
         guard fstat(descriptor, &status) == 0, status.st_mode & S_IFMT == S_IFREG, status.st_nlink == 1 else {
             close(descriptor)
-            throw failure("The storage cleanup lock must be a regular file without hard links.")
+            throw unsafe("The storage cleanup lock must be a regular file without hard links.")
         }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             close(descriptor)
-            throw failure("Another storage cleanup is running for this library. Nothing was removed.")
+            throw MagicWineError.busy("Storage cleanup: Another storage cleanup is running for this library. Nothing was removed.", reason: .operationInProgress)
         }
         return descriptor
     }
@@ -352,14 +352,14 @@ public enum StorageCleanup {
                         } catch is CancellationError {
                             throw CancellationError()
                         } catch {
-                            throw failure("“\(bottle.name)” is launching, running, or being configured. Close its Windows programs or use Stop, then retry. Nothing was removed.")
+                            throw MagicWineError.busy("Storage cleanup: “\(bottle.name)” is launching, running, or being configured. Nothing was removed.", reason: .programsRunning)
                         }
                     }
                     locked.insert(bottle.id)
                     try await requireIdleServer(bottle, paths: paths)
                 }
             }
-            throw failure("Bottles were created or removed while preparing cleanup. Retry; nothing was removed.")
+            throw MagicWineError.busy("Storage cleanup: Bottles were created or removed while preparing cleanup; nothing was removed.", reason: .operationInProgress)
         } catch {
             leases.forEach { $0.release() }
             throw error
@@ -381,7 +381,7 @@ public enum StorageCleanup {
                                                           operation: "wineserver", detail: "-w"),
                                            timeout: 0.5).probe()
         } catch ProcessOperation.Interrupted.timedOut(let log) {
-            throw failure("The Wine server of “\(bottle.name)” is still running. Close its Windows programs or use Stop, then retry. Nothing was removed. Log: \(log.path)")
+            throw MagicWineError.busy("Storage cleanup: The Wine server of “\(bottle.name)” is still running. Nothing was removed.", reason: .programsRunning, logURL: log)
         }
     }
 
@@ -397,7 +397,7 @@ public enum StorageCleanup {
     private static func remove(_ item: StorageCleanupItem, paths: ApplicationPaths) throws -> Bool {
         guard allowedParents[item.category]?.contains(item.parent) == true, !item.name.isEmpty,
               !item.name.contains("/"), item.name != ".", item.name != ".." else {
-            throw failure("Refusing to remove an entry outside the managed directories: \(item.url.path).")
+            throw unsafe("Refusing to remove an entry outside the managed directories: \(item.url.path).")
         }
         // Open each managed parent without following links, then work relative to it,
         // so no link can redirect removal outside the library.
@@ -406,7 +406,7 @@ public enum StorageCleanup {
         defer { close(parent) }
         for component in item.parent {
             let child = openat(parent, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            guard child >= 0 else { throw failure("\(component) must be an ordinary directory inside the library.") }
+            guard child >= 0 else { throw unsafe("\(component) must be an ordinary directory inside the library.") }
             close(parent)
             parent = child
         }
@@ -460,7 +460,7 @@ public enum StorageCleanup {
             defer { close(directory) }
             var opened = stat()
             guard fstat(directory, &opened) == 0, opened.st_dev == status.st_dev, opened.st_ino == status.st_ino else {
-                throw failure("An entry of \(display.path) changed during removal.")
+                throw unsafe("An entry of \(display.path) changed during removal.")
             }
             for child in try names(in: directory) {
                 try removeTree(parent: directory, name: child, display: display)
@@ -492,5 +492,7 @@ public enum StorageCleanup {
         return result
     }
 
+    /// Unexpected system errors; `unsafe` covers refusals to follow links or leave the library.
     private static func failure(_ message: String) -> MagicWineError { .setup("Storage cleanup: " + message) }
+    private static func unsafe(_ message: String) -> MagicWineError { .unsafeFilesystem("Storage cleanup: " + message) }
 }

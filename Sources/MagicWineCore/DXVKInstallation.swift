@@ -141,7 +141,7 @@ enum DXVKInstallation {
     private static func pinnedReceipt(for requested: String) throws -> Receipt {
         if requested == componentID { return expectedReceipt }
         guard let receipt = retainedReceipts.first(where: { $0.componentID == requested }) else {
-            throw MagicWineError.setup("This bottle selects an older or unsupported DXVK component (\(requested)). Choose Standard to restore this bottle's original graphics files, then enable DXVK again to use \(componentID).")
+            throw MagicWineError.componentInvalid("This bottle selects an older or unsupported DXVK component (\(requested)); MagicWine now installs \(componentID).")
         }
         return receipt
     }
@@ -154,7 +154,7 @@ enum DXVKInstallation {
                         progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> URL {
         try Task.checkCancellation()
         guard paths.root.isFileURL else {
-            throw MagicWineError.setup("DXVK installation requires a local MagicWine data directory.")
+            throw MagicWineError.unsafeFilesystem("DXVK installation requires a local MagicWine data directory.")
         }
         // Reject existing links before prepare can create any child directories.
         if try fs.exists(paths.root) {
@@ -182,7 +182,7 @@ enum DXVKInstallation {
             }
             progress?(.verifying)
             guard let bundledArchive = Bundle.module.url(forResource: archiveRoot, withExtension: "tar.gz") else {
-                throw MagicWineError.setup("The bundled DXVK package is missing. Reinstall this MagicWine build; no component was installed.")
+                throw MagicWineError.integrityFailure("The bundled DXVK package is missing. Reinstall this MagicWine build; no component was installed.")
             }
             try fs.requireFile(bundledArchive, maximum: fileMaximum)
             let archive = stage.appendingPathComponent("dxvk.tar.gz")
@@ -195,7 +195,7 @@ enum DXVKInstallation {
                 try Data(contents.utf8).write(to: component.appendingPathComponent(name), options: .atomic)
             }
             guard let dependencyNotice = Bundle.module.url(forResource: "LICENSE-DXVK-DEPENDENCIES", withExtension: "txt") else {
-                throw MagicWineError.setup("The bundled DXVK dependency notices are missing. Reinstall this MagicWine build.")
+                throw MagicWineError.integrityFailure("The bundled DXVK dependency notices are missing. Reinstall this MagicWine build.")
             }
             try fs.requireFile(dependencyNotice, maximum: fileMaximum)
             try FileManager.default.copyItem(at: dependencyNotice,
@@ -212,7 +212,7 @@ enum DXVKInstallation {
             try? handle?.write(contentsOf: Data(("Failure: \(error.localizedDescription)\n").utf8))
             try? handle?.close()
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
-            throw MagicWineError.setup("DXVK installation failed: \(error.localizedDescription)\nInstallation log: \(logURL.path)")
+            throw MagicWineError.failed("DXVK installation failed: \(error.localizedDescription)", logURL: logURL, underlying: error)
         }
     }
 
@@ -230,7 +230,7 @@ enum DXVKInstallation {
         let manager = FileManager.default
         guard manager.fileExists(atPath: root.appendingPathComponent("lib/libMoltenVK.dylib").path),
               manager.fileExists(atPath: root.appendingPathComponent("lib/wine/x86_64-unix/winevulkan.so").path) else {
-            throw MagicWineError.setup("This Wine installation does not provide the Vulkan/MoltenVK layout required by this experimental DXVK backend. Use MagicWine's managed Wine runtime or keep Standard rendering.")
+            throw MagicWineError.runtimeIncompatible("This Wine installation does not provide the Vulkan/MoltenVK layout required by this experimental DXVK backend; Standard rendering keeps working.", remedy: .chooseWine)
         }
     }
 
@@ -238,7 +238,7 @@ enum DXVKInstallation {
         guard paths.root.isFileURL,
               try fs.fileType(paths.root) == mode_t(S_IFDIR),
               try fs.fileType(paths.componentsDirectory) == mode_t(S_IFDIR) else {
-            throw MagicWineError.setup("DXVK components must be inside ordinary MagicWine root and Components directories, not symbolic links.")
+            throw MagicWineError.unsafeFilesystem("DXVK components must be inside ordinary MagicWine root and Components directories, not symbolic links.")
         }
     }
 
@@ -249,15 +249,15 @@ enum DXVKInstallation {
         let receiptData = try fs.read(receiptURL, maximum: 65_536)
         let receipt: Receipt
         do { receipt = try JSONDecoder().decode(Receipt.self, from: receiptData) }
-        catch { throw MagicWineError.setup("The DXVK installation receipt is malformed: \(error.localizedDescription)") }
+        catch { throw MagicWineError.integrityFailure("The DXVK installation receipt is malformed: \(error.localizedDescription)") }
         guard receipt == expectedReceipt else {
-            throw MagicWineError.setup("The DXVK installation receipt does not match the pinned component, source, license, or file checksums.")
+            throw MagicWineError.integrityFailure("The DXVK installation receipt does not match the pinned component, source, license, or file checksums.")
         }
         try cache.verify(root, names: Array(receipt.files.keys) + ["installation.json", "", "x32", "x64"], fs: fs, rehash: rehash,
-                         changed: .setup("The DXVK component changed during validation. No component was adopted.")) {
+                         changed: .integrityFailure("The DXVK component changed during validation. No component was adopted.")) {
             for (name, expected) in receipt.files {
                 guard try fs.sha256(root.appendingPathComponent(name), maximum: fileMaximum) == expected else {
-                    throw MagicWineError.setup("The DXVK component was changed or corrupted (SHA-256 mismatch): \(name). Restore Standard, move this cached component out of Components, then enable DXVK again. Component: \(root.path)")
+                    throw MagicWineError.componentInvalid("The DXVK component was changed or corrupted (SHA-256 mismatch): \(name). Move this cached component out of Components before enabling DXVK again. Component: \(root.path)")
                 }
             }
         }
@@ -272,11 +272,11 @@ enum DXVKInstallation {
               Set(normalized) == directories.union(files),
               entries.allSatisfy({ !$0.hasSuffix("/") || directories.contains(String($0.dropLast())) }),
               Set(normalized).count == normalized.count else {
-            throw MagicWineError.setup("The DXVK archive contains missing, duplicate, unsafe, or unexpected paths.")
+            throw MagicWineError.integrityFailure("The DXVK archive contains missing, duplicate, unsafe, or unexpected paths.")
         }
         for (entry, type) in zip(normalized, types) {
             guard directories.contains(entry) ? type == "d" : type == "-" else {
-                throw MagicWineError.setup("The DXVK archive contains a symbolic link, hard link, or unsupported member: \(entry).")
+                throw MagicWineError.integrityFailure("The DXVK archive contains a symbolic link, hard link, or unsupported member: \(entry).")
             }
         }
     }
@@ -303,11 +303,11 @@ enum DXVKInstallation {
         let base = root.standardizedFileURL.path + "/"
         for case let entry as URL in enumeration {
             guard entry.standardizedFileURL.path.hasPrefix(base) else {
-                throw MagicWineError.setup("The DXVK component contains an escaping path: \(entry.path)")
+                throw MagicWineError.unsafeFilesystem("The DXVK component contains an escaping path: \(entry.path)")
             }
             let name = String(entry.standardizedFileURL.path.dropFirst(base.count))
             guard expected.contains(name) else {
-                throw MagicWineError.setup("The DXVK component contains an unexpected file: \(name).")
+                throw MagicWineError.integrityFailure("The DXVK component contains an unexpected file: \(name).")
             }
             if name == "x32" || name == "x64" { try fs.requireDirectory(entry) }
             else { try fs.requireFile(entry, maximum: fileMaximum) }
@@ -316,7 +316,7 @@ enum DXVKInstallation {
         if let enumerationError { throw enumerationError }
         guard actual == expected else {
             let missing = expected.subtracting(actual).sorted().joined(separator: ", ")
-            throw MagicWineError.setup("The DXVK component is incomplete. Missing files: \(missing).")
+            throw MagicWineError.integrityFailure("The DXVK component is incomplete. Missing files: \(missing).")
         }
         for name in files.sorted() where name.hasSuffix(".dll") {
             let machine = name.hasPrefix("x32/") ? PEInspector.i386 : PEInspector.amd64
@@ -342,7 +342,7 @@ enum DXVKInstallation {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            throw MagicWineError.setup("Another DXVK installation occupies the pinned component path but cannot be safely reused. Existing files were left untouched: \(error.localizedDescription)")
+            throw MagicWineError.unsafeFilesystem("Another DXVK installation occupies the pinned component path but cannot be safely reused. Existing files were left untouched: \(error.localizedDescription)")
         }
     }
 

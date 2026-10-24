@@ -65,7 +65,7 @@ internal enum BottleDesktop {
         if let separator = name.lastIndex(of: "/") { name = name[name.index(after: separator)...] }
         if let separator = name.lastIndex(of: "\\") { name = name[name.index(after: separator)...] }
         guard !name.isEmpty, name != ".", name != "..", !name.contains("\0") else {
-            throw MagicWineError.setup("Wine's username must identify a local profile directory.")
+            throw MagicWineError.unsafeFilesystem("Wine's username must identify a local profile directory.")
         }
         return String(name)
     }

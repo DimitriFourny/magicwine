@@ -158,7 +158,7 @@ internal enum BottleDisplay {
         guard prefix.isFileURL, !prefix.pathComponents.contains("..") else { throw MagicWineError.invalidBottle }
         var status = stat()
         guard lstat(prefix.path, &status) == 0, status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
-            throw invalid("Display settings require a real bottle prefix directory: \(prefix.path)")
+            throw unsafe("Display settings require a real bottle prefix directory: \(prefix.path)")
         }
     }
 
@@ -167,15 +167,20 @@ internal enum BottleDisplay {
         var status = stat()
         if lstat(url.path, &status) != 0 {
             if errno == ENOENT { return false }
-            throw invalid("Cannot inspect \(url.path): \(String(cString: strerror(errno)))")
+            throw unsafe("Cannot inspect \(url.path): \(String(cString: strerror(errno)))")
         }
         guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), status.st_nlink == 1 else {
-            throw invalid("Display settings require an ordinary, unlinked registry file: \(url.path)")
+            throw unsafe("Display settings require an ordinary, unlinked registry file: \(url.path)")
         }
         return true
     }
 
+    /// The registry's content cannot be parsed or updated safely.
     private static func invalid(_ detail: String) -> MagicWineError {
-        .setup("Cannot read or update Wine display settings: \(detail)")
+        .integrityFailure("Cannot read or update Wine display settings: \(detail)")
+    }
+
+    private static func unsafe(_ detail: String) -> MagicWineError {
+        .unsafeFilesystem("Cannot read or update Wine display settings: \(detail)")
     }
 }

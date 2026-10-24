@@ -53,7 +53,7 @@ enum RosettaCPUCompatibility {
         guard let dll = Bundle.module.url(forResource: componentID, withExtension: "dll"),
               let source = Bundle.module.url(forResource: componentID + "-source", withExtension: "tar.gz"),
               let license = Bundle.module.url(forResource: licenseName, withExtension: nil) else {
-            throw MagicWineError.setup("The bundled Rosetta CPU compatibility files are missing. Reinstall this MagicWine build; no DLL was replaced.")
+            throw MagicWineError.integrityFailure("The bundled Rosetta CPU compatibility files are missing. Reinstall this MagicWine build; no DLL was replaced.")
         }
         let payload = Payload(dll: dll, source: source, license: license,
                               dllSHA256: bundledDLLSHA256, sourceSHA256: bundledSourceSHA256,
@@ -74,18 +74,18 @@ enum RosettaCPUCompatibility {
         let prefix = prefix.standardizedFileURL
         guard bottleDirectory.isFileURL, prefix.isFileURL,
               prefix == bottle.appendingPathComponent("prefix", isDirectory: true) else {
-            throw MagicWineError.setup("Rosetta CPU compatibility requires the bottle's owned prefix.")
+            throw MagicWineError.unsafeFilesystem("Rosetta CPU compatibility requires the bottle's owned prefix.")
         }
         try validatePrefix(prefix, bottle: bottle)
         let destination = prefix.appendingPathComponent("drive_c/windows/system32/wow64cpu.dll")
         let current = try fs.sha256(destination, maximum: dllMaximum)
         guard current == originalSHA256 || current == payload.dllSHA256 else {
-            throw MagicWineError.setup("The bottle has a custom wow64cpu.dll. Rosetta CPU compatibility will not overwrite it.")
+            throw MagicWineError.unsafeFilesystem("The bottle has a custom wow64cpu.dll. Rosetta CPU compatibility will not overwrite it.")
         }
 
         // Validate every bundled artifact before creating any installation files.
         for url in [payload.dll, payload.source, payload.license] {
-            guard url.isFileURL else { throw MagicWineError.setup("Rosetta CPU resources must be local files.") }
+            guard url.isFileURL else { throw MagicWineError.unsafeFilesystem("Rosetta CPU resources must be local files.") }
             try fs.requireDirectory(url.deletingLastPathComponent())
         }
         try verify(payload.dll, digest: payload.dllSHA256, maximum: dllMaximum)
@@ -99,7 +99,7 @@ enum RosettaCPUCompatibility {
             try validateBackup(backup, payload: payload, originalSHA256: originalSHA256)
         } else {
             guard current == originalSHA256 else {
-                throw MagicWineError.setup("The managed wow64cpu.dll has no verified original backup. The bottle was left unchanged.")
+                throw MagicWineError.integrityFailure("The managed wow64cpu.dll has no verified original backup. The bottle was left unchanged.")
             }
             if try !fs.exists(compatibility) {
                 try manager.createDirectory(at: compatibility, withIntermediateDirectories: false)
@@ -163,7 +163,7 @@ enum RosettaCPUCompatibility {
                                        originalSHA256: String) throws {
         try fs.requireDirectory(backup)
         guard Set(try manager.contentsOfDirectory(atPath: backup.path)) == Set([originalName, sourceName, licenseName]) else {
-            throw MagicWineError.setup("The Rosetta CPU backup is incomplete or contains unrecognized files. It was left unchanged.")
+            throw MagicWineError.integrityFailure("The Rosetta CPU backup is incomplete or contains unrecognized files. It was left unchanged.")
         }
         try verify(backup.appendingPathComponent(originalName), digest: originalSHA256, maximum: dllMaximum)
         try verify(backup.appendingPathComponent(sourceName), digest: payload.sourceSHA256, maximum: sourceMaximum)
@@ -172,7 +172,7 @@ enum RosettaCPUCompatibility {
 
     private static func verify(_ url: URL, digest: String, maximum: Int) throws {
         guard try fs.sha256(url, maximum: maximum) == digest else {
-            throw MagicWineError.setup("Rosetta CPU compatibility SHA-256 mismatch: \(url.path). No DLL was replaced.")
+            throw MagicWineError.integrityFailure("Rosetta CPU compatibility SHA-256 mismatch: \(url.path). No DLL was replaced.")
         }
     }
 }

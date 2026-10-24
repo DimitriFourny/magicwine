@@ -102,7 +102,7 @@ internal enum GraphicsPrefix {
             return
         }
         guard metadata == journal.previousMetadata else {
-            throw MagicWineError.setup("Bottle metadata changed during an interrupted graphics transaction. Its recovery files have been retained.")
+            throw MagicWineError.integrityFailure("Bottle metadata changed during an interrupted graphics transaction. Its recovery files have been retained.")
         }
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
         try validateDestinations(prefix: prefix, paths: journal.resolvedPaths)
@@ -120,14 +120,14 @@ internal enum GraphicsPrefix {
         let manifest = try readManifest(active)
         guard manifest.componentID == configuration.componentID,
               manifest.resolvedBackend == configuration.backend, manifest.resolvedPaths == paths else {
-            throw MagicWineError.setup("The bottle's graphics installation does not match its selected component. Restore Standard, then enable the renderer again.")
+            throw MagicWineError.componentInvalid("The bottle's graphics installation does not match its selected component.")
         }
         for (index, path) in paths.enumerated() {
             let file = prefix.appendingPathComponent(path)
             try requireRegularFile(file)
             let attributes = try manager.attributesOfItem(atPath: file.path)
             guard (attributes[.size] as? NSNumber)?.uint64Value == manifest.entries[index].installedSize else {
-                throw MagicWineError.setup("The bottle's graphics DLLs are missing or changed. Restore Standard, then enable the renderer again.")
+                throw MagicWineError.componentInvalid("The bottle's graphics DLLs are missing or changed.")
             }
         }
     }
@@ -170,7 +170,7 @@ internal enum GraphicsPrefix {
                         nextMetadata: Data, componentUpdate: Bool = false) throws -> URL {
         guard previous.backend == .standard || previous.backend != next.backend ||
                 (componentUpdate && previous.componentID != next.componentID) else {
-            throw MagicWineError.setup("Changing this bottle's graphics component requires an explicit component update. Choose Standard first to restore this bottle's original graphics files.")
+            throw MagicWineError.componentInvalid("Changing this bottle's graphics component requires an explicit component update.")
         }
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
         let graphics = bottleDirectory.appendingPathComponent("graphics", isDirectory: true)
@@ -182,11 +182,11 @@ internal enum GraphicsPrefix {
         if previous.backend != .standard {
             let manifest = try readManifest(active)
             guard manifest.componentID == previous.componentID, manifest.resolvedBackend == previous.backend else {
-                throw MagicWineError.setup("The bottle's graphics backup does not match its selected component.")
+                throw MagicWineError.integrityFailure("The bottle's graphics backup does not match its selected component.")
             }
             oldManifest = manifest
         } else {
-            guard try !fs.exists(active) else { throw MagicWineError.setup("The bottle has an unexpected graphics backup; refusing to overwrite it.") }
+            guard try !fs.exists(active) else { throw MagicWineError.unsafeFilesystem("The bottle has an unexpected graphics backup; refusing to overwrite it.") }
             oldManifest = nil
         }
         let previousPaths = oldManifest?.resolvedPaths ?? []
@@ -195,7 +195,7 @@ internal enum GraphicsPrefix {
         try validateDestinations(prefix: prefix, paths: paths)
         if next.backend != .standard {
             guard let componentRoot, let id = next.componentID, validComponentID(id) else {
-                throw MagicWineError.setup("This renderer requires an installed graphics component.")
+                throw MagicWineError.invalidInput("This renderer requires an installed graphics component.")
             }
             try ensureDirectory(componentRoot)
             for mapping in incoming {
@@ -209,7 +209,7 @@ internal enum GraphicsPrefix {
         }
         try ensureDirectory(graphics, create: true)
         let transaction = graphics.appendingPathComponent("transaction", isDirectory: true)
-        guard try !fs.exists(transaction) else { throw MagicWineError.setup("A graphics transaction must be recovered before setup.") }
+        guard try !fs.exists(transaction) else { throw MagicWineError.conflict("A graphics transaction must be recovered before setup.") }
         try ensureDirectory(transaction, create: true)
         do {
             let beforeDirectory = transaction.appendingPathComponent("before", isDirectory: true)
@@ -321,7 +321,7 @@ internal enum GraphicsPrefix {
         guard journal.after.count == count, journal.displaced.count == count,
               journal.before.allSatisfy(validSnapshot), journal.after.allSatisfy(validSnapshot),
               journal.previousMetadata != journal.nextMetadata else {
-            throw MagicWineError.setup("The bottle graphics recovery journal is invalid.")
+            throw MagicWineError.integrityFailure("The bottle graphics recovery journal is invalid.")
         }
         let previous = try JSONDecoder().decode(Bottle.self, from: journal.previousMetadata).graphics
         let next = try JSONDecoder().decode(Bottle.self, from: journal.nextMetadata).graphics
@@ -330,7 +330,7 @@ internal enum GraphicsPrefix {
                 (previous.backend != .standard && previous.componentID != next.componentID),
               journal.hadActive == (previous.backend != .standard),
               journal.hasActive == (next.backend != .standard) else {
-            throw MagicWineError.setup("The bottle graphics recovery journal has inconsistent selections.")
+            throw MagicWineError.integrityFailure("The bottle graphics recovery journal has inconsistent selections.")
         }
         if let version = journal.schema {
             guard version == schema, let paths = journal.paths,
@@ -339,13 +339,13 @@ internal enum GraphicsPrefix {
                   validFootprint(previousPaths, backend: previous.backend, allowLegacy: true),
                   validFootprint(nextPaths, backend: next.backend, allowLegacy: false),
                   paths == union(previousPaths, nextPaths) else {
-                throw MagicWineError.setup("The bottle graphics recovery journal has invalid DLL paths.")
+                throw MagicWineError.integrityFailure("The bottle graphics recovery journal has invalid DLL paths.")
             }
         } else {
             guard journal.paths == nil, journal.previousPaths == nil, journal.nextPaths == nil,
                   count == legacyDLLCount || count == dllPaths.count,
                   [previous.backend, next.backend].allSatisfy({ $0 == .standard || $0 == .dxvk }) else {
-                throw MagicWineError.setup("The bottle graphics legacy recovery journal is invalid.")
+                throw MagicWineError.integrityFailure("The bottle graphics legacy recovery journal is invalid.")
             }
         }
         return journal
@@ -359,18 +359,18 @@ internal enum GraphicsPrefix {
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: url))
         guard validComponentID(manifest.componentID),
               manifest.entries.allSatisfy({ validHash($0.installedHash) && $0.installedSize > 0 }) else {
-            throw MagicWineError.setup("The bottle graphics backup is invalid.")
+            throw MagicWineError.integrityFailure("The bottle graphics backup is invalid.")
         }
         if let version = manifest.schema {
             guard version == schema, let backend = manifest.backend, backend != .standard,
                   let paths = manifest.paths, validPaths(paths), paths.count == manifest.entries.count,
                   validFootprint(paths, backend: backend, allowLegacy: false) else {
-                throw MagicWineError.setup("The bottle graphics backup has invalid DLL paths.")
+                throw MagicWineError.integrityFailure("The bottle graphics backup has invalid DLL paths.")
             }
         } else {
             guard manifest.backend == nil, manifest.paths == nil,
                   manifest.entries.count == legacyDLLCount || manifest.entries.count == dllPaths.count else {
-                throw MagicWineError.setup("The bottle graphics legacy backup is invalid.")
+                throw MagicWineError.integrityFailure("The bottle graphics legacy backup is invalid.")
             }
         }
         try ensureDirectory(active.appendingPathComponent("originals"))
@@ -379,7 +379,7 @@ internal enum GraphicsPrefix {
             if manifest.entries[index].originalExists {
                 try requireFileOrLink(original)
             } else if try fs.exists(original) {
-                throw MagicWineError.setup("The bottle graphics backup contains an unexpected original DLL.")
+                throw MagicWineError.integrityFailure("The bottle graphics backup contains an unexpected original DLL.")
             }
         }
         return manifest
@@ -416,7 +416,7 @@ internal enum GraphicsPrefix {
         for index in snapshots.indices {
             let saved = try snapshot(directory.appendingPathComponent(String(index)))
             guard saved.exists == snapshots[index].exists, saved.fingerprint == snapshots[index].fingerprint else {
-                throw MagicWineError.setup("A saved graphics transaction DLL is missing or changed.")
+                throw MagicWineError.integrityFailure("A saved graphics transaction DLL is missing or changed.")
             }
         }
     }
@@ -424,7 +424,7 @@ internal enum GraphicsPrefix {
     private static func validateActiveBackup(journal: Journal, transaction: URL, after: Bool) throws {
         let active = transaction.appendingPathComponent(after ? "after-active" : "before-active")
         guard after ? journal.hasActive : journal.hadActive else {
-            guard try !fs.exists(active) else { throw MagicWineError.setup("The graphics transaction has an unexpected active backup.") }
+            guard try !fs.exists(active) else { throw MagicWineError.integrityFailure("The graphics transaction has an unexpected active backup.") }
             return
         }
         let manifest = try readManifest(active)
@@ -433,13 +433,13 @@ internal enum GraphicsPrefix {
         let expectedPaths = (after ? journal.nextPaths : journal.previousPaths) ?? journal.resolvedPaths
         guard manifest.resolvedPaths == expectedPaths, manifest.resolvedBackend == configuration.backend,
               manifest.componentID == configuration.componentID else {
-            throw MagicWineError.setup("The bottle graphics recovery backup does not match its journal.")
+            throw MagicWineError.integrityFailure("The bottle graphics recovery backup does not match its journal.")
         }
         if after {
             for (index, path) in manifest.resolvedPaths.enumerated() {
                 guard let journalIndex = journal.resolvedPaths.firstIndex(of: path),
                       journal.after[journalIndex].fingerprint == "file:" + manifest.entries[index].installedHash else {
-                    throw MagicWineError.setup("The graphics transaction DLLs do not match their active backup.")
+                    throw MagicWineError.integrityFailure("The graphics transaction DLLs do not match their active backup.")
                 }
             }
         }
@@ -492,7 +492,7 @@ internal enum GraphicsPrefix {
         var status = stat()
         guard fstat(descriptor, &status) == 0, status.st_size >= 0,
               status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
-            throw MagicWineError.setup("Graphics DLL hashing requires a regular file.")
+            throw MagicWineError.unsafeFilesystem("Graphics DLL hashing requires a regular file.")
         }
         var hasher = SHA256()
         while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
@@ -510,20 +510,20 @@ internal enum GraphicsPrefix {
             }
         }
         guard try fs.fileType(url) == mode_t(S_IFDIR) else {
-            throw MagicWineError.setup("Graphics setup requires an owned directory, not a symlink: \(url.path)")
+            throw MagicWineError.unsafeFilesystem("Graphics setup requires an owned directory, not a symlink: \(url.path)")
         }
     }
 
     private static func requireRegularFile(_ url: URL) throws {
         guard try fs.fileType(url) == mode_t(S_IFREG) else {
-            throw MagicWineError.setup("Graphics setup requires a regular file: \(url.path)")
+            throw MagicWineError.unsafeFilesystem("Graphics setup requires a regular file: \(url.path)")
         }
     }
 
     private static func requireFileOrLink(_ url: URL) throws {
         let type = try fs.fileType(url)
         guard type == mode_t(S_IFREG) || type == mode_t(S_IFLNK) else {
-            throw MagicWineError.setup("Refusing to replace a non-file graphics DLL: \(url.path)")
+            throw MagicWineError.unsafeFilesystem("Refusing to replace a non-file graphics DLL: \(url.path)")
         }
     }
 

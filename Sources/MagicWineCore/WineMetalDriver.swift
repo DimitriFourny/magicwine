@@ -84,7 +84,7 @@ enum WineMetalDriver {
         let backup = compatibility.appendingPathComponent(componentID, isDirectory: true)
         if try fs.exists(compatibility) { try fs.requireDirectory(compatibility) }
         guard try !fs.exists(backup) else {
-            throw failure("Driver preparation requires a fresh staging tree; an existing component will not be overwritten.")
+            throw fs.failure("Driver preparation requires a fresh staging tree; an existing component will not be overwritten.")
         }
         if try !fs.exists(compatibility) {
             try manager.createDirectory(at: compatibility, withIntermediateDirectories: false)
@@ -116,7 +116,7 @@ enum WineMetalDriver {
             try validateOriginal(driver, image: image)
             if image.originalDigest == nil {
                 guard try fs.publish(stage, to: driver) else {
-                    throw failure("An added driver image requires an absent destination: \(driver.path).")
+                    throw fs.failure("An added driver image requires an absent destination: \(driver.path).")
                 }
             } else {
                 guard rename(stage.path, driver.path) == 0 else { throw fs.posixFailure("publish", driver) }
@@ -189,7 +189,7 @@ enum WineMetalDriver {
         if let digest = image.originalDigest {
             try verify(url, digest: digest, maximum: nativeMaximum)
         } else if try fs.exists(url) {
-            throw failure("An added driver image requires an absent destination: \(url.path).")
+            throw fs.failure("An added driver image requires an absent destination: \(url.path).")
         }
     }
 
@@ -199,7 +199,8 @@ enum WineMetalDriver {
         }
     }
 
-    private static func failure(_ message: String) -> MagicWineError { fs.failure(message) }
+    /// Missing, changed, or unpinned driver artifacts; refusals to overwrite use `fs.failure`.
+    private static func failure(_ message: String) -> MagicWineError { fs.integrity(message) }
 }
 
 extension WineMetalBuildPins.Image {

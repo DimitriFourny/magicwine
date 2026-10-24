@@ -36,11 +36,11 @@ public struct DLLOverrides: Hashable, Sendable {
                 switch token {
                 case "n", "native": return "n"
                 case "b", "builtin": return "b"
-                default: throw MagicWineError.setup("Unknown DLL load order “\(text)”. Use n, b, n,b, b,n, or disabled.")
+                default: throw MagicWineError.invalidInput("Unknown DLL load order “\(text)”. Use n, b, n,b, b,n, or disabled.")
                 }
             }
             guard let mode = Mode(rawValue: letters.joined(separator: ",")) else {
-                throw MagicWineError.setup("Unknown DLL load order “\(text)”. Use n, b, n,b, b,n, or disabled.")
+                throw MagicWineError.invalidInput("Unknown DLL load order “\(text)”. Use n, b, n,b, b,n, or disabled.")
             }
             self = mode
         }
@@ -62,7 +62,7 @@ public struct DLLOverrides: Hashable, Sendable {
             let trimmed = segment.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
             guard let separator = trimmed.firstIndex(of: "=") else {
-                throw MagicWineError.setup("DLL override “\(trimmed)” needs a load order, for example \(trimmed)=n,b.")
+                throw MagicWineError.invalidInput("DLL override “\(trimmed)” needs a load order, for example \(trimmed)=n,b.")
             }
             let mode = try Mode(parsing: String(trimmed[trimmed.index(after: separator)...]))
             let names = trimmed[..<separator].split(separator: ",", omittingEmptySubsequences: false)
@@ -129,7 +129,7 @@ public struct DLLOverrides: Hashable, Sendable {
         if name.hasSuffix(".dll") { name.removeLast(4) }
         let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789_-+.")
         guard !name.isEmpty, name.count <= 64, name.first != ".", name.allSatisfy(allowed.contains) else {
-            throw MagicWineError.setup("“\(dll)” is not a DLL name. Use a module name such as d3d11 or xinput1_3, without a path.")
+            throw MagicWineError.invalidInput("“\(dll)” is not a DLL name. Use a module name such as d3d11 or xinput1_3, without a path.")
         }
         return name
     }

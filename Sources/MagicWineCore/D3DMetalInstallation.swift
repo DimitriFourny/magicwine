@@ -72,7 +72,7 @@ enum D3DMetalInstallation {
                         progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> URL {
         try Task.checkCancellation()
         try fs.requireDirectory(source)
-        guard paths.root.isFileURL else { throw failure("The managed root must be a local directory.") }
+        guard paths.root.isFileURL else { throw fs.failure("The managed root must be a local directory.") }
         for directory in [paths.root, paths.componentsDirectory] where FileManager.default.fileExists(atPath: directory.path) {
             try fs.requireDirectory(directory)
         }
@@ -152,7 +152,7 @@ enum D3DMetalInstallation {
     }
 
     static func validate(componentID: String, paths: ApplicationPaths) throws -> URL {
-        guard supports(componentID: componentID) else { throw failure("Unrecognized component identifier. Choose Standard to restore original graphics.") }
+        guard supports(componentID: componentID) else { throw MagicWineError.componentInvalid("D3DMetal: Unrecognized component identifier.") }
         try fs.requireDirectory(paths.root)
         try fs.requireDirectory(paths.componentsDirectory)
         let root = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
@@ -163,7 +163,7 @@ enum D3DMetalInstallation {
     static func environment(component: URL, showHUD: Bool) throws -> [String: String] {
         try validateRoot(component)
         guard !component.path.contains(":"), !component.path.contains("\n") else {
-            throw failure("The component path cannot contain environment search-path separators.")
+            throw fs.failure("The component path cannot contain environment search-path separators.")
         }
         return [
             "WINEDLLPATH": component.appendingPathComponent("wine").path,
@@ -178,7 +178,7 @@ enum D3DMetalInstallation {
         var size = MemoryLayout<Int32>.size
         guard sysctlbyname("hw.optional.arm64", &arm64, &size, nil, 0) == 0, arm64 == 1,
               ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 14, minorVersion: 0, patchVersion: 0)) else {
-            throw failure("Apple silicon and macOS 14 or newer are required.")
+            throw MagicWineError.hostUnsupported("D3DMetal: Apple silicon and macOS 14 or newer are required.")
         }
         // Resolve the user's selected executable, not any component input. Wine distributions
         // commonly expose bin/wine as an in-bundle symlink to their actual loader.
@@ -191,18 +191,18 @@ enum D3DMetalInstallation {
                 // An unreadable or malformed driver exports nothing.
                 let exports = (try? machO(driver, exports: true))?.exports ?? []
                 guard !exports.contains("_magicwine_dxmt_bridge_v1") else {
-                    throw failure("This bottle uses the older DXMT-only Wine driver. Install Wine in Downloads or Settings, then create a new bottle with the installed Wine to use D3DMetal. This bottle's pinned runtime and graphics selection are unchanged.")
+                    throw MagicWineError.runtimeIncompatible("D3DMetal: This bottle uses the older DXMT-only Wine driver. This bottle's pinned runtime and graphics selection are unchanged.", remedy: .chooseWine)
                 }
                 if exports.contains("_magicwine_metal_bridge_v1") {
                     let ntdll = driver.deletingLastPathComponent().appendingPathComponent("ntdll.so")
                     guard (try? machO(ntdll, exports: true))?.exports.contains("_magicwine_metal_ntdll_v1") == true else {
-                        throw failure("The Wine Metal driver is missing its matching native runtime support. Install Wine and create a new bottle with it; mixing driver files from different runtimes is unsupported.")
+                        throw MagicWineError.runtimeIncompatible("D3DMetal: The Wine Metal driver is missing its matching native runtime support; mixing driver files from different runtimes is unsupported.", remedy: .chooseWine)
                     }
                 }
                 if exports.contains("_macdrv_functions") { return }
             }
         }
-        throw failure("This Wine runtime does not export the D3DMetal macdrv_functions bridge ABI. Install Wine in Downloads or Settings, then create a new bottle with it, or choose a compatible custom Wine runtime. Unmodified Wine Stable cannot load these libraries. No runtime files were modified.")
+        throw MagicWineError.runtimeIncompatible("D3DMetal: This Wine runtime does not export the D3DMetal macdrv_functions bridge ABI. Unmodified Wine Stable cannot load these libraries. No runtime files were modified.", remedy: .chooseWine)
     }
 
     private static func validateRoot(_ root: URL) throws {
@@ -216,7 +216,7 @@ enum D3DMetalInstallation {
         }
         let actual = try inventory(root, receiptAllowed: true)
         guard actual.files == receipt.files, actual.links == receipt.links, actual.minimumMacOS == receipt.minimumMacOS else {
-            throw failure("The imported libraries or notices changed. Restore Standard; do not reuse this component.")
+            throw MagicWineError.componentInvalid("D3DMetal: The imported libraries or notices changed; do not reuse this component.")
         }
         try requireMinimumOS(receipt.minimumMacOS)
     }
@@ -225,7 +225,7 @@ enum D3DMetalInstallation {
         let required = OperatingSystemVersion(majorVersion: Int(version >> 16),
             minorVersion: Int((version >> 8) & 255), patchVersion: Int(version & 255))
         guard ProcessInfo.processInfo.isOperatingSystemAtLeast(required) else {
-            throw failure("This payload requires macOS \(required.majorVersion).\(required.minorVersion).\(required.patchVersion) or newer.")
+            throw MagicWineError.hostUnsupported("D3DMetal: This payload requires macOS \(required.majorVersion).\(required.minorVersion).\(required.patchVersion) or newer.")
         }
     }
 
@@ -243,7 +243,7 @@ enum D3DMetalInstallation {
                 return root
             }
         }
-        throw failure("Select an extracted evaluation-environment folder containing redist/lib, its lib folder, or an apple_gptk root containing external/ and wine/. Both the Windows and Unix bridges are required.")
+        throw MagicWineError.invalidInput("D3DMetal: Select an extracted evaluation-environment folder containing redist/lib, its lib folder, or an apple_gptk root containing external/ and wine/. Both the Windows and Unix bridges are required.")
     }
 
     /// Internal for security regressions; validates complete structure before import.
@@ -255,16 +255,16 @@ enum D3DMetalInstallation {
         var directories = Set<String>()
         var enumerationError: Error?
         guard let items = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [], options: [],
-            errorHandler: { _, error in enumerationError = error; return false }) else { throw failure("Cannot enumerate import.") }
+            errorHandler: { _, error in enumerationError = error; return false }) else { throw MagicWineError.setup("D3DMetal: Cannot enumerate import.") }
         let base = root.standardizedFileURL.path + "/"
         var total: Int64 = 0
         var count = 0
         for case let item as URL in items {
             try Task.checkCancellation()
             count += 1
-            guard count <= 256, item.standardizedFileURL.path.hasPrefix(base) else { throw failure("Unsafe or oversized import tree.") }
+            guard count <= 256, item.standardizedFileURL.path.hasPrefix(base) else { throw fs.failure("Unsafe or oversized import tree.") }
             let name = String(item.standardizedFileURL.path.dropFirst(base.count))
-            guard safe(name) else { throw failure("Unsafe import path: \(name).") }
+            guard safe(name) else { throw fs.failure("Unsafe import path: \(name).") }
             let status = try fs.status(item)
             let type = status.st_mode & mode_t(S_IFMT)
             if type == mode_t(S_IFLNK) {
@@ -278,7 +278,7 @@ enum D3DMetalInstallation {
                 guard bridgeLink || frameworkLink,
                       item.resolvingSymlinksInPath().path.hasPrefix(owner.resolvingSymlinksInPath().path + "/"),
                       FileManager.default.fileExists(atPath: item.path) else {
-                    throw failure("Only nonescaping conventional framework and shared-bridge links are accepted: \(name).")
+                    throw fs.failure("Only nonescaping conventional framework and shared-bridge links are accepted: \(name).")
                 }
                 result.links[name] = target
             } else if type == mode_t(S_IFDIR) {
@@ -421,5 +421,6 @@ enum D3DMetalInstallation {
         return try encoder.encode(receipt)
     }
 
-    private static func failure(_ message: String) -> MagicWineError { fs.failure(message) }
+    /// Malformed, incomplete, or changed library content.
+    private static func failure(_ message: String) -> MagicWineError { fs.integrity(message) }
 }

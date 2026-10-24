@@ -235,23 +235,7 @@ struct BottleDashboardView: View {
         }
 
         if let error = activity.error {
-            WineCard(title: "Operation Failed", icon: "exclamationmark.triangle") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(error)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                    HStack(spacing: 9) {
-                        if let log = activity.logURL {
-                            Button("Show Log") { showLog(log) }
-                        } else {
-                            Button("Show Logs") { showLogs() }
-                        }
-                        Button("Dismiss") { model.dismissError(for: currentBottle) }
-                    }
-                    .buttonStyle(WineButtonStyle())
-                }
-            }
+            OperationErrorCard(model: model, bottle: currentBottle, error: error)
         }
 
         ForEach(activity.notices) { notice in

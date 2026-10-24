@@ -8,7 +8,7 @@ struct BottleActivity {
     var title: String?
     var canStop = false
     var isStopping = false
-    var error: String?
+    var error: PresentedError?
     var logURL: URL?
     var graphicsProgress: GraphicsSetupProgress?
     var graphicsSetupID: UUID?
@@ -675,21 +675,15 @@ final class AppModel: ObservableObject {
             state.logURL = logURL
             state.error = nil
         } else {
-            state.error = error.localizedDescription
-            if let wineError = error as? MagicWineError, case .processFailed(_, let logURL) = wineError {
-                state.logURL = logURL
-            }
+            let presented = PresentedError(error)
+            state.error = presented
+            if let logURL = presented.logURL { state.logURL = logURL }
         }
         activities[id] = state
     }
 
     private func report(_ error: Error, title: String) {
-        var logURL: URL?
-        switch error as? MagicWineError {
-        case .processFailed(_, let url), .stopped(let url): logURL = url
-        default: break
-        }
-        notice = AppNotice(title: title, message: error.localizedDescription, logURL: logURL)
+        notice = AppNotice(title: title, error: error)
     }
 
     private func chooseFile(title: String, message: String, extensions: [String]?,
@@ -718,7 +712,7 @@ final class AppModel: ObservableObject {
     /// launch of this program uses the new options. Errors return to the editor sheet.
     func saveProgram(_ program: WindowsProgram, from original: WindowsProgram, in bottle: Bottle) async throws {
         guard !activity(for: bottle).blocksLibraryEdit else {
-            throw MagicWineError.setup("Wait for this bottle’s operation to finish, then save again.")
+            throw MagicWineError.busy("This bottle’s operation must finish before the program is saved.", reason: .operationInProgress)
         }
         replace(try await store.updateProgram(program, from: original, in: current(bottle)))
     }

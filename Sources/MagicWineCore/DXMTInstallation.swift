@@ -134,7 +134,7 @@ enum DXMTInstallation {
     private static func pinnedReceipt(for requested: String) throws -> Receipt {
         if requested == componentID { return expectedReceipt }
         guard let receipt = retainedReceipts.first(where: { $0.componentID == requested }) else {
-            throw MagicWineError.setup("Unsupported DXMT component \(requested). Restore Standard before selecting the current DXMT component.")
+            throw MagicWineError.componentInvalid("Unsupported DXMT component \(requested).")
         }
         return receipt
     }
@@ -159,7 +159,7 @@ enum DXMTInstallation {
     static func install(paths: ApplicationPaths,
                         progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> URL {
         try Task.checkCancellation()
-        guard paths.root.isFileURL else { throw MagicWineError.setup("DXMT requires a local data directory.") }
+        guard paths.root.isFileURL else { throw MagicWineError.unsafeFilesystem("DXMT requires a local data directory.") }
         if try fs.exists(paths.root) {
             try fs.requireDirectory(paths.root)
             if try fs.exists(paths.componentsDirectory) { try fs.requireDirectory(paths.componentsDirectory) }
@@ -180,7 +180,7 @@ enum DXMTInstallation {
         guard let bundled = bundledResource(archiveName + ".tar.gz"),
               let license = bundledResource("LICENSE-DXMT.txt"),
               let buildProvenance = bundledResource(provenanceName) else {
-            throw MagicWineError.setup("Bundled DXMT archive or notices are missing. Reinstall MagicWine; no network fallback is used.")
+            throw MagicWineError.integrityFailure("Bundled DXMT archive or notices are missing. Reinstall MagicWine; no network fallback is used.")
         }
         progress?(.verifying)
         try requireFile(bundled)
@@ -190,10 +190,10 @@ enum DXMTInstallation {
         // carrying copies, so the bundle must really ship them with the pinned bytes.
         for (name, expected) in bundledArchives where name != archiveName + ".tar.gz" {
             guard let resource = bundledResource(name) else {
-                throw MagicWineError.setup("Bundled DXMT corresponding source or original release is missing: \(name). Reinstall MagicWine.")
+                throw MagicWineError.integrityFailure("Bundled DXMT corresponding source or original release is missing: \(name). Reinstall MagicWine.")
             }
             guard try fs.sha256(resource, maximum: maximum(for: name)) == expected else {
-                throw MagicWineError.setup("Bundled DXMT archive does not match its pin: \(name). Reinstall MagicWine.")
+                throw MagicWineError.integrityFailure("Bundled DXMT archive does not match its pin: \(name). Reinstall MagicWine.")
             }
             try Task.checkCancellation()
         }
@@ -207,7 +207,7 @@ enum DXMTInstallation {
         try validatePayloadLayout(at: component)
         for (name, expected) in payloadDigests {
             guard try fs.sha256(component.appendingPathComponent(name), maximum: 64 * 1_048_576) == expected else {
-                throw MagicWineError.setup("DXMT pinned payload checksum mismatch: \(name).")
+                throw MagicWineError.integrityFailure("DXMT pinned payload checksum mismatch: \(name).")
             }
         }
         try FileManager.default.copyItem(at: license, to: component.appendingPathComponent("LICENSE-DXMT.txt"))
@@ -235,7 +235,7 @@ enum DXMTInstallation {
 
     static func environment(component: URL, showHUD: Bool) throws -> [String: String] {
         guard component.isFileURL, !component.path.contains(":"), !component.path.contains("\n") else {
-            throw MagicWineError.setup("DXMT component paths cannot contain colon or newline characters (Wine DLL search-path delimiters).")
+            throw MagicWineError.unsafeFilesystem("DXMT component paths cannot contain colon or newline characters (Wine DLL search-path delimiters).")
         }
         try validateRoot(component)
         return ["WINEDLLPATH": component.path,
@@ -245,10 +245,10 @@ enum DXMTInstallation {
 
     static func validateHost(macOSMajor: Int, supportsAppleGPU: Bool) throws {
         guard macOSMajor >= 15 else {
-            throw MagicWineError.setup("This DXMT v0.80 native library requires macOS 15 or later; its Mach-O deployment target is 15.0.")
+            throw MagicWineError.hostUnsupported("This DXMT v0.80 native library requires macOS 15 or later; its Mach-O deployment target is 15.0.")
         }
         guard supportsAppleGPU else {
-            throw MagicWineError.setup("This DXMT configuration requires an Apple Silicon GPU (Metal Apple7 or newer). Non-Apple GPU support is not enabled.")
+            throw MagicWineError.hostUnsupported("This DXMT configuration requires an Apple Silicon GPU (Metal Apple7 or newer). Non-Apple GPU support is not enabled.")
         }
     }
 
@@ -260,7 +260,7 @@ enum DXMTInstallation {
 
     static func validateNativeRuntime(_ executable: URL) throws {
         guard executable.isFileURL, ["wine", "wine64", "wineloader"].contains(executable.lastPathComponent) else {
-            throw MagicWineError.setup("DXMT requires a compatible Wine executable, not a wrapper script.")
+            throw MagicWineError.runtimeIncompatible("DXMT requires a compatible Wine executable, not a wrapper script.", remedy: .chooseWine)
         }
         let resolved = executable.resolvingSymlinksInPath()
         let bin = resolved.deletingLastPathComponent()
@@ -268,19 +268,19 @@ enum DXMTInstallation {
         if bin.lastPathComponent == "bin" {
             unix = bin.deletingLastPathComponent().appendingPathComponent("lib/wine/x86_64-unix", isDirectory: true)
         } else if bin.lastPathComponent == "x86_64-unix" { unix = bin }
-        else { throw MagicWineError.setup("DXMT requires Wine's bin/wine or lib/wine/x86_64-unix/wine layout.") }
+        else { throw MagicWineError.runtimeIncompatible("DXMT requires Wine's bin/wine or lib/wine/x86_64-unix/wine layout.", remedy: .chooseWine) }
         try fs.requireDirectory(unix)
         let loader = try inspectMachO(resolved)
-        guard loader.fileType == 2 else { throw MagicWineError.setup("DXMT requires a native x86_64 Wine loader.") }
+        guard loader.fileType == 2 else { throw MagicWineError.runtimeIncompatible("DXMT requires a native x86_64 Wine loader.", remedy: .chooseWine) }
         let driver = try inspectMachO(unix.appendingPathComponent("winemac.so"))
         try validateDriverExports(driver.exports)
         let ntdll = try inspectMachO(unix.appendingPathComponent("ntdll.so"))
         guard ntdll.fileType == 6, ntdll.exports.contains("_NtSetEvent"),
               ntdll.rpaths.contains("@loader_path/") || ntdll.rpaths.contains("@loader_path") else {
-            throw MagicWineError.setup("DXMT requires Wine ntdll.so with NtSetEvent and a runtime-local @loader_path rpath for native linkage.")
+            throw MagicWineError.runtimeIncompatible("DXMT requires Wine ntdll.so with NtSetEvent and a runtime-local @loader_path rpath for native linkage.", remedy: .chooseWine)
         }
         guard driver.fileType == 6, driver.dependencies.contains("@rpath/ntdll.so") else {
-            throw MagicWineError.setup("DXMT requires a compatible dynamically linked macOS Wine driver.")
+            throw MagicWineError.runtimeIncompatible("DXMT requires a compatible dynamically linked macOS Wine driver.", remedy: .chooseWine)
         }
         let wineLib = unix.deletingLastPathComponent()
         for architecture in ["i386-windows", "x86_64-windows"] {
@@ -296,7 +296,7 @@ enum DXMTInstallation {
         let individual: Set<String> = ["_get_win_data", "_release_win_data", "_macdrv_view_create_metal_view",
                                        "_macdrv_view_get_metal_layer", "_macdrv_view_release_metal_view"]
         guard exports.contains("_macdrv_functions") || individual.isSubset(of: exports) else {
-            throw MagicWineError.setup("This bottle's Wine does not provide DXMT's Metal-view interface. Use Install Wine in Downloads or Settings, then create a new bottle with the installed Wine. Installing Wine does not change this bottle's pinned runtime. A compatible custom Wine runtime can also be selected for a new bottle. DXMT was not enabled; this bottle's graphics selection is unchanged.")
+            throw MagicWineError.runtimeIncompatible("This bottle's Wine does not provide DXMT's Metal-view interface. DXMT was not enabled; this bottle's graphics selection is unchanged.", remedy: .chooseWine)
         }
     }
 
@@ -307,11 +307,11 @@ enum DXMTInstallation {
         guard entries.count == dirs.count + files.count, types.count == entries.count,
               Set(normalized) == dirs.union(files), Set(normalized).count == normalized.count,
               entries.allSatisfy({ !$0.hasSuffix("/") || dirs.contains(String($0.dropLast())) }) else {
-            throw MagicWineError.setup("DXMT archive contains missing, duplicate, unsafe, or unexpected paths.")
+            throw MagicWineError.integrityFailure("DXMT archive contains missing, duplicate, unsafe, or unexpected paths.")
         }
         for (entry, type) in zip(normalized, types) {
             guard dirs.contains(entry) ? type == "d" : type == "-" else {
-                throw MagicWineError.setup("DXMT archive contains a link or special member: \(entry).")
+                throw MagicWineError.integrityFailure("DXMT archive contains a link or special member: \(entry).")
             }
         }
     }
@@ -332,14 +332,14 @@ enum DXMTInstallation {
         }
         let prefix = root.standardizedFileURL.path + "/"
         for case let entry as URL in enumeration {
-            guard entry.standardizedFileURL.path.hasPrefix(prefix) else { throw MagicWineError.setup("Escaping DXMT payload path.") }
+            guard entry.standardizedFileURL.path.hasPrefix(prefix) else { throw MagicWineError.unsafeFilesystem("Escaping DXMT payload path.") }
             let name = String(entry.standardizedFileURL.path.dropFirst(prefix.count))
-            guard expected.contains(name) else { throw MagicWineError.setup("Unexpected DXMT payload: \(name).") }
+            guard expected.contains(name) else { throw MagicWineError.integrityFailure("Unexpected DXMT payload: \(name).") }
             if directories.contains(name) { try fs.requireDirectory(entry) } else { try requireFile(entry) }
             actual.insert(name)
         }
         if let enumerationError { throw enumerationError }
-        guard actual == expected else { throw MagicWineError.setup("Missing DXMT payload: \(expected.subtracting(actual).sorted().joined(separator: ", ")).") }
+        guard actual == expected else { throw MagicWineError.integrityFailure("Missing DXMT payload: \(expected.subtracting(actual).sorted().joined(separator: ", ")).") }
         for name in payloadNames where name.hasSuffix(".dll") {
             try PEInspector.validateDLL(root.appendingPathComponent(name),
                                         machine: name.hasPrefix("i386-") ? PEInspector.i386 : PEInspector.amd64,
@@ -350,12 +350,12 @@ enum DXMTInstallation {
         guard native.fileType == 6, native.minimumOS == 0x000f0000,
               native.dependencies.contains("@rpath/winemac.so"), native.dependencies.contains("@rpath/ntdll.so"),
               native.exports.contains("___wine_unix_call_funcs"), native.exports.contains("___wine_unix_call_wow64_funcs") else {
-            throw MagicWineError.setup("DXMT winemetal.so has incompatible native linkage, deployment target or Wine/WoW64 entry points.")
+            throw MagicWineError.integrityFailure("DXMT winemetal.so has incompatible native linkage, deployment target or Wine/WoW64 entry points.")
         }
     }
 
     private static func validateManagedParents(_ paths: ApplicationPaths) throws {
-        guard paths.root.isFileURL else { throw MagicWineError.setup("DXMT requires a local data directory.") }
+        guard paths.root.isFileURL else { throw MagicWineError.unsafeFilesystem("DXMT requires a local data directory.") }
         try fs.requireDirectory(paths.root)
         try fs.requireDirectory(paths.componentsDirectory)
     }
@@ -367,13 +367,13 @@ enum DXMTInstallation {
         let receiptData = try fs.read(root.appendingPathComponent("installation.json"), maximum: 65_536)
         let receipt: Receipt
         do { receipt = try JSONDecoder().decode(Receipt.self, from: receiptData) }
-        catch { throw MagicWineError.setup("DXMT installation receipt is malformed: \(error.localizedDescription)") }
-        guard receipt == expectedReceipt else { throw MagicWineError.setup("DXMT receipt does not match the pinned component and file checksums.") }
+        catch { throw MagicWineError.integrityFailure("DXMT installation receipt is malformed: \(error.localizedDescription)") }
+        guard receipt == expectedReceipt else { throw MagicWineError.integrityFailure("DXMT receipt does not match the pinned component and file checksums.") }
         try cache.verify(root, names: Array(expectedFiles.keys) + ["installation.json", ""] + directories.sorted(), fs: fs,
-                         rehash: false, changed: .setup("DXMT component changed during validation; nothing was adopted.")) {
+                         rehash: false, changed: .integrityFailure("DXMT component changed during validation; nothing was adopted.")) {
             for (name, expected) in expectedFiles {
                 guard try fs.sha256(root.appendingPathComponent(name), maximum: maximum(for: name)) == expected else {
-                    throw MagicWineError.setup("DXMT component changed or is corrupted: \(name). Restore Standard and reinstall this component; cached files were left untouched.")
+                    throw MagicWineError.componentInvalid("DXMT component changed or is corrupted: \(name). Cached files were left untouched.")
                 }
             }
         }
