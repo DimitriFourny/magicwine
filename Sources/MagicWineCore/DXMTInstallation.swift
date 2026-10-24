@@ -5,18 +5,18 @@ import Metal
 /// MIT DXMT v0.80 with source-built, capability-gated remote Metal presentation.
 /// Both winemetal PEs and the Unix bridge are an inseparable ABI-matched set.
 enum DXMTInstallation {
-    static let componentID = "dxmt-v0.80-remote.1"
+    static let componentID = DXMTRemoteBuildPins.componentID
     static let archiveRoot = componentID
     static let archiveName = componentID
     static let archiveSHA256 = DXMTRemoteBuildPins.archiveSHA256
     static let source = "bundled:Sources/MagicWineCore/Resources/\(componentID).tar.gz"
     static let sourceArchiveName = componentID + "-source.tar.gz"
     static let provenanceName = componentID + "-provenance.json"
-    static let stockArchiveName = "dxmt-v0.80-builtin.tar.gz"
-    private static let stockArchiveSHA256 = "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d"
+    static let stockArchiveName = DXMTRemoteBuildPins.stockArchiveName
+    private static let stockArchiveSHA256 = DXMTRemoteBuildPins.stockArchiveSHA256
     static let notice = "DXMT — Experimental translates Direct3D 10/11 to Metal, not Direct3D 9/12. This altered MIT-licensed v0.80 package requires macOS 15 or later, an Apple Silicon Metal GPU, Rosetta and compatible Wine. MagicWine rebuilds the matched D3D11 and Metal-view modules for real cross-process presentation on its managed Wine driver; unsupported custom drivers fail gracefully. All other public upstream payloads are unchanged. Complete corresponding source, build inputs, patches, licenses and provenance are bundled. No CrossOver or Apple proprietary runtime binaries are included. Standard graphics remains the default. An isolated process-local loader view prevents WineD3D from shadowing DXMT without modifying shared Wine files."
     private static let directories: Set<String> = ["i386-windows", "x86_64-windows", "x86_64-unix"]
-    private static let licenseSHA256 = "0acf1ce81dc7bbc0165f2f95ea359f37dc6bbe6546ef9f5feefa33496a942624"
+    private static let licenseSHA256 = DXMTRemoteBuildPins.licenseSHA256
     // Generated only from the completed source build, independently of receipts.
     static let payloadDigests = DXMTRemoteBuildPins.payloadDigests
     private static let provenance = """

@@ -173,10 +173,10 @@ These commands **write new resources** and may download public source inputs. Th
 
 | Recipe | Required tools/inputs and outputs |
 | --- | --- |
-| [build-gamepad-bridge.sh](../scripts/build-gamepad-bridge.sh) | Python 3 and both MinGW GCC/strip toolchains; offline original-source build of the current MIT sources as a **new** component (default `COMPONENT=magicwine-xinput-v2`; refuses `magicwine-xinput-v1` and any existing output). Stages both DLLs, corresponding source, and a `LICENSE-<component>.txt` copy of the root license under gitignored `.local/gamepad-bridge-output/<component>/`; never touches `Sources/MagicWineCore/Resources` or the pinned v1 GPL payload. Prints hashes and the manual adoption steps (resources list, new Swift pins, notices, migration); does not update Swift pins. |
-| [build-wow64cpu.sh](../scripts/build-wow64cpu.sh) | Python 3, shell archive/patch tools, x86_64 MinGW GCC/binutils. Fetches pinned public inputs unless using packaged offline inputs. Writes DLL/source/LGPL notice and prints hashes; does not update Swift pins. |
-| [build-dxvk.sh](../scripts/build-dxvk.sh) | macOS, both MinGW toolchains, Meson, Ninja, glslang, Python 3, archive/patch tools. Fetches pinned source if uncached; builds six native D3D DLLs, not DXGI. Writes archive/provenance and retains build logs; Swift pins remain separate. |
-| [build-metal-wine.sh](../scripts/build-metal-wine.sh) | Exact recorded Apple clang and fixed macOS 26.5 SDK, both MinGW GCCs, make/flex/Perl/Python and native inspection tools. Builds pinned Bison plus matched Wine modules/server. Writes compressed images, source, license, provenance; Swift pins remain separate. |
+| [build-gamepad-bridge.sh](../scripts/build-gamepad-bridge.sh) | Python 3 and both MinGW GCC/strip toolchains; offline original-source build of the current MIT sources as a **new** component (default `COMPONENT=magicwine-xinput-v2`; refuses `magicwine-xinput-v1` and any existing output). Stages both DLLs, corresponding source, a `LICENSE-<component>.txt` copy of the root license, and that component's own `MagicWineXInputV<N>BuildPins.swift` under gitignored `.local/gamepad-bridge-output/<component>/`; never touches `Sources/MagicWineCore` or the pinned v1 GPL payload and pins (`MagicWineXInputV1BuildPins.swift`). Prints hashes and the manual adoption steps (resources list, copying the pins file, notices, migration). |
+| [build-wow64cpu.sh](../scripts/build-wow64cpu.sh) | Python 3, shell archive/patch tools, x86_64 MinGW GCC/binutils. Fetches pinned public inputs unless using packaged offline inputs. Writes DLL/source/LGPL notice, prints hashes and regenerates `Wow64CPUBuildPins.swift`. |
+| [build-dxvk.sh](../scripts/build-dxvk.sh) | macOS, both MinGW toolchains, Meson, Ninja, glslang, Python 3, archive/patch tools. Fetches pinned source if uncached; builds six native D3D DLLs, not DXGI. Writes archive/provenance, retains build logs and regenerates `DXVKBuildPins.swift`. |
+| [build-metal-wine.sh](../scripts/build-metal-wine.sh) | Exact recorded Apple clang and fixed macOS 26.5 SDK, both MinGW GCCs, make/flex/Perl/Python and native inspection tools. Builds pinned Bison plus matched Wine modules/server. Writes compressed images, source, license, provenance and regenerates `WineMetalBuildPins.swift`. |
 | [build-dxmt.sh](../scripts/build-dxmt.sh) | Python 3, Apple native tools/SDK, Meson/Ninja/CMake and recorded LLVM/MinGW inputs, Rosetta, exact tool lock and pinned Wine development inputs. Writes renderer/source/provenance and regenerates `DXMTRemoteBuildPins.swift`. |
 
 Typical tool installation suggestions in the recipes are `brew install mingw-w64 python` for the bridge/CPU work and `brew install mingw-w64 meson ninja glslang python` for DXVK. These do not satisfy the exact Wine/DXMT toolchain locks by themselves. Read each recipe before installing or fetching anything.
@@ -193,17 +193,39 @@ bash scripts/build-dxmt.sh
 
 These are separate stages. `DXMT_INPUTS` selects the input cache, `WINE_BUILD` selects the required development-input tree, and `JOBS` controls parallel compilation. The recipe deliberately requires pinned **metal.4 development inputs and source**, not an arbitrary installed Wine or the newest metal.7 output. Its corresponding-source archive preserves matching development inputs; external tools and separately provisioned prerequisites remain necessary. Locking different tools does not prove that their output matches shipped pins. Generated Metal shader arrays are extracted and verified from pinned upstream binaries; regenerating shaders is a different workflow requiring Apple's Metal compiler.
 
+### Generated pins
+
+Each component's compiled identity and digests live in one generated Swift file next to the installer that consumes it, never hand-copied:
+
+| Recipe | Generated file | Holds |
+| --- | --- | --- |
+| `build-metal-wine.sh` | `WineMetalBuildPins.swift` | component ID, license name, source/license/provenance digests, and per image: install path, resource suffix, stock (original) digest, decompressed digest, compressed digest |
+| `build-dxmt.sh` | `DXMTRemoteBuildPins.swift` | component ID, archive/source/provenance digests, stock archive name and digest, license digest, per-file payload digests |
+| `build-dxvk.sh` | `DXVKBuildPins.swift` | version (the component ID is `dxvk-macos-<version>`), archive digest, fork commit and source-archive digest, dependency notice name/digest, per-file payload digests |
+| `build-wow64cpu.sh` | `Wow64CPUBuildPins.swift` | component ID, license name, DLL/source/license digests |
+| `build-gamepad-bridge.sh` | `MagicWineXInputV<N>BuildPins.swift` | component ID, license name, both DLL digests, source/license digests of the staged component |
+
+The installers (`WineMetalDriver`, `DXMTInstallation`, `DXVKInstallation`, `RosettaCPUCompatibility`, `GamepadBridge`) take these values from the generated enums; a file name or component ID is derived from the component ID wherever it embeds it. Stock-runtime facts that no recipe produces (for example the original `wow64cpu.dll` digest or the Microsoft XInput redistributable digests) and historical retained receipts stay in the installer.
+
+The pins are computed from the **published resources** (the files in `Sources/MagicWineCore/Resources`, or the staged output), not from build intermediates, so a build and a regeneration agree. Every recipe except the gamepad bridge writes its pins file to `Sources/MagicWineCore` together with the payloads it publishes into `Resources`; the bridge stages its file with the payloads and never touches `Sources`. Outside a rebuild, `bash scripts/build-metal-wine.sh --pins-only`, `build-dxmt.sh --pins-only`, `build-dxvk.sh --pins-only` and `build-wow64cpu.sh --pins-only` re-emit the file from the checked-in resources without building anything; a clean `git diff` shows that the pins match.
+
+`ComponentPinsTests` independently recomputes the SHA-256 of every checked-in resource (including archive payloads and decompressed driver images), compares them with the generated constants, and checks that `Package.swift` bundles exactly the files in `Resources`. A resource changed without its pins, or a pin edited by hand, fails `./scripts/test.sh`.
+
+Adopting a rebuild is therefore a reviewable file copy: run the recipe (its payloads and pins land together), or for the bridge copy the staged payloads into `Resources`, list them in `Package.swift` and copy the staged pins file into `Sources/MagicWineCore`. Then handle identity and migration (below) and run `./scripts/test.sh`. The gamepad recipe never overwrites v1: its output pins describe only the staged component, and `MagicWineXInputV1BuildPins.swift` is a hand-kept file in the same format for the historical payload.
+
 ### Updating integrity contracts
 
 See [Compatibility patches](compatibility.md) for the module map. For a real component update, coordinate:
 
 - Source/patch identity, output architecture, runtime ABI, and any generated shared protocol.
 - Binary and compressed-image digests, source archive, provenance, and license/notices.
-- Compiled expectations in the owning installer and [Package.swift](../Package.swift) resource entries.
+- Compiled expectations: the generated [pins files](#generated-pins), the owning installer, and [Package.swift](../Package.swift) resource entries.
 - Component identity and treatment of already installed receipts, original backups, and historical variants.
 - Actual Windows execution and failure cases, not just successful compilation.
 
 In particular, rebuilding today's MIT bridge source changes its source/license resources relative to the historical pinned GPL XInput v1 distribution. Merely changing `GamepadBridge.swift` pins can invalidate existing bottle backups. Treat it as a component compatibility change, not a notice cleanup. Never rewrite immutable third-party notices to match the root license.
+
+Component IDs are persisted (bottle metadata, receipts, runtime directory names); `ComponentPinsTests` pins the current set, so renaming one is a deliberate, test-visible act. Do not rename a component or resource file to adopt a rebuild: a changed binary needs a new component ID and a migration story.
 
 ## Evidence levels
 

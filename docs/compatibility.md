@@ -8,10 +8,10 @@ Compatibility work lives at two levels: rebuilt Wine/renderer components and Swi
 
 | Component | Current identity | Integration owner |
 | --- | --- | --- |
-| Matched Wine native/Windows modules and server | `winemac-wine11.0-metal.7` | [WineMetalDriver.swift](../Sources/MagicWineCore/WineMetalDriver.swift), [RuntimeInstallation.swift](../Sources/MagicWineCore/RuntimeInstallation.swift) |
-| Prefix-local WoW64 CPU correction | `wow64cpu-wine11.0-magicwine.1` | [RosettaCPUCompatibility.swift](../Sources/MagicWineCore/RosettaCPUCompatibility.swift) |
+| Matched Wine native/Windows modules and server | `winemac-wine11.0-metal.7` | [WineMetalDriver.swift](../Sources/MagicWineCore/WineMetalDriver.swift), [WineMetalBuildPins.swift](../Sources/MagicWineCore/WineMetalBuildPins.swift), [RuntimeInstallation.swift](../Sources/MagicWineCore/RuntimeInstallation.swift) |
+| Prefix-local WoW64 CPU correction | `wow64cpu-wine11.0-magicwine.1` | [RosettaCPUCompatibility.swift](../Sources/MagicWineCore/RosettaCPUCompatibility.swift), [Wow64CPUBuildPins.swift](../Sources/MagicWineCore/Wow64CPUBuildPins.swift) |
 | Altered DXMT renderer | `dxmt-v0.80-remote.1` | [DXMTInstallation.swift](../Sources/MagicWineCore/DXMTInstallation.swift), [DXMTRemoteBuildPins.swift](../Sources/MagicWineCore/DXMTRemoteBuildPins.swift) |
-| Altered macOS DXVK fork | `dxvk-macos-1.10.3-magicwine.2` | [DXVKInstallation.swift](../Sources/MagicWineCore/DXVKInstallation.swift) |
+| Altered macOS DXVK fork | `dxvk-macos-1.10.3-magicwine.2` | [DXVKInstallation.swift](../Sources/MagicWineCore/DXVKInstallation.swift), [DXVKBuildPins.swift](../Sources/MagicWineCore/DXVKBuildPins.swift) |
 
 The managed base download remains Gcenx Wine `11.0_1`, which reports `wine-11.0`. A version string alone cannot distinguish these compatibility revisions. Historical DXMT `dxmt-v0.80` has its own validation path and must not be relabeled as the altered renderer.
 
@@ -146,7 +146,7 @@ Sources: [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift), [Launc
 2. Update the source patch against its pinned upstream input; preserve attribution and license terms.
 3. Rebuild the matched module set with the recipe's actual required tools and inputs.
 4. Retain corresponding source, build recipe, provenance, notices, and original upstream material where required.
-5. Independently verify output hashes/architectures and update the owning compiled pins and package resource list as needed.
+5. Independently verify output hashes/architectures. The recipe emits the component's generated `*BuildPins.swift` from the published resources (see [Development](development.md#generated-pins)); update the package resource list as needed and let `ComponentPinsTests` confirm the resources match the pins.
 6. Consider installed receipts/backups and component identity before publishing different bytes. A pin edit alone is not a migration.
 7. Exercise the changed Windows API/backend path and its failure cases, then document the evidence and limits.
 

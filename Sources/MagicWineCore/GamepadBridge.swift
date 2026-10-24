@@ -186,20 +186,20 @@ final class GamepadBridgeSession {
 /// The caller holds GraphicsPrefix.withLock. Only bottle-owned system DLLs are
 /// changed; game-local controller middleware retains native-first precedence.
 enum GamepadBridge {
-    static let componentID = "magicwine-xinput-v1"
+    static let componentID = MagicWineXInputV1BuildPins.componentID
     static let sourceName = componentID + "-source.tar.gz"
-    static let licenseName = "LICENSE-MAGICWINE-GAMEPAD.txt"
+    static let licenseName = MagicWineXInputV1BuildPins.licenseName
     static let dllNames = ["xinput1_1", "xinput1_2", "xinput1_3", "xinput1_4", "xinput9_1_0"]
     static var overrides: String { dllNames.joined(separator: ",") + "=n,b" }
     /// Used when the bridge is skipped: a deterministic Wine builtin load order for
     /// every managed name, regardless of which DLL bytes the prefix currently holds.
     static var builtinOverrides: String { dllNames.joined(separator: ",") + "=b" }
 
-    // Independently pinned outputs of scripts/build-gamepad-bridge.sh (MinGW GCC 16.2.0).
-    private static let bundledI686SHA256 = "46876f2461034d5a7124738f3cc75fdcfc3720d529f0cccb6e96159b685f22ef"
-    private static let bundledX8664SHA256 = "7c4e6876e9a1b165286a9c09118e12f30cb98d004237161a1cbe1bd38379190d"
-    private static let bundledSourceSHA256 = "e1a49ce8166f21203f11d7dcdcf5da4a6590db0885bfc341c60a266c29a5af20"
-    private static let bundledLicenseSHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    // Independently pinned outputs of the historical magicwine-xinput-v1 build (MinGW GCC 16.2.0).
+    private static let bundledI686SHA256 = MagicWineXInputV1BuildPins.i686SHA256
+    private static let bundledX8664SHA256 = MagicWineXInputV1BuildPins.x8664SHA256
+    private static let bundledSourceSHA256 = MagicWineXInputV1BuildPins.sourceSHA256
+    private static let bundledLicenseSHA256 = MagicWineXInputV1BuildPins.licenseSHA256
     // Microsoft DirectX End-User Runtimes (June 2010): https://www.microsoft.com/en-us/download/details.aspx?id=8109
     // Independently extracted from directx_Jun2010_redist.exe, SHA-256:
     // 053f76dcbb28802e23341b6a787e3b0791c0fa5c8d4d011b1044172dbf89c73b.
@@ -262,7 +262,7 @@ enum GamepadBridge {
         guard let i686 = Bundle.module.url(forResource: componentID + "-i686", withExtension: "dll"),
               let x8664 = Bundle.module.url(forResource: componentID + "-x86_64", withExtension: "dll"),
               let source = Bundle.module.url(forResource: componentID + "-source", withExtension: "tar.gz"),
-              let license = Bundle.module.url(forResource: "LICENSE-MAGICWINE-GAMEPAD", withExtension: "txt") else {
+              let license = Bundle.module.url(forResource: licenseName, withExtension: nil) else {
             throw MagicWineError.setup("The bundled XInput bridge is missing. Reinstall this MagicWine build; no controller DLL was replaced.")
         }
         return try install(prefix: prefix, bottleDirectory: bottleDirectory,

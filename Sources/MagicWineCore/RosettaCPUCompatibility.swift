@@ -4,15 +4,15 @@ import Foundation
 /// The caller holds GraphicsPrefix.withLock. This single-DLL deployment does not
 /// change bottle metadata, Wine's shared runtime, or persistent DLL overrides.
 enum RosettaCPUCompatibility {
-    static let componentID = "wow64cpu-wine11.0-magicwine.1"
+    static let componentID = Wow64CPUBuildPins.componentID
     static let originalSHA256 = "cbbf4d054d5488e19d82ea24e7c280c3408ee43b00fce708d1b559acada9d21e"
     // Independent curated pins, never read from writable bottle metadata.
-    private static let bundledDLLSHA256 = "550f8026530ee2ec8ce038c68bcb265972178cea65ab4b10a7c99c375ccfde50"
-    private static let bundledSourceSHA256 = "8576e58d0ecaca4045c36742be2eaeec96fb7926208b8372799850b052760b30"
-    private static let bundledLicenseSHA256 = "f686a307088beaf3101b564756680f3dd4eb2b04d9e3202a6d0f8123fb116de8"
+    private static let bundledDLLSHA256 = Wow64CPUBuildPins.dllSHA256
+    private static let bundledSourceSHA256 = Wow64CPUBuildPins.sourceSHA256
+    private static let bundledLicenseSHA256 = Wow64CPUBuildPins.licenseSHA256
     static let originalName = "original-wow64cpu.dll"
     static let sourceName = componentID + "-source.tar.gz"
-    static let licenseName = "LICENSE-WINE-WOW64CPU.txt"
+    static let licenseName = Wow64CPUBuildPins.licenseName
     private static let dllMaximum = 16 * 1_048_576
     private static let sourceMaximum = 512 * 1_048_576
     private static let licenseMaximum = 1_048_576
@@ -52,7 +52,7 @@ enum RosettaCPUCompatibility {
         }
         guard let dll = Bundle.module.url(forResource: componentID, withExtension: "dll"),
               let source = Bundle.module.url(forResource: componentID + "-source", withExtension: "tar.gz"),
-              let license = Bundle.module.url(forResource: "LICENSE-WINE-WOW64CPU", withExtension: "txt") else {
+              let license = Bundle.module.url(forResource: licenseName, withExtension: nil) else {
             throw MagicWineError.setup("The bundled Rosetta CPU compatibility files are missing. Reinstall this MagicWine build; no DLL was replaced.")
         }
         let payload = Payload(dll: dll, source: source, license: license,
