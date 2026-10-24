@@ -6,6 +6,8 @@ The root `LICENSE` applies to MagicWine's current original source and documentat
 
 In this repository, the notices and archives below are in `Sources/MagicWineCore/Resources/`. In app distributions they are in `Contents/Resources/MagicWine_MagicWineCore.bundle/Contents/Resources/`; in CLI distributions they are in the adjacent `MagicWine_MagicWineCore.bundle/Contents/Resources/`.
 
+Installing a component into a user's MagicWine library does not copy these archives out of the resource bundle. An installed DXMT component and a managed Wine runtime's driver backup keep their license/notice and provenance files, and record the name and SHA-256 of the matching archives in this resource bundle (DXMT: `PROVENANCE.txt` and the `bundledArchives` receipt field; Wine Metal runtime: `CORRESPONDING-SOURCE.txt`). Components and runtimes installed by earlier versions may still hold full copies.
+
 | Component | Terms and accompanying material |
 | --- | --- |
 | Wine Metal runtime and WoW64 CPU repair | LGPL-2.1-or-later. See `LICENSE-WINE-METAL.txt` and `LICENSE-WINE-WOW64CPU.txt`. Matching `winemac-*-source.tar.gz` and `wow64cpu-*-source.tar.gz` archives preserve corresponding source, patches, build recipes, and upstream attribution. |

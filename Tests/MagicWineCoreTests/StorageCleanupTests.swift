@@ -247,6 +247,31 @@ struct StorageCleanupTests {
         #expect(try await planned() == [own.lastPathComponent, other.lastPathComponent, unreadable.lastPathComponent])
     }
 
+    @Test func retainedComponentAndItsViewStayReachableUntilNoBottleUsesThem() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let retained = "dxmt-v0.80-remote.1"
+        #expect(DXMTInstallation.retainedComponentIDs.contains(retained))
+        try fixture.runtime(7)
+        let oldComponent = try fixture.component(retained)
+        _ = try fixture.component(DXMTInstallation.componentID)
+        let pinned = try await fixture.bottle("Pinned", revision: 7, componentID: retained)
+        _ = try await fixture.bottle("Current", revision: 7, componentID: DXMTInstallation.componentID)
+        let oldView = try fixture.view(7, component: retained)
+        #expect(oldView != (try fixture.view(7, component: DXMTInstallation.componentID)))
+        #expect(try await StorageCleanup.plan(paths: fixture.paths).items.isEmpty)
+
+        // After the bottle moves to the current component, only the old one and its view are unused.
+        let metadata = fixture.paths.bottlesDirectory.appendingPathComponent(pinned.id.uuidString).appendingPathComponent("bottle.json")
+        var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: metadata)) as? [String: Any])
+        json["graphics"] = ["backend": "dxmt", "componentID": DXMTInstallation.componentID, "showHUD": false]
+        try JSONSerialization.data(withJSONObject: json).write(to: metadata)
+        let plan = try await StorageCleanup.plan(paths: fixture.paths)
+        #expect(Set(plan.items.map(\.url.standardizedFileURL.path)) ==
+                Set([oldComponent, oldView].map(\.standardizedFileURL.path)))
+        #expect(plan.items.allSatisfy { !$0.isCurrent } && plan.keptCurrent.isEmpty)
+    }
+
     @Test func symbolicLinksNeverRedirectRemoval() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

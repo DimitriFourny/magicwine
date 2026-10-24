@@ -10,10 +10,10 @@ Compatibility work lives at two levels: rebuilt Wine/renderer components and Swi
 | --- | --- | --- |
 | Matched Wine native/Windows modules and server | `winemac-wine11.0-metal.7` | [WineMetalDriver.swift](../Sources/MagicWineCore/WineMetalDriver.swift), [WineMetalBuildPins.swift](../Sources/MagicWineCore/WineMetalBuildPins.swift), [RuntimeInstallation.swift](../Sources/MagicWineCore/RuntimeInstallation.swift) |
 | Prefix-local WoW64 CPU correction | `wow64cpu-wine11.0-magicwine.1` | [RosettaCPUCompatibility.swift](../Sources/MagicWineCore/RosettaCPUCompatibility.swift), [Wow64CPUBuildPins.swift](../Sources/MagicWineCore/Wow64CPUBuildPins.swift) |
-| Altered DXMT renderer | `dxmt-v0.80-remote.1` | [DXMTInstallation.swift](../Sources/MagicWineCore/DXMTInstallation.swift), [DXMTRemoteBuildPins.swift](../Sources/MagicWineCore/DXMTRemoteBuildPins.swift) |
+| Altered DXMT renderer | Component `dxmt-v0.80-remote.1-slim` (build `dxmt-v0.80-remote.1`) | [DXMTInstallation.swift](../Sources/MagicWineCore/DXMTInstallation.swift), [DXMTRemoteBuildPins.swift](../Sources/MagicWineCore/DXMTRemoteBuildPins.swift) |
 | Altered macOS DXVK fork | `dxvk-macos-1.10.3-magicwine.2` | [DXVKInstallation.swift](../Sources/MagicWineCore/DXVKInstallation.swift), [DXVKBuildPins.swift](../Sources/MagicWineCore/DXVKBuildPins.swift) |
 
-The managed base download remains Gcenx Wine `11.0_1`, which reports `wine-11.0`. A version string alone cannot distinguish these compatibility revisions. Historical DXMT `dxmt-v0.80` has its own validation path and must not be relabeled as the altered renderer.
+The managed base download remains Gcenx Wine `11.0_1`, which reports `wine-11.0`. A version string alone cannot distinguish these compatibility revisions. Historical DXMT `dxmt-v0.80` has its own validation path and must not be relabeled as the altered renderer. The retained `dxmt-v0.80-remote.1` component is the same build in the earlier layout that copied the bundled archives (see [graphics](graphics.md#dxvk-and-dxmt)).
 
 ## Patch inventory
 
@@ -55,7 +55,7 @@ The selected DXMT v0.80 code and its remote patch are MIT; dependencies keep the
 
 The Metal bridge must connect native macOS views/layers to Windows handles and call conventions without replacing the host's thread-local assumptions. Managed Metal Wine keeps Darwin pthread GS active for native code. Its `ntdll` changes expose the required ABI entrypoints, mirror selected Windows TEB fields, centralize TLS-vector updates, and clean up shadow state on thread exit. They are not permission to assume arbitrary Windows inline GS accesses are safe.
 
-The build includes native `winemac.so`, `ntdll.so`, `win32u.so`, `winhttp.so`, `wineserver`, both Windows architectures of the required driver/`ntdll`/`user32`/`winhttp` modules, and 64-bit `wow64win.dll`. Resources are compressed as raw DEFLATE to keep Swift's resource processing from altering pinned Mach-O bytes. The installer preserves verified stock originals and complete source/license/provenance material.
+The build includes native `winemac.so`, `ntdll.so`, `win32u.so`, `winhttp.so`, `wineserver`, both Windows architectures of the required driver/`ntdll`/`user32`/`winhttp` modules, and 64-bit `wow64win.dll`. Resources are compressed as raw DEFLATE to keep Swift's resource processing from altering pinned Mach-O bytes. The installer preserves verified stock originals, the license and provenance, and a pinned reference to the corresponding source shipped in the app's resource bundle (runtimes installed earlier hold a full source copy instead).
 
 Do not copy a new driver beside an old native `ntdll`, or replace only one PE architecture. Host ABI inspection, compressed-image pins, replacement-image pins, and original-image pins all participate in installation.
 

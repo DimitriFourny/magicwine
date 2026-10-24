@@ -221,6 +221,7 @@ See [Compatibility patches](compatibility.md) for the module map. For a real com
 - Binary and compressed-image digests, source archive, provenance, and license/notices.
 - Compiled expectations: the generated [pins files](#generated-pins), the owning installer, and [Package.swift](../Package.swift) resource entries.
 - Component identity and treatment of already installed receipts, original backups, and historical variants.
+- Installed layout: components and runtime backups keep licenses/notices and provenance, but reference bundled archives (altered runtime, corresponding source, original release) by name and SHA-256 instead of copying them into the library; see [graphics](graphics.md#dxvk-and-dxmt). For DXMT, `build-dxmt.sh`'s `COMPONENT` (emitted as `DXMTRemoteBuildPins.componentID`) names the build and its resources (`DXMTInstallation.buildID`). The installer appends `-slim` to it to form the installed component ID. The suffix names that layout, not a build output, so the recipe does not emit it. When the build changes, add the outgoing installed receipt to the retained list.
 - Actual Windows execution and failure cases, not just successful compilation.
 
 In particular, rebuilding today's MIT bridge source changes its source/license resources relative to the historical pinned GPL XInput v1 distribution. Merely changing `GamepadBridge.swift` pins can invalidate existing bottle backups. Treat it as a component compatibility change, not a notice cleanup. Never rewrite immutable third-party notices to match the root license.

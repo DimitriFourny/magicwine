@@ -252,8 +252,10 @@ struct GraphicsComponentUpdateTests {
     }
 
     @Test func bundledProvidersOfferUpdatesOnlyFromRetainedComponents() {
-        let historicalDXMT = GraphicsConfiguration(backend: .dxmt, componentID: "dxmt-v0.80")
-        #expect(historicalDXMT.usesSupportedComponent && historicalDXMT.hasComponentUpdate)
+        for retained in ["dxmt-v0.80", "dxmt-v0.80-remote.1"] {
+            let historicalDXMT = GraphicsConfiguration(backend: .dxmt, componentID: retained)
+            #expect(historicalDXMT.usesSupportedComponent && historicalDXMT.hasComponentUpdate)
+        }
         let currentDXMT = GraphicsConfiguration(backend: .dxmt, componentID: DXMTInstallation.componentID)
         #expect(currentDXMT.usesSupportedComponent && !currentDXMT.hasComponentUpdate)
         let currentDXVK = GraphicsConfiguration(backend: .dxvk, componentID: DXVKInstallation.componentID)

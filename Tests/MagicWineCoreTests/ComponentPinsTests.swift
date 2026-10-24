@@ -121,7 +121,10 @@ struct ComponentPinsTests {
     /// strands existing installs, so a new component adds an ID instead of renaming.
     @Test func persistedComponentIdentitiesAreStable() {
         #expect(WineMetalDriver.componentID == "winemac-wine11.0-metal.7")
-        #expect(DXMTInstallation.componentID == "dxmt-v0.80-remote.1")
+        #expect(DXMTInstallation.componentID == "dxmt-v0.80-remote.1-slim")
+        #expect(DXMTInstallation.buildID == "dxmt-v0.80-remote.1")
+        // Earlier current DXMT IDs stay retained, so their installs keep launching.
+        #expect(Set(DXMTInstallation.retainedComponentIDs) == ["dxmt-v0.80", "dxmt-v0.80-remote.1"])
         #expect(DXVKInstallation.componentID == "dxvk-macos-1.10.3-magicwine.2")
         #expect(DXVKInstallation.version == "1.10.3-magicwine.2")
         #expect(RosettaCPUCompatibility.componentID == "wow64cpu-wine11.0-magicwine.1")

@@ -88,33 +88,63 @@ struct DXMTInstallationTests {
         }
     }
 
-    @Test func correspondingSourceCannotBeRemovedOrReplacedByForgingReceipt() async throws {
+    @Test func installedComponentReferencesBundledArchivesAndKeepsItsNotices() async throws {
         let fixture = Fixture()
         defer { fixture.cleanUp() }
         let component = try await DXMTInstallation.install(paths: fixture.paths)
-        let source = component.appendingPathComponent(DXMTInstallation.sourceArchiveName)
-        let saved = fixture.directory.appendingPathComponent("source.tar.gz")
-        try FileManager.default.moveItem(at: source, to: saved)
-        #expect(throws: MagicWineError.self) {
-            try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
-        }
-        let replacement = Data([0x1f, 0x8b, 0, 0])
-        try replacement.write(to: source)
         let receiptURL = component.appendingPathComponent("installation.json")
-        var receipt = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: receiptURL)) as? [String: Any])
+        let receipt = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: receiptURL)) as? [String: Any])
+        let bundled = try #require(receipt["bundledArchives"] as? [String: String])
+        #expect(bundled == DXMTInstallation.bundledArchives)
+        #expect(bundled[DXMTInstallation.sourceArchiveName] == DXMTRemoteBuildPins.sourceSHA256)
+        let provenance = try String(contentsOf: component.appendingPathComponent("PROVENANCE.txt"), encoding: .utf8)
+        #expect(provenance.contains("\(DXMTInstallation.sourceArchiveName), SHA-256 \(DXMTRemoteBuildPins.sourceSHA256)"))
+        for name in bundled.keys {
+            #expect(!FileManager.default.fileExists(atPath: component.appendingPathComponent(name).path))
+            let resource = try #require(DXMTInstallation.bundledResource(name))
+            #expect(SHA256.hash(data: try Data(contentsOf: resource)).map { String(format: "%02x", $0) }.joined() == bundled[name])
+        }
+
+        // A copied archive is not part of this layout.
+        let copy = component.appendingPathComponent(DXMTInstallation.stockArchiveName)
+        try FileManager.default.copyItem(at: try #require(DXMTInstallation.bundledResource(DXMTInstallation.stockArchiveName)), to: copy)
+        #expect(throws: MagicWineError.self) {
+            try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
+        }
+        try FileManager.default.removeItem(at: copy)
+        _ = try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
+
+        // The receipt cannot drop or redirect the corresponding-source reference.
+        let original = try Data(contentsOf: receiptURL)
+        var redirected = bundled
+        redirected[DXMTInstallation.sourceArchiveName] = String(repeating: "0", count: 64)
+        for forged: Any? in [nil, redirected] {
+            var changed = receipt
+            changed["bundledArchives"] = forged
+            try JSONSerialization.data(withJSONObject: changed).write(to: receiptURL, options: .atomic)
+            #expect(throws: MagicWineError.self) {
+                try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
+            }
+        }
+        try original.write(to: receiptURL, options: .atomic)
+
+        // Notices stay in the component: removing one, even with a matching forged receipt, is rejected.
+        let license = component.appendingPathComponent("LICENSE-DXMT.txt")
+        let saved = fixture.directory.appendingPathComponent("LICENSE-DXMT.txt")
+        try FileManager.default.moveItem(at: license, to: saved)
+        #expect(throws: MagicWineError.self) {
+            try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
+        }
         var files = try #require(receipt["files"] as? [String: String])
-        files[DXMTInstallation.sourceArchiveName] = SHA256.hash(data: replacement).map { String(format: "%02x", $0) }.joined()
-        receipt["files"] = files
-        try JSONSerialization.data(withJSONObject: receipt).write(to: receiptURL, options: .atomic)
+        files["LICENSE-DXMT.txt"] = nil
+        var forged = receipt
+        forged["files"] = files
+        try JSONSerialization.data(withJSONObject: forged).write(to: receiptURL, options: .atomic)
         #expect(throws: MagicWineError.self) {
             try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
         }
-        try DXMTInstallation.writeReceipt(at: component)
-        #expect(throws: MagicWineError.self) {
-            try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
-        }
-        try FileManager.default.removeItem(at: source)
-        try FileManager.default.moveItem(at: saved, to: source)
+        try original.write(to: receiptURL, options: .atomic)
+        try FileManager.default.moveItem(at: saved, to: license)
         _ = try DXMTInstallation.validate(componentID: DXMTInstallation.componentID, paths: fixture.paths)
     }
 

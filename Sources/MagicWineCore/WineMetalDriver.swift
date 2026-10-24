@@ -8,6 +8,17 @@ enum WineMetalDriver {
     static let sourceName = componentID + "-source.tar.gz"
     static let licenseName = WineMetalBuildPins.licenseName
     static let provenanceName = componentID + "-provenance.json"
+    /// Staged into the runtime's backup instead of a copy of the bundled `sourceName`.
+    static let sourceReferenceName = "CORRESPONDING-SOURCE.txt"
+    static let sourceReference = """
+    MagicWine Wine Metal driver: \(componentID)
+    Corresponding source: \(sourceName), SHA-256 \(WineMetalBuildPins.sourceSHA256)
+    License: \(licenseName); build provenance: \(provenanceName) (both in this directory).
+    The corresponding source is not copied into this runtime. It ships in MagicWine's
+    resource bundle, MagicWine_MagicWineCore.bundle/Contents/Resources/ (inside
+    MagicWine.app/Contents/Resources/ or beside the CLI), next to the license.
+
+    """
     private static let nativeMaximum = 64 * 1_048_576
     private static let sourceMaximum = 256 * 1_048_576
     private static let textMaximum = 1_048_576
@@ -87,9 +98,13 @@ enum WineMetalDriver {
             try manager.copyItem(at: root.appendingPathComponent(image.relativePath),
                                  to: backup.appendingPathComponent(image.backupName))
         }
-        for artifact in artifacts where artifact.image == nil {
+        // The license and provenance are copied; the corresponding source stays in the
+        // app's resource bundle and the backup records its name and pin instead.
+        for artifact in artifacts where artifact.image == nil && artifact.url.lastPathComponent != sourceName {
             try manager.copyItem(at: artifact.url, to: backup.appendingPathComponent(artifact.url.lastPathComponent))
         }
+        try Data(sourceReference.utf8).write(to: backup.appendingPathComponent(sourceReferenceName),
+                                             options: .withoutOverwriting)
         try validateBackup(backup, artifacts: artifacts)
         for artifact in artifacts {
             guard let image = artifact.image else { continue }
@@ -142,12 +157,17 @@ enum WineMetalDriver {
         return root
     }
 
+    /// Accepts exactly one of two pinned inventories: the current one with the source
+    /// reference, or the earlier one holding a full copy of the corresponding source
+    /// (runtimes staged before it are validated unchanged, never rewritten).
     private static func validateBackup(_ backup: URL, artifacts: [Artifact]) throws {
         try fs.requireDirectory(backup)
         let notices = artifacts.filter { $0.image == nil }
-        let names = Set(images.filter { $0.originalDigest != nil }.map(\.backupName) +
-                        notices.map { $0.url.lastPathComponent })
-        guard Set(try manager.contentsOfDirectory(atPath: backup.path)) == names else {
+        let originals = images.filter { $0.originalDigest != nil }.map(\.backupName)
+        let copiedSource = Set(originals + notices.map { $0.url.lastPathComponent })
+        let referencedSource = copiedSource.subtracting([sourceName]).union([sourceReferenceName])
+        let names = Set(try manager.contentsOfDirectory(atPath: backup.path))
+        guard names == copiedSource || names == referencedSource else {
             throw failure("The driver original/source/license/provenance set is incomplete or contains unrecognized files.")
         }
         for image in images {
@@ -155,9 +175,13 @@ enum WineMetalDriver {
             try verify(backup.appendingPathComponent(image.backupName),
                        digest: originalDigest, maximum: nativeMaximum)
         }
-        for artifact in notices {
+        for artifact in notices where names.contains(artifact.url.lastPathComponent) {
             try verify(backup.appendingPathComponent(artifact.url.lastPathComponent),
                        digest: artifact.digest, maximum: artifact.maximum)
+        }
+        if names == referencedSource {
+            try verify(backup.appendingPathComponent(sourceReferenceName),
+                       digest: SecureFS.digest(Data(sourceReference.utf8)), maximum: textMaximum)
         }
     }
 

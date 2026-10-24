@@ -5,15 +5,30 @@ import Metal
 /// MIT DXMT v0.80 with source-built, capability-gated remote Metal presentation.
 /// Both winemetal PEs and the Unix bridge are an inseparable ABI-matched set.
 enum DXMTInstallation {
-    static let componentID = DXMTRemoteBuildPins.componentID
-    static let archiveRoot = componentID
-    static let archiveName = componentID
+    /// The source-built release (`COMPONENT` in scripts/build-dxmt.sh); it names the
+    /// bundled archives and their root directory.
+    static let buildID = DXMTRemoteBuildPins.componentID
+    /// Installs the `buildID` payload without copies of the archives the app bundle ships
+    /// (see `bundledArchives`). The suffix names this installed layout, not a build, so the
+    /// recipe does not emit it. The byte-identical older layout stays retained below.
+    static let componentID = buildID + "-slim"
+    static let archiveRoot = buildID
+    static let archiveName = buildID
     static let archiveSHA256 = DXMTRemoteBuildPins.archiveSHA256
-    static let source = "bundled:Sources/MagicWineCore/Resources/\(componentID).tar.gz"
-    static let sourceArchiveName = componentID + "-source.tar.gz"
-    static let provenanceName = componentID + "-provenance.json"
+    static let source = "bundled:Sources/MagicWineCore/Resources/\(archiveName).tar.gz"
+    static let sourceArchiveName = buildID + "-source.tar.gz"
+    static let provenanceName = buildID + "-provenance.json"
     static let stockArchiveName = DXMTRemoteBuildPins.stockArchiveName
     private static let stockArchiveSHA256 = DXMTRemoteBuildPins.stockArchiveSHA256
+    /// Where app and CLI distributions ship `bundledArchives` (see THIRD_PARTY_NOTICES.md).
+    static let resourceBundleLocation = "MagicWine_MagicWineCore.bundle/Contents/Resources/"
+    /// Archives the app bundle ships for this component and the component does not copy:
+    /// the altered runtime archive, its complete corresponding source and the original release.
+    static let bundledArchives = [
+        archiveName + ".tar.gz": archiveSHA256,
+        sourceArchiveName: DXMTRemoteBuildPins.sourceSHA256,
+        stockArchiveName: stockArchiveSHA256,
+    ]
     static let notice = "DXMT — Experimental translates Direct3D 10/11 to Metal, not Direct3D 9/12. This altered MIT-licensed v0.80 package requires macOS 15 or later, an Apple Silicon Metal GPU, Rosetta and compatible Wine. MagicWine rebuilds the matched D3D11 and Metal-view modules for real cross-process presentation on its managed Wine driver; unsupported custom drivers fail gracefully. All other public upstream payloads are unchanged. Complete corresponding source, build inputs, patches, licenses and provenance are bundled. No CrossOver or Apple proprietary runtime binaries are included. Standard graphics remains the default. An isolated process-local loader view prevents WineD3D from shadowing DXMT without modifying shared Wine files."
     private static let directories: Set<String> = ["i386-windows", "x86_64-windows", "x86_64-unix"]
     private static let licenseSHA256 = DXMTRemoteBuildPins.licenseSHA256
@@ -21,15 +36,20 @@ enum DXMTInstallation {
     static let payloadDigests = DXMTRemoteBuildPins.payloadDigests
     private static let provenance = """
     MagicWine DXMT component: \(componentID)
+    Build: \(buildID)
     Upstream MIT release: https://github.com/3Shain/dxmt/tree/589adb780354b461645b29999cefaf533594ee99
     Original release: https://github.com/3Shain/dxmt/releases/download/v0.80/\(stockArchiveName)
     Original release SHA-256: \(stockArchiveSHA256)
-    Altered archive SHA-256: \(archiveSHA256)
+    Altered archive: \(archiveName).tar.gz, SHA-256 \(archiveSHA256)
     Corresponding source: \(sourceArchiveName), SHA-256 \(DXMTRemoteBuildPins.sourceSHA256)
     Build provenance: \(provenanceName), SHA-256 \(DXMTRemoteBuildPins.provenanceSHA256)
+    The altered archive, complete corresponding source and original release archive
+    are not copied into this component. They ship in MagicWine's resource bundle,
+    \(resourceBundleLocation) (inside MagicWine.app/Contents/Resources/ or beside
+    the CLI), with the checksums above; installation.json lists them as bundledArchives.
     Recipe: scripts/build-dxmt.sh; source changes: patches/dxmt-remote-metal.patch.
     The matched i386/x86_64 d3d11.dll, winemetal.dll and x86_64 winemetal.so are
-    source-built. All other payloads and retained upstream archive are unchanged.
+    source-built. All other payloads are unchanged from the original release.
     Native magicwine_metal_remote_v1 capability gates foreign HWND/root support;
     real window ownership is preserved. Native acquisition failures return E_FAIL.
     Immutable generated shader arrays are retained from the verified public
@@ -46,27 +66,49 @@ enum DXMTInstallation {
         let source: String
         let archiveSHA256: String
         let files: [String: String]
+        /// Schema 3: archives (name → SHA-256) shipped in the resource bundle, not in `files`.
+        var bundledArchives: [String: String]? = nil
     }
     private static var expectedFiles: [String: String] {
         var files = payloadDigests
-        files[archiveName + ".tar.gz"] = archiveSHA256
         files["LICENSE-DXMT.txt"] = licenseSHA256
-        files[stockArchiveName] = stockArchiveSHA256
-        files[sourceArchiveName] = DXMTRemoteBuildPins.sourceSHA256
         files[provenanceName] = DXMTRemoteBuildPins.provenanceSHA256
         files["PROVENANCE.txt"] = SecureFS.digest(Data(provenance.utf8))
         return files
     }
     private static var expectedReceipt: Receipt {
-        Receipt(schema: 2, componentID: componentID, source: source,
-                archiveSHA256: archiveSHA256, files: expectedFiles)
+        Receipt(schema: 3, componentID: componentID, source: source,
+                archiveSHA256: archiveSHA256, files: expectedFiles, bundledArchives: bundledArchives)
     }
 
     // Retained older components: each is immutable and validated against its own
     // receipt, never an alias for the current build. Bottles pinned to them keep
     // launching and can be updated in place. Move `expectedReceipt` here (as a literal)
-    // when the current pin changes.
+    // when the current pin changes. `dxmt-v0.80-remote.1` holds the same payload as the
+    // current component plus copies of the three bundled archives (schema 2 layout).
     private static let retainedReceipts = [Receipt(
+        schema: 2, componentID: "dxmt-v0.80-remote.1",
+        source: "bundled:Sources/MagicWineCore/Resources/dxmt-v0.80-remote.1.tar.gz",
+        archiveSHA256: "df1b8fe4810dd3ae4a6da78285257dcdcaf2d23b2545760c2d36d5e494fd41e2",
+        files: [
+            "i386-windows/d3d10core.dll": "c5a26310d14a30c3e1700a4d0c9865be28a11351a5c4dc5b83ab1bd8fcf7662f",
+            "i386-windows/d3d11.dll": "3396fde761acc0dea2adc3640724e005cab25e131dabb012e7770fd5b4d9d06f",
+            "i386-windows/dxgi.dll": "7df8cdf66e12a108410002abc77b01f70aa59b8a36a70fa0bc6ae3b056841319",
+            "i386-windows/winemetal.dll": "79fdd2bf67150fa65c1e8f48dced62e982f405210baec142a075fa556cd74b8e",
+            "x86_64-unix/winemetal.so": "582ee39a779c4770ddaa73b54ad05aa2308c888ea88af7eba049943e72b33d5b",
+            "x86_64-windows/d3d10core.dll": "833d26971abc8661efc8b5cc18548c70ce8e482e4ea4b1d3f69a367612264d26",
+            "x86_64-windows/d3d11.dll": "e4258f66288b07dad3b2854d556586f547643bac38b0ce018b0e7ba15653ad6e",
+            "x86_64-windows/dxgi.dll": "fc58aae0aba511a1ec4d2417e5bba6adb888bb14315d0f59cccdfd27f670d544",
+            "x86_64-windows/nvapi64.dll": "7c37b66a88aa1fdb08c6035a7fe738af1c1b5eea53af78c4812498d22bef8bc3",
+            "x86_64-windows/nvngx.dll": "18d5847ee524ba6eeb2eee656817ddc00a45c46759a753854335a765e997e5fe",
+            "x86_64-windows/winemetal.dll": "7390824eca278343e5227eb85361917ccc18761aad5769d6991b6b37ea01bfe4",
+            "dxmt-v0.80-remote.1.tar.gz": "df1b8fe4810dd3ae4a6da78285257dcdcaf2d23b2545760c2d36d5e494fd41e2",
+            "dxmt-v0.80-builtin.tar.gz": "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d",
+            "dxmt-v0.80-remote.1-source.tar.gz": "f291b4f1b287ac5a703ae6c41e1d03f24bf7dbf35f76aa610c6c4801f21fb78e",
+            "dxmt-v0.80-remote.1-provenance.json": "bc94b93724fb15deda45a7dd1155de0f72af3f8f6f9508e61f36bbda830f2d4e",
+            "LICENSE-DXMT.txt": "0acf1ce81dc7bbc0165f2f95ea359f37dc6bbe6546ef9f5feefa33496a942624",
+            "PROVENANCE.txt": "122d335ca7c92a307fd50ce9e6b19ab15ccf07f5330cae3ffd11caec357abae9",
+        ]), Receipt(
         schema: 1, componentID: "dxmt-v0.80",
         source: "https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz",
         archiveSHA256: "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d",
@@ -109,6 +151,11 @@ enum DXMTInstallation {
         try fs.requireFile(url, maximum: maximum(for: url.lastPathComponent))
     }
 
+    /// A file shipped in MagicWine's resource bundle (`resourceBundleLocation`).
+    static func bundledResource(_ name: String) -> URL? {
+        Bundle.module.url(forResource: name, withExtension: nil)
+    }
+
     static func install(paths: ApplicationPaths,
                         progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> URL {
         try Task.checkCancellation()
@@ -130,36 +177,44 @@ enum DXMTInstallation {
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false,
                                                attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: stage) }
-        guard let bundled = Bundle.module.url(forResource: archiveName, withExtension: "tar.gz"),
-              let license = Bundle.module.url(forResource: "LICENSE-DXMT", withExtension: "txt") else {
+        guard let bundled = bundledResource(archiveName + ".tar.gz"),
+              let license = bundledResource("LICENSE-DXMT.txt"),
+              let buildProvenance = bundledResource(provenanceName) else {
             throw MagicWineError.setup("Bundled DXMT archive or notices are missing. Reinstall MagicWine; no network fallback is used.")
         }
         progress?(.verifying)
         try requireFile(bundled)
         try requireFile(license)
+        try requireFile(buildProvenance)
+        // The receipt and PROVENANCE.txt point at these bundled archives instead of
+        // carrying copies, so the bundle must really ship them with the pinned bytes.
+        for (name, expected) in bundledArchives where name != archiveName + ".tar.gz" {
+            guard let resource = bundledResource(name) else {
+                throw MagicWineError.setup("Bundled DXMT corresponding source or original release is missing: \(name). Reinstall MagicWine.")
+            }
+            guard try fs.sha256(resource, maximum: maximum(for: name)) == expected else {
+                throw MagicWineError.setup("Bundled DXMT archive does not match its pin: \(name). Reinstall MagicWine.")
+            }
+            try Task.checkCancellation()
+        }
         let archive = stage.appendingPathComponent(archiveName + ".tar.gz")
         let extraction = try await BundledArchive.extract(bundled, to: archive, sha256: archiveSHA256,
             maximum: 32 * 1_048_576, toolPrefix: "dxmt", paths: paths, fs: fs,
             progress: progress, validateMembers: validateArchiveMembers)
-        let component = extraction.appendingPathComponent(archiveRoot, isDirectory: true)
+        // The archive root names the build; receipts and validation key on the component ID.
+        let component = stage.appendingPathComponent(componentID, isDirectory: true)
+        try FileManager.default.moveItem(at: extraction.appendingPathComponent(archiveRoot, isDirectory: true), to: component)
         try validatePayloadLayout(at: component)
         for (name, expected) in payloadDigests {
             guard try fs.sha256(component.appendingPathComponent(name), maximum: 64 * 1_048_576) == expected else {
                 throw MagicWineError.setup("DXMT pinned payload checksum mismatch: \(name).")
             }
         }
-        try FileManager.default.moveItem(at: archive, to: component.appendingPathComponent(archiveName + ".tar.gz"))
         try FileManager.default.copyItem(at: license, to: component.appendingPathComponent("LICENSE-DXMT.txt"))
+        let provenanceCopy = component.appendingPathComponent(provenanceName)
+        try FileManager.default.copyItem(at: buildProvenance, to: provenanceCopy)
+        try fs.preserveQuarantine(from: buildProvenance, to: provenanceCopy)
         try Data(provenance.utf8).write(to: component.appendingPathComponent("PROVENANCE.txt"), options: .atomic)
-        for name in [stockArchiveName, sourceArchiveName, provenanceName] {
-            guard let resource = Bundle.module.url(forResource: name, withExtension: nil) else {
-                throw MagicWineError.setup("Bundled DXMT corresponding source or provenance is missing: \(name). Reinstall MagicWine.")
-            }
-            try requireFile(resource)
-            let target = component.appendingPathComponent(name)
-            try FileManager.default.copyItem(at: resource, to: target)
-            try fs.preserveQuarantine(from: resource, to: target)
-        }
         try writeReceipt(at: component)
         // Propagate quarantine to every loadable copy, not only its enclosing directory.
         try fs.preserveQuarantine(from: bundled, to: component)
