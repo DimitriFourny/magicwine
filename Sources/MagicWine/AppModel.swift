@@ -443,7 +443,7 @@ final class AppModel: ObservableObject {
     /// afterwards use the new setting. No exclusive operation title is shown.
     func setGraphicsHUD(_ showHUD: Bool, in bottle: Bottle) {
         guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }), bottle.isInitialized,
-              bottle.graphics.backend != .standard, bottle.graphics.usesCurrentComponent,
+              bottle.graphics.backend != .standard, bottle.graphics.usesSupportedComponent,
               bottle.graphics.showHUD != showHUD else { return }
         var state = activity(for: bottle)
         guard state.title == nil, !state.isStopping, !state.isChangingHUD else { return }
@@ -800,6 +800,32 @@ final class AppModel: ObservableObject {
         } catch {
             storagePlan = nil
             if storageError == nil { storageError = error.localizedDescription }
+        }
+    }
+
+    // MARK: Graphics component updates
+
+    /// The graphics view asks for consent first. Switches a bottle from its retained older
+    /// component to the current bundled one in one journaled prefix transaction.
+    func updateGraphicsComponent(in bottle: Bottle) {
+        guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
+              bottle.isInitialized, bottle.graphics.hasComponentUpdate else { return }
+        var state = activity(for: bottle)
+        guard !state.blocksPrefixMutation else { return }
+        let setupID = UUID()
+        state.graphicsSetupID = setupID
+        state.logURL = nil
+        state.graphicsProgress = .stopping
+        activities[bottle.id] = state
+        perform(in: bottle, title: "Stopping Windows processes…") { [self] in
+            let updated = try await self.wine.updateGraphicsComponent(in: bottle, acceptExperimental: true) { [weak self] progress in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.activities[bottle.id]?.graphicsSetupID == setupID else { return }
+                    self.updateGraphicsProgress(progress, for: bottle.id)
+                }
+            }
+            self.replace(updated)
+            return nil
         }
     }
 }

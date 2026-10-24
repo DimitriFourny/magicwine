@@ -183,7 +183,7 @@ The GUI bottle **Update Wine** flow installs/reuses and then adopts. The CLI kee
 "$CLI" --root "$ROOT" runtime upgrade "$BOTTLE"
 ```
 
-This upgrade only applies to eligible older managed Metal runtimes, not arbitrary custom Wine. Installation alone does not repin a bottle. Existing files/runtime pins are retained when adoption fails. Changing a graphics component is a separate contract; do not assume a Wine upgrade also replaces an old DXMT selection.
+This upgrade only applies to eligible older managed Metal runtimes, not arbitrary custom Wine. Installation alone does not repin a bottle. Existing files/runtime pins are retained when adoption fails. Changing a graphics component is a separate contract; do not assume a Wine upgrade also replaces an old DXMT selection. A retained older component (such as `dxmt-v0.80`) is switched explicitly with **Update <backend> component** or `graphics <bottle-UUID> <backend> --update --accept-experimental`; see [graphics](graphics.md#updating-a-component-in-place).
 
 ## Recovery without destroying evidence
 

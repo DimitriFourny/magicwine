@@ -15,7 +15,6 @@ enum DXVKInstallation {
     private static let sourceArchiveSHA256 = "b3fc4a0415b3e4cdfb40497bec191c10f183ec2eb498950aa1f638f176cb996b"
     private static let upstreamLicenseSource = "https://github.com/doitsujin/dxvk/blob/v1.10.3/LICENSE"
     private static let forkLicenseSource = "https://github.com/Gcenx/DXVK-macOS/blob/\(sourceCommit)/LICENSE"
-    private static let dllNames = ["d3d9.dll", "d3d10core.dll", "d3d11.dll"]
     private static let dependencyNoticeName = "LICENSE-DXVK-DEPENDENCIES.txt"
     private static let dependencyNoticeSHA256 = "f0ee2e0aae2a9e8871deb7f638a4531b0c738e9c2ae0875dd3263f962d60dc41"
 
@@ -139,6 +138,22 @@ enum DXVKInstallation {
                        files: payloadDigests.merging(metadataDigests) { original, _ in original })
     }
 
+    // Retained older components, each validated against its own receipt (payload and
+    // attribution pins). Bottles pinned to them keep launching and can be updated in
+    // place. When the current pin changes, add the outgoing `expectedReceipt` here as a
+    // literal if its prefix footprint is unchanged; otherwise it stays unsupported.
+    private static let retainedReceipts: [Receipt] = []
+
+    static var retainedComponentIDs: [String] { retainedReceipts.map(\.componentID) }
+
+    private static func pinnedReceipt(for requested: String) throws -> Receipt {
+        if requested == componentID { return expectedReceipt }
+        guard let receipt = retainedReceipts.first(where: { $0.componentID == requested }) else {
+            throw MagicWineError.setup("This bottle selects an older or unsupported DXVK component (\(requested)). Choose Standard to restore this bottle's original graphics files, then enable DXVK again to use \(componentID).")
+        }
+        return receipt
+    }
+
     private static let fs = SecureFS(prefix: "DXVK: ")
     private static let fileMaximum = 32 * 1_048_576
     private static let cache = SecureFS.ValidationCache()
@@ -210,11 +225,9 @@ enum DXVKInstallation {
     }
 
     static func validate(componentID requested: String, paths: ApplicationPaths) throws -> URL {
-        guard requested == componentID else {
-            throw MagicWineError.setup("This bottle selects an older or unsupported DXVK component (\(requested)). Create a new bottle and enable DXVK to use \(componentID). In-place component updates are not supported. Choose Standard to restore this bottle's original graphics files.")
-        }
+        _ = try pinnedReceipt(for: requested)
         try validateManagedParents(paths)
-        let root = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
+        let root = paths.componentsDirectory.appendingPathComponent(requested, isDirectory: true)
         try validateRoot(root, rehash: false)
         return root
     }
@@ -238,7 +251,8 @@ enum DXVKInstallation {
     }
 
     private static func validateRoot(_ root: URL, rehash: Bool) throws {
-        try validatePayloadLayout(at: root, includesMetadata: true)
+        let expectedReceipt = try pinnedReceipt(for: root.lastPathComponent)
+        try validateLayout(at: root, files: Set(expectedReceipt.files.keys).union(["installation.json"]))
         let receiptURL = root.appendingPathComponent("installation.json")
         let receiptData = try fs.read(receiptURL, maximum: 65_536)
         let receipt: Receipt
@@ -276,13 +290,18 @@ enum DXVKInstallation {
     }
 
     static func validatePayloadLayout(at root: URL, includesMetadata: Bool = false) throws {
-        try fs.requireDirectory(root)
-        var expected = Set(payloadDigests.keys)
-        expected.formUnion(["x32", "x64"])
+        var files = Set(payloadDigests.keys)
         if includesMetadata {
-            expected.formUnion(attributionFiles.keys)
-            expected.formUnion(["installation.json", dependencyNoticeName])
+            files.formUnion(attributionFiles.keys)
+            files.formUnion(["installation.json", dependencyNoticeName])
         }
+        try validateLayout(at: root, files: files)
+    }
+
+    /// Exactly `files` plus the two architecture directories; every listed PE DLL is checked.
+    private static func validateLayout(at root: URL, files: Set<String>) throws {
+        try fs.requireDirectory(root)
+        let expected = files.union(["x32", "x64"])
         var actual = Set<String>()
         var enumerationError: Error?
         guard let enumeration = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [],
@@ -307,11 +326,9 @@ enum DXVKInstallation {
             let missing = expected.subtracting(actual).sorted().joined(separator: ", ")
             throw MagicWineError.setup("The DXVK component is incomplete. Missing files: \(missing).")
         }
-        for (architecture, machine) in [("x32", PEInspector.i386), ("x64", PEInspector.amd64)] {
-            for name in dllNames {
-                try PEInspector.validateDLL(root.appendingPathComponent("\(architecture)/\(name)"), machine: machine,
-                                            fs: fs, maximum: fileMaximum)
-            }
+        for name in files.sorted() where name.hasSuffix(".dll") {
+            let machine = name.hasPrefix("x32/") ? PEInspector.i386 : PEInspector.amd64
+            try PEInspector.validateDLL(root.appendingPathComponent(name), machine: machine, fs: fs, maximum: fileMaximum)
         }
     }
 

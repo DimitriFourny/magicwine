@@ -134,7 +134,11 @@ public actor BottleStore {
         }
     }
 
-    internal func setGraphics(_ configuration: GraphicsConfiguration, in bottle: Bottle, componentRoot: URL?) throws -> Bottle {
+    /// `componentUpdate` is `WineRuntime.updateGraphicsComponent`'s explicit in-place switch
+    /// of the selected backend's component; otherwise a different component of the same
+    /// backend is refused.
+    internal func setGraphics(_ configuration: GraphicsConfiguration, in bottle: Bottle, componentRoot: URL?,
+                              componentUpdate: Bool = false) throws -> Bottle {
         let directory = directoryURL(for: bottle)
         return try GraphicsPrefix.withLock(bottleDirectory: directory) {
             var current = try loadUnlocked(bottle)
@@ -142,13 +146,16 @@ public actor BottleStore {
                 throw MagicWineError.setup("Initialize this bottle before changing its graphics backend.")
             }
             let previous = current.graphics
+            guard !componentUpdate || (previous.backend == configuration.backend && previous.backend != .standard) else {
+                throw MagicWineError.setup("This bottle's graphics backend changed. Reload it before updating its component.")
+            }
             let metadata = directory.appendingPathComponent("bottle.json")
             let previousData = try Data(contentsOf: metadata)
             current.graphics = configuration
             let nextData = try encoder.encode(current)
             try GraphicsPrefix.change(from: previous, to: configuration, componentRoot: componentRoot,
                                       bottleDirectory: directory, previousMetadata: previousData,
-                                      nextMetadata: nextData) {
+                                      nextMetadata: nextData, componentUpdate: componentUpdate) {
                 try nextData.write(to: metadata, options: .atomic)
             }
             return current
@@ -168,7 +175,7 @@ public actor BottleStore {
             guard current.isInitialized, current.graphics.backend != .standard else {
                 throw MagicWineError.setup("Standard graphics has no managed HUD. Choose DXVK, DXMT, or D3DMetal first.")
             }
-            guard current.graphics.usesCurrentComponent else {
+            guard current.graphics.usesSupportedComponent else {
                 throw MagicWineError.setup("This bottle uses an unsupported \(current.graphics.backend.displayName) component. Choose Standard to restore its original graphics files, then enable the backend again.")
             }
             guard current.graphics.showHUD != showHUD else { return current }

@@ -10,6 +10,7 @@ struct GraphicsSettingsView: View {
     }
 
     @State private var pendingSelection: Selection?
+    @State private var pendingUpdate: Bottle?
 
     private var currentBottle: Bottle {
         model.bottles.first { $0.id == bottle.id } ?? bottle
@@ -90,15 +91,26 @@ struct GraphicsSettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if currentBottle.graphics.backend != .standard {
-                if !currentBottle.graphics.usesCurrentComponent {
+                if !currentBottle.graphics.usesSupportedComponent {
                     Text("This bottle uses an unsupported component. Choose Standard to restore its original graphics files before enabling a current component.")
                         .font(.callout)
                         .foregroundStyle(WineTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if currentBottle.graphics.hasComponentUpdate {
+                    let backend = currentBottle.graphics.backend.displayName
+                    Text("This bottle uses an older \(backend) component (\(currentBottle.graphics.componentID ?? "unspecified")). It still launches. Updating installs the \(backend) version bundled with this MagicWine and switches this bottle’s graphics files in one step; its original Windows files stay backed up for Standard. The old component is kept until Storage cleanup removes it.")
+                        .font(.callout)
+                        .foregroundStyle(WineTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Update \(backend) component") {
+                        guard !unavailable else { return }
+                        pendingUpdate = currentBottle
+                    }
+                    .disabled(unavailable)
                 }
                 // HUD is launch-time only, so it stays available while programs run.
                 let hudUnavailable = model.isLoading || state.blocksLibraryEdit || state.isChangingHUD ||
-                    !currentBottle.isInitialized || !currentBottle.graphics.usesCurrentComponent
+                    !currentBottle.isInitialized || !currentBottle.graphics.usesSupportedComponent
                 HStack(spacing: 6) {
                     Text("Show Graphics HUD")
                     SettingsInfoButton(title: "Show Graphics HUD",
@@ -219,7 +231,20 @@ struct GraphicsSettingsView: View {
             .disabled(unavailable)
             Button("Cancel", role: .cancel) { }
         } message: { selection in
-            Text(backendNotice(selection.backend) + "\n\nChanging graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files. In-place component updates are not supported.")
+            Text(backendNotice(selection.backend) + "\n\nChanging graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files.")
+        }
+        .alert("Update \(pendingUpdate?.graphics.backend.displayName ?? "") component?",
+               isPresented: Binding(
+                   get: { pendingUpdate != nil },
+                   set: { if !$0 { pendingUpdate = nil } }
+               ), presenting: pendingUpdate) { bottle in
+            Button("Update") {
+                model.updateGraphicsComponent(in: bottle)
+            }
+            .disabled(unavailable)
+            Button("Cancel", role: .cancel) { }
+        } message: { bottle in
+            Text(backendNotice(bottle.graphics.backend) + "\n\nUpdating stops this bottle’s Windows processes, then replaces its \(bottle.graphics.backend.displayName) files in one recoverable step. Choose Standard at any time to restore its original graphics files.")
         }
     }
 

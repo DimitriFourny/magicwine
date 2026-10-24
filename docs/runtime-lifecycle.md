@@ -82,7 +82,7 @@ Replace `BOTTLE` with an eligible idle bottle UUID in that library. Installation
 
 ## Reclaiming storage
 
-Because bottles keep their pinned Wine and components are never upgraded in place, old runtimes, components and private graphics views accumulate; nothing removes them automatically. [`StorageCleanup`](../Sources/MagicWineCore/StorageCleanup.swift) plans and applies an explicit cleanup of one library root.
+Because bottles keep their pinned Wine, and a component update (see [graphics](graphics.md#updating-a-component-in-place)) leaves the old component in place, old runtimes, components and private graphics views accumulate; nothing removes them automatically. [`StorageCleanup`](../Sources/MagicWineCore/StorageCleanup.swift) plans and applies an explicit cleanup of one library root.
 
 **Plan (read-only).** An entry is kept when anything references it:
 
@@ -217,7 +217,7 @@ Mutation semantics intentionally differ:
 | Synchronization change or runtime adoption | Reject tracked/pending work, acquire exclusive launch/lifetime leases without waiting, then probe `wineserver -w` for 0.5 seconds. A live detached server causes failure; it is not killed just to change this preference. |
 | Explicit Retina/display change | Requires initialization, holds exclusive launch intent, calls stop/wait, then obtains exclusive lifetime ownership before modifying registry and metadata. CLI can therefore stop a live bottle; GUI usually gates the action while its own launches are recorded. An already matching configuration needs no stop. |
 | Automatic display adoption before launch | Waits for idle ownership and server exit; never kills existing Wine solely to adopt display defaults. Failure asks the user to close programs or use Stop. |
-| Graphics configuration | Stops the bottle before changing graphics files under exclusive ownership; see [graphics](graphics.md) for transactions and component rules. |
+| Graphics configuration or component update | Stops the bottle before changing graphics files under exclusive ownership; see [graphics](graphics.md) for transactions and component rules. |
 | Graphics HUD only | Metadata-only `setGraphicsHUD`: allowed while programs run, never stops processes or touches prefix DLLs, applies to later launches. During its brief metadata write it excludes other setting changes of the same bottle, and a launch starting in that instant is refused with the usual "wait for setup" error. |
 | Program name or launch options | Metadata-only `BottleStore.updateProgram`: allowed while programs run, never stops processes or touches the prefix, applies to that program's next launch; refused when the saved record changed since the edit began. |
 | Compatibility switches | Metadata-only `BottleStore.setCompatibility`: allowed while programs run, never stops processes or touches the prefix, applies to later launches; refused when the saved switches changed since the caller read them. |

@@ -78,7 +78,7 @@ struct DXMTHistoricalInstallationTests {
         try Data(Self.receipt.utf8).write(to: receiptURL)
         try Data(Self.provenance.utf8).write(to: historical.appendingPathComponent("PROVENANCE.txt"))
         let configuration = GraphicsConfiguration(backend: .dxmt, componentID: "dxmt-v0.80", showHUD: true)
-        #expect(configuration.usesCurrentComponent)
+        #expect(configuration.usesSupportedComponent)
         let validated = try DXMTInstallation.validate(componentID: "dxmt-v0.80", paths: paths)
         _ = try DXMTInstallation.environment(component: validated, showHUD: configuration.showHUD)
         _ = try await DXMTInstallation.install(paths: paths)

@@ -27,11 +27,13 @@ public struct GraphicsConfiguration: Codable, Hashable, Sendable {
         self.showHUD = showHUD
     }
 
-    /// Whether this build understands the selected component; launch still verifies its files.
-    public var usesCurrentComponent: Bool {
-        guard let provider = backend.componentProvider else { return componentID == nil }
-        return componentID.map(provider.supports(componentID:)) ?? false
-    }
+    /// Whether this build can launch the selected component (current or a retained older
+    /// one); launch still verifies its files.
+    public var usesSupportedComponent: Bool { GraphicsComponentProviders.bundled.supports(self) }
+
+    /// The component is supported but older than the bundled current one, so
+    /// `WineRuntime.updateGraphicsComponent(in:acceptExperimental:)` can switch to it in place.
+    public var hasComponentUpdate: Bool { GraphicsComponentProviders.bundled.hasUpdate(self) }
 }
 
 public enum GraphicsSetupProgress: Sendable {

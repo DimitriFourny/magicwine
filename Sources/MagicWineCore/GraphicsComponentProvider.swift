@@ -30,6 +30,9 @@ internal protocol GraphicsComponentProvider: Sendable {
     var componentPrefix: String { get }
     /// The component a new selection installs; `nil` when components are user imports.
     var currentComponentID: String? { get }
+    /// Older bundled components this build still validates against their own pins.
+    /// Bottles pinned to them keep launching and can be updated in place to the current one.
+    var retainedComponentIDs: [String] { get }
     /// User-supplied components: discarding one means the user must import it again.
     var isImported: Bool { get }
     /// Whether this build can validate and launch `componentID`.
@@ -55,9 +58,12 @@ internal protocol GraphicsComponentProvider: Sendable {
 }
 
 extension GraphicsComponentProvider {
+    var retainedComponentIDs: [String] { [] }
     var isImported: Bool { false }
     var viewSubstitutions: [GraphicsViewSubstitution] { [] }
-    func supports(componentID: String) -> Bool { componentID == currentComponentID }
+    func supports(componentID: String) -> Bool {
+        componentID == currentComponentID || retainedComponentIDs.contains(componentID)
+    }
 
     func missingLaunchInput(_ input: String) -> MagicWineError {
         .setup("\(backend.displayName) launch requires \(input).")
@@ -79,6 +85,18 @@ internal struct GraphicsComponentProviders: Sendable {
     subscript(backend: GraphicsBackend) -> (any GraphicsComponentProvider)? {
         all.first { $0.backend == backend }
     }
+
+    /// Whether this build can launch the selection (Standard has no component).
+    func supports(_ configuration: GraphicsConfiguration) -> Bool {
+        guard let provider = self[configuration.backend] else { return configuration.componentID == nil }
+        return configuration.componentID.map(provider.supports(componentID:)) ?? false
+    }
+
+    /// A supported but non-current component of a backend that bundles its current one.
+    func hasUpdate(_ configuration: GraphicsConfiguration) -> Bool {
+        guard let current = self[configuration.backend]?.currentComponentID else { return false }
+        return supports(configuration) && configuration.componentID != current
+    }
 }
 
 extension GraphicsBackend {
@@ -98,6 +116,7 @@ internal struct DXVKComponentProvider: GraphicsComponentProvider {
     var backend: GraphicsBackend { .dxvk }
     var componentPrefix: String { "dxvk-" }
     var currentComponentID: String? { DXVKInstallation.componentID }
+    var retainedComponentIDs: [String] { DXVKInstallation.retainedComponentIDs }
     var prefixMappings: [GraphicsPrefixMapping] {
         zip(Self.sources, GraphicsPrefix.dllPaths).map { GraphicsPrefixMapping(source: $0.0, destination: $0.1) }
     }
@@ -129,7 +148,7 @@ internal struct DXMTComponentProvider: GraphicsComponentProvider {
     var backend: GraphicsBackend { .dxmt }
     var componentPrefix: String { "dxmt-" }
     var currentComponentID: String? { DXMTInstallation.componentID }
-    func supports(componentID: String) -> Bool { DXMTInstallation.supports(componentID: componentID) }
+    var retainedComponentIDs: [String] { DXMTInstallation.retainedComponentIDs }
     var prefixMappings: [GraphicsPrefixMapping] {
         [("x86_64-windows", "system32"), ("i386-windows", "syswow64")].flatMap { source, destination in
             // Only PE DLLs enter the prefix; native helpers remain in the runtime overlay.

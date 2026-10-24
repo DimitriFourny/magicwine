@@ -134,9 +134,11 @@ internal enum GraphicsPrefix {
 
     /// Caller holds the lock and has freshly validated owned, initialized metadata.
     /// The closure is the sole atomic metadata write and is executed after all file changes.
+    /// `componentUpdate` permits replacing the selected backend's component in place: the
+    /// same journaled transaction swaps its DLLs while keeping the pre-renderer originals.
     static func change(from previous: GraphicsConfiguration, to next: GraphicsConfiguration,
                        componentRoot: URL?, bottleDirectory: URL, previousMetadata: Data,
-                       nextMetadata: Data, commit: () throws -> Void) throws {
+                       nextMetadata: Data, componentUpdate: Bool = false, commit: () throws -> Void) throws {
         if previous.backend == next.backend && previous.componentID == next.componentID {
             // In particular, a HUD-only change never reinstalls or captures managed DLLs
             // as originals. Standard reads/changes need not create a graphics directory.
@@ -145,7 +147,7 @@ internal enum GraphicsPrefix {
         }
         let transaction = try prepare(from: previous, to: next, componentRoot: componentRoot,
                                       bottleDirectory: bottleDirectory, previousMetadata: previousMetadata,
-                                      nextMetadata: nextMetadata)
+                                      nextMetadata: nextMetadata, componentUpdate: componentUpdate)
         do {
             try apply(transaction: transaction, bottleDirectory: bottleDirectory)
             try commit()
@@ -165,9 +167,10 @@ internal enum GraphicsPrefix {
     /// These internal operations always require the same bottle lock as change/recover.
     static func prepare(from previous: GraphicsConfiguration, to next: GraphicsConfiguration,
                         componentRoot: URL?, bottleDirectory: URL, previousMetadata: Data,
-                        nextMetadata: Data) throws -> URL {
-        guard previous.backend == .standard || previous.backend != next.backend else {
-            throw MagicWineError.setup("In-place graphics component updates are not supported. Choose Standard first to restore this bottle's original graphics files.")
+                        nextMetadata: Data, componentUpdate: Bool = false) throws -> URL {
+        guard previous.backend == .standard || previous.backend != next.backend ||
+                (componentUpdate && previous.componentID != next.componentID) else {
+            throw MagicWineError.setup("Changing this bottle's graphics component requires an explicit component update. Choose Standard first to restore this bottle's original graphics files.")
         }
         let prefix = bottleDirectory.appendingPathComponent("prefix", isDirectory: true)
         let graphics = bottleDirectory.appendingPathComponent("graphics", isDirectory: true)
@@ -322,7 +325,9 @@ internal enum GraphicsPrefix {
         }
         let previous = try JSONDecoder().decode(Bottle.self, from: journal.previousMetadata).graphics
         let next = try JSONDecoder().decode(Bottle.self, from: journal.nextMetadata).graphics
-        guard previous.backend != next.backend,
+        // A same-backend journal is an in-place component update of a non-Standard backend.
+        guard previous.backend != next.backend ||
+                (previous.backend != .standard && previous.componentID != next.componentID),
               journal.hadActive == (previous.backend != .standard),
               journal.hasActive == (next.backend != .standard) else {
             throw MagicWineError.setup("The bottle graphics recovery journal has inconsistent selections.")

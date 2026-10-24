@@ -56,7 +56,9 @@ Components live under the application root's `Components/` directory, separately
 
 Installation uses bundled archives, not a fallback network download. The installers verify archive hashes, allowed archive entries, payload architectures, exact expected receipts, and component files before publishing a private staging directory. A competing installation is validated rather than overwritten. Invalid cached content fails explicitly.
 
-DXMT retains the original upstream archive alongside the altered runtime, corresponding source, provenance, and license. It is not a redundant file to remove during cleanup. The historical `dxmt-v0.80` component has an explicit validation path; it is not silently replaced with the current `dxmt-v0.80-remote.1`.
+DXMT retains the original upstream archive alongside the altered runtime, corresponding source, provenance, and license. It is not a redundant file to remove during cleanup.
+
+**Retained older components.** Besides its current component, a provider can list older component IDs whose installer still holds their own receipt and pins: DXMT retains the historical `dxmt-v0.80`, DXVK currently retains none. A bottle pinned to a retained component keeps launching with exactly those bytes (validated against that component's pins, never relabelled as the current one) and can be updated in place; see [Updating a component in place](#updating-a-component-in-place). Any other old or unknown component ID (for example an earlier `dxvk-macos-1.10.3-magicwine.1`) is unsupported: it neither launches nor updates, and choosing Standard restores the bottle's original files. When a pin is bumped, moving the outgoing receipt into the retained list (as a literal) keeps existing bottles launchable, provided the backend's prefix footprint did not change.
 
 Integrity checks use independently compiled expectations. A receipt cannot make its own altered payload trustworthy. File-stamp caches avoid repeated hashing of unchanged validated components. Quarantine is preserved for graphics payload copies, unlike the separately consented managed-Wine quarantine removal.
 
@@ -124,11 +126,22 @@ Lease files are under `Bottles/.graphics-locks/`; locks are cross-process, cance
 
 If a user or installer replaces a managed DLL, switching/restoring preserves displaced content under `graphics/recovered/<UUID>/` instead of discarding it. Missing or inconsistent backups are errors. Do not delete journals or manifests as a repair strategy.
 
-Selecting Standard restores the original footprint without needing the old graphics component to remain installed. A HUD-only change never recaptures or reinstalls prefix DLLs and does not stop processes (see below). In-place component updates are not supported: restore Standard first. Older unsupported DXVK selections may require a fresh bottle; historical DXMT validation is a separate explicit case.
+Selecting Standard restores the original footprint without needing the old graphics component to remain installed. A HUD-only change never recaptures or reinstalls prefix DLLs and does not stop processes (see below). A different component of the same backend is only accepted through the explicit update below; unsupported components require restoring Standard first.
 
 **Validation boundary:** launch-time prefix validation checks the active manifest, paths, regular-file layout, and expected DLL sizes; it does not hash every prefix DLL on every launch. Component validation and transaction preservation use stronger hash checks. Do not treat the prefix check as tamper-proofing.
 
-Sources: [GraphicsOperationLease.swift](../Sources/MagicWineCore/GraphicsOperationLease.swift), [GraphicsPrefix.swift](../Sources/MagicWineCore/GraphicsPrefix.swift), [BottleStore.swift](../Sources/MagicWineCore/BottleStore.swift).
+### Updating a component in place
+
+When a bottle uses a retained older component (`GraphicsConfiguration.hasComponentUpdate`), the dashboard shows **Update <backend> component** with an explanation, and the CLI offers `graphics <bottle-UUID> <current-backend> --update --accept-experimental` (`graphics <bottle-UUID>` prints a note on stderr when an update is available). `WineRuntime.updateGraphicsComponent(in:acceptExperimental:)` follows the same consent, lease, and stop rules as a backend switch:
+
+1. Acquire the exclusive launch lease, re-read the bottle, and refuse an unsupported component (restore Standard instead), an imported D3DMetal component (no newer version exists; import again after Standard), or a stale backend. A bottle already on the current component is returned unchanged.
+2. Validate the Wine runtime, stop the bottle's Windows processes, and acquire the exclusive lifetime lease.
+3. Install or verify the current component and, for Metal backends, prepare its private runtime view.
+4. In one `GraphicsPrefix` transaction, replace the backend's DLLs with the new component's while carrying the pre-renderer originals over unchanged, preserve user-replaced DLLs under `graphics/recovered/`, and commit the new component ID in `bottle.json`. The journal records both component IDs, so an interrupted update recovers to the old or the new selection exactly like a backend switch.
+
+The HUD preference is kept. The old component stays in `Components/` until [storage cleanup](runtime-lifecycle.md#reclaiming-storage) finds no bottle using it (along with its now-unused runtime view).
+
+Sources: [GraphicsOperationLease.swift](../Sources/MagicWineCore/GraphicsOperationLease.swift), [GraphicsPrefix.swift](../Sources/MagicWineCore/GraphicsPrefix.swift), [BottleStore.swift](../Sources/MagicWineCore/BottleStore.swift), `updateGraphicsComponent` in [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift).
 
 ## Why Metal needs a private runtime view
 
@@ -159,7 +172,7 @@ Launch uses the private executable and `WINELOADER`, but `WINESERVER` remains th
 | DXMT | Builtin `d3d10core,d3d11,dxgi,winemetal` from the selected component/view |
 | D3DMetal | Builtin `d3d11,d3d12,dxgi` with the local shared library/framework |
 
-DXVK uses `DXVK_HUD`; Metal backends use `MTL_HUD_ENABLED`. HUD is not the renderer-selection mechanism. Because the HUD is only launch environment, `WineRuntime.setGraphicsHUD(_:in:)` changes just `graphics.showHUD` in `bottle.json` (via `BottleStore`, under the bottle lock): it never stops Windows processes, touches prefix DLLs, or re-verifies the component, and it is allowed while programs run. The change applies to programs launched afterwards; running programs keep their current overlay. It refuses Standard, an unsupported (non-current) component, and a caller whose view of the backend/component is stale, and it cannot overlap another graphics/display/synchronization change of the same bottle. The dashboard's **Show Graphics HUD** toggle uses this path and stays enabled while programs run. **Retina / HiDPI** is a separate bottle-wide Wine setting: enabled uses Retina mode and 192 DPI; disabled uses non-Retina mode and 96 DPI. It can change the resolution a game chooses and therefore GPU load. **MSync** is also independent of the renderer; see [Compatibility patches](compatibility.md).
+DXVK uses `DXVK_HUD`; Metal backends use `MTL_HUD_ENABLED`. HUD is not the renderer-selection mechanism. Because the HUD is only launch environment, `WineRuntime.setGraphicsHUD(_:in:)` changes just `graphics.showHUD` in `bottle.json` (via `BottleStore`, under the bottle lock): it never stops Windows processes, touches prefix DLLs, or re-verifies the component, and it is allowed while programs run. The change applies to programs launched afterwards; running programs keep their current overlay. It refuses Standard, an unsupported component (a retained older one is allowed), and a caller whose view of the backend/component is stale, and it cannot overlap another graphics/display/synchronization change of the same bottle. The dashboard's **Show Graphics HUD** toggle uses this path and stays enabled while programs run. **Retina / HiDPI** is a separate bottle-wide Wine setting: enabled uses Retina mode and 192 DPI; disabled uses non-Retina mode and 96 DPI. It can change the resolution a game chooses and therefore GPU load. **MSync** is also independent of the renderer; see [Compatibility patches](compatibility.md).
 
 What DXVK's overlay shows is the bottle's **DXVK HUD** compatibility switch (Runtime card → **Advanced compatibility**, or `compat <bottle-UUID> --dxvk-hud fps|detailed`): Detailed (default, `DXVK_HUD=version,api,devinfo,fps,frametimes`) or Frame rate only (`DXVK_HUD=fps`). It is applied in the bottle-settings launch layer only while DXVK and Show Graphics HUD are both on, is metadata only like the HUD toggle, and a program's own `DXVK_HUD` variable wins over it. Metal backends keep their on/off `MTL_HUD_ENABLED`.
 
@@ -183,9 +196,10 @@ BOTTLE="<bottle-UUID>"
 "$CLI" --root "$ROOT" graphics "$BOTTLE" dxvk --accept-experimental --hud
 "$CLI" --root "$ROOT" graphics "$BOTTLE" dxmt --accept-experimental --no-hud
 "$CLI" --root "$ROOT" graphics "$BOTTLE" d3dmetal --accept-experimental --import "/absolute/path/to/library-folder"
+"$CLI" --root "$ROOT" graphics "$BOTTLE" dxmt --update --accept-experimental
 "$CLI" --root "$ROOT" graphics "$BOTTLE" standard
 ```
 
-Run only the relevant selection command, not the whole sequence as a test. Selecting or re-verifying a nonstandard backend requires `--accept-experimental`. Repeating the bottle's **current** backend with `--hud` or `--no-hud` (and no `--import`) only saves the HUD preference for later launches: it needs no `--accept-experimental` and does not stop running programs. Omitting HUD flags preserves the prior HUD setting; Standard clears it and accepts no flags. A different D3DMetal import requires switching to Standard first. `--hud` and `--no-hud` are mutually exclusive; `--import` is D3DMetal-only.
+Run only the relevant selection command, not the whole sequence as a test. Selecting or re-verifying a nonstandard backend requires `--accept-experimental`. Repeating the bottle's **current** backend with `--hud` or `--no-hud` (and no `--import`) only saves the HUD preference for later launches: it needs no `--accept-experimental` and does not stop running programs. Omitting HUD flags preserves the prior HUD setting; Standard clears it and accepts no flags. `--update` (with `--accept-experimental`, on the bottle's current backend, without HUD or import flags) switches a retained older component to the bundled one in place; it stops the bottle's Windows processes and prints the new selection. A different D3DMetal import requires switching to Standard first. `--hud` and `--no-hud` are mutually exclusive; `--import` is D3DMetal-only.
 
 For backend smoke probes, visual evidence, and missing-component recovery guidance, see [Debugging](debugging.md) and [Development](development.md).

@@ -360,8 +360,8 @@ public actor WineRuntime {
         guard current.isInitialized else {
             throw MagicWineError.setup("Initialize this bottle before changing its graphics backend.")
         }
-        guard backend == .standard || current.graphics.backend != backend || current.graphics.usesCurrentComponent else {
-            throw MagicWineError.setup("In-place \(backend.displayName) component updates are not supported. Choose Standard to restore this bottle's original graphics files, then enable the backend again.")
+        guard backend == .standard || current.graphics.backend != backend || graphicsProviders.supports(current.graphics) else {
+            throw MagicWineError.setup("This bottle uses an unsupported \(backend.displayName) component (\(current.graphics.componentID ?? "none")) that cannot be updated in place. Choose Standard to restore this bottle's original graphics files, then enable the backend again.")
         }
         let retainingComponent = backend != .standard && current.graphics.backend == backend
         var source = componentSource
@@ -405,6 +405,68 @@ public actor WineRuntime {
         if backend == .standard { progress?(.restoring) }
         else if !retainingComponent { progress?(.installing) }
         return try await store.setGraphics(configuration, in: current, componentRoot: componentRoot)
+    }
+
+    /// Moves a bottle from a retained older component of its backend to the current bundled
+    /// one in place: installs or verifies the current component, then swaps the prefix DLLs
+    /// and saves the metadata in one journaled `GraphicsPrefix` transaction that keeps the
+    /// pre-renderer originals. Like `configureGraphics` it needs consent and stops the
+    /// bottle's processes under the exclusive launch and lifetime leases. The old component
+    /// stays in `Components/` for storage cleanup. A bottle already on the current component
+    /// is returned unchanged; unsupported components still require restoring Standard.
+    public func updateGraphicsComponent(in bottle: Bottle, acceptExperimental: Bool = false,
+                                        progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> Bottle {
+        let backend = bottle.graphics.backend
+        guard let provider = graphicsProviders[backend] else {
+            throw MagicWineError.setup("Standard graphics has no component to update.")
+        }
+        guard let target = provider.currentComponentID else {
+            throw MagicWineError.setup("\(backend.displayName) components are your imported libraries; MagicWine has no newer version to install. Choose Standard, then import the libraries again to change them.")
+        }
+        guard acceptExperimental else {
+            throw MagicWineError.setup("\(backend.displayName) is experimental third-party code. Confirm installing \(target) before updating this bottle's component.")
+        }
+        guard !settingsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Graphics or display setup is already in progress for this bottle.")
+        }
+        guard !installingGraphics.contains(backend) else {
+            throw MagicWineError.setup("Another \(backend.displayName) installation is in progress. Wait for it to finish before configuring another bottle.")
+        }
+        settingsChanging.insert(bottle.id)
+        installingGraphics.insert(backend)
+        defer {
+            settingsChanging.remove(bottle.id)
+            installingGraphics.remove(backend)
+        }
+        try paths.prepare()
+        let launch = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                              kind: .launch, exclusive: true)
+        defer { launch.release() }
+        let current = try await store.current(bottle)
+        guard current.isInitialized, current.graphics.backend == backend else {
+            throw MagicWineError.setup("This bottle's graphics backend changed. Reload it before updating its component.")
+        }
+        guard current.graphics.componentID != target else { return current }
+        guard graphicsProviders.supports(current.graphics) else {
+            throw MagicWineError.setup("This bottle uses an unsupported \(backend.displayName) component (\(current.graphics.componentID ?? "none")) that cannot be updated in place. Choose Standard to restore this bottle's original graphics files, then enable \(backend.displayName) again.")
+        }
+        try provider.validateRuntime(current.runtime.executableURL)
+        progress?(.stopping)
+        _ = try await stopProcesses(current)
+        let lifetime = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
+                                                                kind: .lifetime, exclusive: true, timeout: .seconds(15))
+        defer { lifetime.release() }
+        try Task.checkCancellation()
+        let componentRoot = try await provider.install(paths: paths, source: nil, progress: progress)
+        if !provider.viewSubstitutions.isEmpty {
+            _ = try GraphicsRuntimeView.prepare(executable: current.runtime.executableURL,
+                                                 component: componentRoot, backend: backend, paths: paths)
+        }
+        var configuration = current.graphics
+        configuration.componentID = componentRoot.lastPathComponent
+        try Task.checkCancellation()
+        progress?(.installing)
+        return try await store.setGraphics(configuration, in: current, componentRoot: componentRoot, componentUpdate: true)
     }
 
     /// Changes only the persisted HUD preference of the current non-Standard backend.
@@ -643,8 +705,14 @@ public actor WineRuntime {
         #endif
     }
 
-    /// Backend wiring for this runtime.
-    private let graphicsProviders = GraphicsComponentProviders.bundled
+    /// Backend wiring for this runtime. Prefix footprints stay the bundled providers'
+    /// (`GraphicsPrefix`), so a substitute must keep its backend's mappings.
+    private var graphicsProviders = GraphicsComponentProviders.bundled
+
+    /// Tests substitute fixture components with their own pins.
+    internal func useGraphicsProviders(_ providers: GraphicsComponentProviders) {
+        graphicsProviders = providers
+    }
 
     private func validateGraphicsRuntime(_ backend: GraphicsBackend, executable: URL) throws {
         try graphicsProviders[backend]?.validateRuntime(executable)

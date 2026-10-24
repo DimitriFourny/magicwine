@@ -62,9 +62,11 @@ enum DXMTInstallation {
                 archiveSHA256: archiveSHA256, files: expectedFiles)
     }
 
-    // The already-published stock component is immutable, not an alias for the
-    // remote build. Existing bottle pins remain launchable with their own bytes.
-    private static let historicalReceipt = Receipt(
+    // Retained older components: each is immutable and validated against its own
+    // receipt, never an alias for the current build. Bottles pinned to them keep
+    // launching and can be updated in place. Move `expectedReceipt` here (as a literal)
+    // when the current pin changes.
+    private static let retainedReceipts = [Receipt(
         schema: 1, componentID: "dxmt-v0.80",
         source: "https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz",
         archiveSHA256: "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d",
@@ -83,18 +85,16 @@ enum DXMTInstallation {
             "dxmt-v0.80-builtin.tar.gz": "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d",
             "LICENSE-DXMT.txt": "0acf1ce81dc7bbc0165f2f95ea359f37dc6bbe6546ef9f5feefa33496a942624",
             "PROVENANCE.txt": "a46d4a8d8ada378fb5c7242d5dcacc96648f17800fb8187812630328a7c0e4e5",
-        ])
+        ])]
 
-    static func supports(componentID requested: String) -> Bool {
-        requested == componentID || requested == historicalReceipt.componentID
-    }
+    static var retainedComponentIDs: [String] { retainedReceipts.map(\.componentID) }
 
     private static func pinnedReceipt(for requested: String) throws -> Receipt {
-        switch requested {
-        case componentID: return expectedReceipt
-        case historicalReceipt.componentID: return historicalReceipt
-        default: throw MagicWineError.setup("Unsupported DXMT component \(requested). Restore Standard before selecting the current DXMT component.")
+        if requested == componentID { return expectedReceipt }
+        guard let receipt = retainedReceipts.first(where: { $0.componentID == requested }) else {
+            throw MagicWineError.setup("Unsupported DXMT component \(requested). Restore Standard before selecting the current DXMT component.")
         }
+        return receipt
     }
     private static let fs = SecureFS(prefix: "DXMT: ")
     private static let cache = SecureFS.ValidationCache()

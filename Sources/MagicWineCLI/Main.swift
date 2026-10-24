@@ -117,6 +117,9 @@ struct MagicWineCLI {
             case "graphics":
                 if rest.isEmpty {
                     print("\(bottle.graphics.backend.rawValue)\t\(bottle.graphics.componentID ?? "Wine default")\tHUD \(bottle.graphics.showHUD ? "on" : "off")")
+                    if bottle.graphics.hasComponentUpdate {
+                        FileHandle.standardError.write(Data("note: this older component still launches; graphics \(bottle.id) \(bottle.graphics.backend.rawValue) --update --accept-experimental switches to the bundled one\n".utf8))
+                    }
                     return
                 }
                 guard let backend = GraphicsBackend(rawValue: rest[0]) else {
@@ -134,7 +137,7 @@ struct MagicWineCLI {
                         componentSource = URL(fileURLWithPath: rest[index + 1], isDirectory: true)
                         index += 2
                     } else {
-                        guard ["--accept-experimental", "--hud", "--no-hud"].contains(flag) else {
+                        guard ["--accept-experimental", "--hud", "--no-hud", "--update"].contains(flag) else {
                             throw argumentError(graphicsUsage)
                         }
                         index += 1
@@ -144,8 +147,14 @@ struct MagicWineCLI {
                       backend != .standard || flags.isEmpty else { throw argumentError(graphicsUsage) }
                 let showHUD = flags.contains("--hud") || (!flags.contains("--no-hud") && bottle.graphics.showHUD)
                 let updated: Bottle
-                if backend == bottle.graphics.backend, backend != .standard, componentSource == nil,
-                   flags.contains("--hud") || flags.contains("--no-hud") {
+                if flags.contains("--update") {
+                    // In-place component update of the current backend; HUD and imports are separate.
+                    guard backend == bottle.graphics.backend, componentSource == nil,
+                          flags.isSubset(of: ["--update", "--accept-experimental"]) else { throw argumentError(graphicsUsage) }
+                    updated = try await runtime.updateGraphicsComponent(in: bottle,
+                                                                        acceptExperimental: flags.contains("--accept-experimental"))
+                } else if backend == bottle.graphics.backend, backend != .standard, componentSource == nil,
+                          flags.contains("--hud") || flags.contains("--no-hud") {
                     // HUD only: metadata for later launches; running programs are not stopped.
                     updated = try await runtime.setGraphicsHUD(showHUD, in: bottle)
                 } else {
@@ -314,7 +323,7 @@ struct MagicWineCLI {
 
     private static func byteCount(_ size: Int64) -> String { ByteCountFormatter.string(fromByteCount: size, countStyle: .file) }
 
-    private static let graphicsUsage = "graphics <bottle-UUID> standard|dxvk|dxmt|d3dmetal [--accept-experimental] [--hud|--no-hud] [--import <D3DMetal-library-folder>]"
+    private static let graphicsUsage = "graphics <bottle-UUID> standard|dxvk|dxmt|d3dmetal [--accept-experimental] [--hud|--no-hud] [--import <D3DMetal-library-folder>] | graphics <bottle-UUID> <current-backend> --update --accept-experimental"
 
     private static let programUsage = "program <bottle-UUID> <program-UUID> [--name <name>] [--args \"<arguments>\"] [--workdir <folder>|--clear-workdir] [--env KEY=VALUE]… [--unset-env KEY]… [--dll <name>=n|b|n,b|b,n|disabled]… [--unset-dll <name>]… [--avx inherit|on|off]"
 
@@ -355,6 +364,8 @@ struct MagicWineCLI {
         The current backend with --hud/--no-hud only saves the HUD for later launches:
         no --accept-experimental needed, running programs are not stopped
         D3DMetal finds local Wine/CrossOver libraries; --import <library-folder> overrides discovery
+        --update --accept-experimental on the current backend switches an older supported component
+        to the bundled one in place (stops this bottle’s Windows processes); prints the result
       retina <bottle-UUID> [on|off]              Read or change Retina / HiDPI (default on)
         On sets 200% scaling (192 DPI); off sets 100% (96 DPI)
         Bottle-wide changes affect games too and stop this bottle’s Windows processes
