@@ -163,7 +163,9 @@ These are independent scenarios, not a sequence to run indiscriminately. In part
 - Temporary failure logs are generally removed during cleanup. MSync and remote-presentation runners dump diagnostic output on failure; capture the console output if needed. For longer investigations, build a dedicated research library rather than modifying a runner to use a production bottle.
 - Controller API tests do not certify physical rumble or Bluetooth behavior. Mouse tests synthesize real input and can interact with the graphical session.
 
-Script sources: [gamepads](../scripts/test-gamepads.sh), [mouse pointer](../scripts/test-mouse-pointer.sh), [WinHTTP](../scripts/test-wine-proxy.sh), [remote presentation](../scripts/test-remote-presentation.sh), [MSync](../scripts/test-msync.sh).
+All runners source [runner-common.sh](../scripts/runner-common.sh): each Wine or CLI step runs under a timeout (default 300 seconds; override with `MAGICWINE_TEST_TIMEOUT=<seconds>`, implemented with `perl` because macOS has no `timeout`), so a hung step fails with exit status 142 and a message instead of blocking, and cleanup runs `wineserver -k` followed by `wineserver -w` before deleting the disposable prefix. Test programs are compiled with `-Wall -Wextra -Werror`. `test-msync.sh` is Python and has its own timeouts.
+
+Script sources: [shared helpers](../scripts/runner-common.sh), [gamepads](../scripts/test-gamepads.sh), [mouse pointer](../scripts/test-mouse-pointer.sh), [WinHTTP](../scripts/test-wine-proxy.sh), [remote presentation](../scripts/test-remote-presentation.sh), [MSync](../scripts/test-msync.sh).
 
 ## Component rebuilds
 

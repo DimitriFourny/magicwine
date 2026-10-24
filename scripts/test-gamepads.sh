@@ -13,21 +13,23 @@ if [[ ! -x "$WINE" || ! -x "$SERVER" ]]; then
     exit 2
 fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=runner-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/runner-common.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/magicwine-gamepad.XXXXXX")"
 unset WINEARCH WINEDLLPATH WINEDLLOVERRIDES WINELOADER WINESERVER
 export WINEPREFIX="$WORK/prefix" WINEDEBUG=-all
 cleanup() {
-    "$SERVER" -k || true
+    wineserver_stop "$SERVER"
     rm -rf "$WORK"
 }
 trap cleanup EXIT
 x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/Tests/WineGamepadTests.c" -o "$WORK/gamepad64.exe"
 i686-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/Tests/WineGamepadTests.c" -o "$WORK/gamepad32.exe"
-"$WINE" wineboot -u
+run_with_timeout "$STEP_TIMEOUT" "$WINE" wineboot -u
 for name in xinput1_1 xinput1_2 xinput1_3 xinput1_4 xinput9_1_0; do
     cp "$ROOT/Sources/MagicWineCore/Resources/magicwine-xinput-v1-x86_64.dll" "$WINEPREFIX/drive_c/windows/system32/$name.dll"
     cp "$ROOT/Sources/MagicWineCore/Resources/magicwine-xinput-v1-i686.dll" "$WINEPREFIX/drive_c/windows/syswow64/$name.dll"
 done
 export WINEDLLOVERRIDES='xinput1_1,xinput1_2,xinput1_3,xinput1_4,xinput9_1_0=n'
-"$WINE" "$WORK/gamepad64.exe"
-"$WINE" "$WORK/gamepad32.exe"
+run_with_timeout "$STEP_TIMEOUT" "$WINE" "$WORK/gamepad64.exe"
+run_with_timeout "$STEP_TIMEOUT" "$WINE" "$WORK/gamepad32.exe"

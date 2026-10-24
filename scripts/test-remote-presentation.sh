@@ -17,6 +17,8 @@ if [[ ! -x "$CLI" || ! -x "$WINE" || "$CLI" != /* || "$WINE" != /* ||
     exit 2
 fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=runner-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/runner-common.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/magicwine-remote-presentation.XXXXXX")"
 BOTTLE=""
 cleanup() {
@@ -28,7 +30,7 @@ cleanup() {
             cat "$log"
         done
     fi
-    if [[ -n "$BOTTLE" ]]; then "$CLI" --root "$WORK/library" stop "$BOTTLE" || true; fi
+    if [[ -n "$BOTTLE" ]]; then run_with_timeout 60 "$CLI" --root "$WORK/library" stop "$BOTTLE" || true; fi
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -41,7 +43,7 @@ if [[ "$BACKEND" == dxmt ]]; then
         -o "$WORK/remote32.exe" -ld3d11 -ldxgi -ldxguid
     BITS+=(32)
 fi
-CREATED="$("$CLI" --root "$WORK/library" create "Remote presentation regression" "$WINE")"
+CREATED="$(run_with_timeout "$STEP_TIMEOUT" "$CLI" --root "$WORK/library" create "Remote presentation regression" "$WINE")"
 printf '%s\n' "$CREATED"
 if [[ "$CREATED" =~ Bottle:\ ([0-9A-Fa-f-]+) ]]; then
     BOTTLE="${BASH_REMATCH[1]}"
@@ -52,13 +54,13 @@ fi
 # HUD initialization exercises the remote layer's AppKit ownership as well as
 # presentation. It must work without a producer-local NSWindow (Steam CEF).
 for hud in --no-hud --hud; do
-    "$CLI" --root "$WORK/library" graphics "$BOTTLE" "$BACKEND" --accept-experimental "$hud"
+    run_with_timeout "$STEP_TIMEOUT" "$CLI" --root "$WORK/library" graphics "$BOTTLE" "$BACKEND" --accept-experimental "$hud"
     for bits in "${BITS[@]}"; do
         if [[ $# -eq 4 ]]; then
-            "$CLI" --root "$WORK/library" exec "$BOTTLE" "$WORK/remote$bits.exe" --visual
+            run_with_timeout "$STEP_TIMEOUT" "$CLI" --root "$WORK/library" exec "$BOTTLE" "$WORK/remote$bits.exe" --visual
         else
-            "$CLI" --root "$WORK/library" exec "$BOTTLE" "$WORK/remote$bits.exe"
+            run_with_timeout "$STEP_TIMEOUT" "$CLI" --root "$WORK/library" exec "$BOTTLE" "$WORK/remote$bits.exe"
         fi
     done
-    "$CLI" --root "$WORK/library" stop "$BOTTLE"
+    run_with_timeout "$STEP_TIMEOUT" "$CLI" --root "$WORK/library" stop "$BOTTLE"
 done

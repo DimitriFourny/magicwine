@@ -21,6 +21,7 @@ struct MagicWineCLI {
             root = URL(fileURLWithPath: arguments[1], isDirectory: true)
             arguments.removeFirst(2)
         }
+        if arguments.first == "--version" || arguments.first == "version" { print(versionDescription); return }
         let paths = ApplicationPaths(root: root)
         let store = BottleStore(paths: paths)
         let runtime = WineRuntime(paths: paths)
@@ -326,10 +327,20 @@ struct MagicWineCLI {
 
     private static let compatUsage = "compat <bottle-UUID> [--avx on|off] [--winedebug quiet|default] [--dxvk-hud fps|detailed]"
 
+    /// The enclosing app's Info.plist when packaged (`Contents/MacOS/magicwine-cli`); plain `swift build` binaries have none.
+    private static var versionDescription: String {
+        let info = Bundle.main.infoDictionary
+        guard let version = info?["CFBundleShortVersionString"] as? String else { return "magicwine development build" }
+        let build = (info?["CFBundleVersion"] as? String).map { " (\($0))" } ?? ""
+        let revision = (info?["MagicWineGitRevision"] as? String).map { " \($0)" } ?? ""
+        return "magicwine \(version)\(build)\(revision)"
+    }
+
     private static let usage = """
     MagicWine — isolated Windows apps on macOS
 
     magicwine [--root <data-directory>] <command>
+      --version | version                       Print the MagicWine version
       runtimes                                 Find installed Wine
       install-wine --accept-unsigned
         Install/reuse Wine from Gcenx with the source-built DXMT/D3DMetal driver bridge

@@ -10,6 +10,8 @@ usage() {
     exit 2
 }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=runner-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/runner-common.sh"
 
 if [ "${1:-}" = --native ]; then
     [ "$#" -eq 3 ] || usage
@@ -42,20 +44,19 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/magicwine-proxy.XXXXXX")"
 unset WINEARCH WINEDLLPATH WINEDLLOVERRIDES WINELOADER WINESERVER
 export WINEPREFIX="$WORK/prefix" WINEDEBUG=-all
 cleanup() {
-    "$(dirname "$WINE")/wineserver" -k || true
-    "$(dirname "$WINE")/wineserver" -w || true
+    wineserver_stop "$(dirname "$WINE")/wineserver"
     rm -rf "$WORK"
 }
 trap cleanup EXIT
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra "$ROOT/Tests/WineProxyTests.c" \
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror "$ROOT/Tests/WineProxyTests.c" \
     -o "$WORK/proxy64.exe" -lwinhttp -lws2_32
-i686-w64-mingw32-gcc -O2 -Wall -Wextra "$ROOT/Tests/WineProxyTests.c" \
+i686-w64-mingw32-gcc -O2 -Wall -Wextra -Werror "$ROOT/Tests/WineProxyTests.c" \
     -o "$WORK/proxy32.exe" -lwinhttp -lws2_32
-"$WINE" wineboot -u
+run_with_timeout "$STEP_TIMEOUT" "$WINE" wineboot -u
 for bits in 64 32; do
     if [ "$#" -eq 2 ]; then
-        "$WINE" "$WORK/proxy$bits.exe" --expect-disabled
+        run_with_timeout "$STEP_TIMEOUT" "$WINE" "$WORK/proxy$bits.exe" --expect-disabled
     else
-        "$WINE" "$WORK/proxy$bits.exe"
+        run_with_timeout "$STEP_TIMEOUT" "$WINE" "$WORK/proxy$bits.exe"
     fi
 done
