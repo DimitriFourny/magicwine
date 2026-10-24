@@ -30,7 +30,9 @@ flowchart TD
 
 This is an implementation map, not a game-support matrix. Unsupported Direct3D features, anti-cheat, DRM, media, input, and launcher failures remain independent concerns. Standard does not promise a particular feature level. The DXVK fork leaves unsupported pipeline-statistics results unavailable rather than returning fabricated counters; a game waiting for those results can stall. Its D3D9 geometry support still depends on the Vulkan driver's capabilities.
 
-Sources: [GraphicsModels.swift](../Sources/MagicWineCore/GraphicsModels.swift), [GraphicsPrefix.swift](../Sources/MagicWineCore/GraphicsPrefix.swift), [GraphicsSettingsView.swift](../Sources/MagicWine/GraphicsSettingsView.swift).
+Sources: [GraphicsModels.swift](../Sources/MagicWineCore/GraphicsModels.swift), [GraphicsComponentProvider.swift](../Sources/MagicWineCore/GraphicsComponentProvider.swift), [GraphicsPrefix.swift](../Sources/MagicWineCore/GraphicsPrefix.swift), [GraphicsSettingsView.swift](../Sources/MagicWine/GraphicsSettingsView.swift).
+
+Each non-Standard backend is described by one `GraphicsComponentProvider` (DXVK, DXMT, D3DMetal): its current and supported component IDs, install and validation entry points, host/Wine runtime check, prefix DLL mappings, private-runtime-view substitutions, cache folder, and launch facts for the planner's graphics layer. Setup, launch, prefix transactions, runtime views, and storage cleanup look the provider up from the bottle's backend; see [architecture](architecture.md#adding-a-graphics-backend).
 
 ## Host and Wine requirements
 
@@ -44,7 +46,7 @@ Rosetta is required for an Intel Wine loader on Apple Silicon. MagicWine does no
 
 Runtime validation and private-view construction have distinct checks. A wrapper, relocated loader, ambiguous `lib/wine` plus `lib64/wine` layout, or escaping symlink can fail private-view preparation even if an earlier ABI inspection succeeded. Prefer the native executable in the runtime's `bin` directory.
 
-Sources: `validateGraphicsRuntime` in [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift), `validateRuntime` in [DXMTInstallation.swift](../Sources/MagicWineCore/DXMTInstallation.swift) and [D3DMetalInstallation.swift](../Sources/MagicWineCore/D3DMetalInstallation.swift).
+Sources: each provider's `validateRuntime` in [GraphicsComponentProvider.swift](../Sources/MagicWineCore/GraphicsComponentProvider.swift), which calls `validateRuntime` in [DXVKInstallation.swift](../Sources/MagicWineCore/DXVKInstallation.swift), [DXMTInstallation.swift](../Sources/MagicWineCore/DXMTInstallation.swift) and [D3DMetalInstallation.swift](../Sources/MagicWineCore/D3DMetalInstallation.swift).
 
 ## Component installation and integrity
 
@@ -165,7 +167,7 @@ Inherited loader/graphics variables are deliberately sanitized by the launch pla
 
 DXVK cache files live in the bottle's `graphics/cache/`; DXMT shader cache files use `graphics/dxmt-cache/`. Logs use `Logs/<bottle-UUID>-dxvk/` or `Logs/<bottle-UUID>-dxmt/`. This code does not establish an equivalent D3DMetal-specific log/cache directory. Symlinked graphics cache/log directories are rejected.
 
-Source: `prepareGraphicsLaunch` in [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift) (validation, folders, runtime view) and the graphics layer in [LaunchPlanner.swift](../Sources/MagicWineCore/LaunchPlanner.swift) (variables and DLL overrides).
+Source: `prepareGraphicsLaunch` in [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift) (validation, folders, runtime view), each provider's `launchFacts` and `cacheFolder` in [GraphicsComponentProvider.swift](../Sources/MagicWineCore/GraphicsComponentProvider.swift), and the graphics layer in [LaunchPlanner.swift](../Sources/MagicWineCore/LaunchPlanner.swift) (variables and DLL overrides).
 
 ## CLI examples
 

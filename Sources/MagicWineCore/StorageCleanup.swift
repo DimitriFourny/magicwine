@@ -180,20 +180,17 @@ public enum StorageCleanup {
         }
 
         let componentIDs = Set(bottles.compactMap(\.graphics.componentID))
-        let bundled: Set<String> = [DXVKInstallation.componentID, DXMTInstallation.componentID]
         for name in try entries(paths.componentsDirectory) {
             if [".install-", ".d3dmetal-", cleanupPrefix].contains(where: name.hasPrefix) {
                 if let found = staging(["Components"], name) { items.append(found) }
                 continue
             }
-            let kind: String
-            if name.hasPrefix("dxvk-") { kind = "DXVK" }
-            else if name.hasPrefix("dxmt-") { kind = "DXMT" }
-            else if name.hasPrefix("d3dmetal-") { kind = "D3DMetal" }
+            guard let provider = GraphicsComponentProviders.bundled.all.first(where: { name.hasPrefix($0.componentPrefix) })
             else { continue }
+            let kind = provider.backend.displayName
             guard !componentIDs.contains(name),
                   try fileType(paths.componentsDirectory.appendingPathComponent(name)) == S_IFDIR else { continue }
-            let imported = kind == "D3DMetal", isCurrent = bundled.contains(name)
+            let imported = provider.isImported, isCurrent = provider.currentComponentID == name
             var reason = "No bottle uses this \(kind) component."
             if isCurrent { reason += " It is the currently bundled version; MagicWine reinstalls it when a bottle selects \(kind) again." }
             if imported { reason += " These are your imported Apple libraries: using D3DMetal again requires importing them again." }
@@ -220,7 +217,7 @@ public enum StorageCleanup {
     private static func reachableViews(paths: ApplicationPaths,
                                        bottles: [Bottle]) throws -> (Set<String>, Set<ViewInputs>) {
         var reachable = Set<String>(), undetermined = Set<ViewInputs>(), seen = Set<ViewInputs>()
-        for bottle in bottles where bottle.graphics.backend == .dxmt || bottle.graphics.backend == .d3dmetal {
+        for bottle in bottles where bottle.graphics.backend.componentProvider?.viewSubstitutions.isEmpty == false {
             guard let componentID = bottle.graphics.componentID else { continue }
             // Same URLs launch passes: the pinned executable and Components/<ID>.
             let executable = bottle.runtime.executableURL

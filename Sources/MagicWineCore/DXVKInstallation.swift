@@ -219,6 +219,16 @@ enum DXVKInstallation {
         return root
     }
 
+    /// An existence check of the runtime's Vulkan/MoltenVK layout, not a GPU-feature certification.
+    static func validateRuntime(_ executable: URL) throws {
+        let root = executable.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: root.appendingPathComponent("lib/libMoltenVK.dylib").path),
+              manager.fileExists(atPath: root.appendingPathComponent("lib/wine/x86_64-unix/winevulkan.so").path) else {
+            throw MagicWineError.setup("This Wine installation does not provide the Vulkan/MoltenVK layout required by this experimental DXVK backend. Use MagicWine's managed Wine runtime or keep Standard rendering.")
+        }
+    }
+
     private static func validateManagedParents(_ paths: ApplicationPaths) throws {
         guard paths.root.isFileURL,
               try fs.fileType(paths.root) == mode_t(S_IFDIR),

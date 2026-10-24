@@ -5,50 +5,20 @@ import Foundation
 /// Prefix changes and their metadata commit share a cross-process lock. The journal is
 /// published before any DLL is touched; recovery chooses solely by the atomic metadata commit.
 internal enum GraphicsPrefix {
+    /// The DXVK footprint; the first four entries are the historical four-DLL DXVK ABI
+    /// of legacy manifests and journals. Never reorder them.
     static let dllPaths = [
         "drive_c/windows/system32/d3d10core.dll", "drive_c/windows/system32/d3d11.dll",
         "drive_c/windows/syswow64/d3d10core.dll", "drive_c/windows/syswow64/d3d11.dll",
         "drive_c/windows/system32/d3d9.dll", "drive_c/windows/syswow64/d3d9.dll"
-    ]
-    // The first six indices are the historical DXVK ABI. Never reorder them.
-    private static let dxvkSources = [
-        "x64/d3d10core.dll", "x64/d3d11.dll", "x32/d3d10core.dll", "x32/d3d11.dll",
-        "x64/d3d9.dll", "x32/d3d9.dll"
     ]
     private static let legacyDLLCount = 4
     private static let schema = 2
     private static var manager: FileManager { FileManager.default }
     private static let fs = SecureFS(prefix: "Graphics setup: ")
 
-    private struct Mapping: Sendable {
-        let source: String
-        let destination: String
-    }
-
-    private static let dxvkMappings = zip(dxvkSources, dllPaths).map { Mapping(source: $0.0, destination: $0.1) }
-    private static let dxmtMappings = [
-        ("x86_64-windows", "system32"), ("i386-windows", "syswow64")
-    ].flatMap { source, destination in
-        // Only PE DLLs enter the prefix; native helpers remain in the runtime overlay.
-        ["d3d10core.dll", "d3d11.dll", "dxgi.dll", "winemetal.dll"].map {
-            Mapping(source: "\(source)/\($0)", destination: "drive_c/windows/\(destination)/\($0)")
-        }
-    }
-    private static let d3dmetalMappings = ["d3d11.dll", "d3d12.dll", "dxgi.dll"].map {
-        Mapping(source: "wine/x86_64-windows/\($0)", destination: "drive_c/windows/system32/\($0)")
-    }
-
-    private static func mappings(for backend: GraphicsBackend) -> [Mapping] {
-        switch backend {
-        case .standard:
-            return []
-        case .dxvk:
-            return dxvkMappings
-        case .dxmt:
-            return dxmtMappings
-        case .d3dmetal:
-            return d3dmetalMappings
-        }
+    private static func mappings(for backend: GraphicsBackend) -> [GraphicsPrefixMapping] {
+        backend.componentProvider?.prefixMappings ?? []
     }
 
     private static let allowedPaths = Set(GraphicsBackend.allCases.flatMap { mappings(for: $0).map(\.destination) })

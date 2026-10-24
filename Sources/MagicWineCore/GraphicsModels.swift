@@ -29,12 +29,8 @@ public struct GraphicsConfiguration: Codable, Hashable, Sendable {
 
     /// Whether this build understands the selected component; launch still verifies its files.
     public var usesCurrentComponent: Bool {
-        switch backend {
-        case .standard: componentID == nil
-        case .dxvk: componentID == DXVKInstallation.componentID
-        case .dxmt: componentID.map(DXMTInstallation.supports(componentID:)) ?? false
-        case .d3dmetal: componentID.map(D3DMetalInstallation.supports(componentID:)) ?? false
-        }
+        guard let provider = backend.componentProvider else { return componentID == nil }
+        return componentID.map(provider.supports(componentID:)) ?? false
     }
 }
 

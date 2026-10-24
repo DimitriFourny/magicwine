@@ -386,21 +386,16 @@ public actor WineRuntime {
         let componentRoot: URL?
         if retainingComponent {
             progress?(.verifying)
-            componentRoot = try graphicsComponent(current.graphics)
+            componentRoot = try graphicsComponent(current.graphics).root
             let prefix = store.prefixURL(for: current)
             try GraphicsPrefix.validateInstalled(configuration: current.graphics, prefix: prefix,
                                                  bottleDirectory: prefix.deletingLastPathComponent())
+        } else if let provider = graphicsProviders[backend] {
+            componentRoot = try await provider.install(paths: paths, source: source, progress: progress)
         } else {
-            switch backend {
-            case .standard: componentRoot = nil
-            case .dxvk: componentRoot = try await DXVKInstallation.install(paths: paths, progress: progress)
-            case .dxmt: componentRoot = try await DXMTInstallation.install(paths: paths, progress: progress)
-            case .d3dmetal:
-                guard let source else { throw MagicWineError.setup("Select a D3DMetal library folder.") }
-                componentRoot = try await D3DMetalInstallation.install(paths: paths, source: source, progress: progress)
-            }
+            componentRoot = nil
         }
-        if let componentRoot, backend == .dxmt || backend == .d3dmetal {
+        if let componentRoot, graphicsProviders[backend]?.viewSubstitutions.isEmpty == false {
             _ = try GraphicsRuntimeView.prepare(executable: current.runtime.executableURL,
                                                  component: componentRoot, backend: backend, paths: paths)
         }
@@ -648,63 +643,42 @@ public actor WineRuntime {
         #endif
     }
 
-    private func validateVulkanRuntime(_ executable: URL) throws {
-        let root = executable.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
-        let manager = FileManager.default
-        guard manager.fileExists(atPath: root.appendingPathComponent("lib/libMoltenVK.dylib").path),
-              manager.fileExists(atPath: root.appendingPathComponent("lib/wine/x86_64-unix/winevulkan.so").path) else {
-            throw MagicWineError.setup("This Wine installation does not provide the Vulkan/MoltenVK layout required by this experimental DXVK backend. Use MagicWine's managed Wine runtime or keep Standard rendering.")
-        }
-    }
+    /// Backend wiring for this runtime.
+    private let graphicsProviders = GraphicsComponentProviders.bundled
 
     private func validateGraphicsRuntime(_ backend: GraphicsBackend, executable: URL) throws {
-        switch backend {
-        case .standard: break
-        case .dxvk: try validateVulkanRuntime(executable)
-        case .dxmt: try DXMTInstallation.validateRuntime(executable)
-        case .d3dmetal: try D3DMetalInstallation.validateRuntime(executable)
-        }
+        try graphicsProviders[backend]?.validateRuntime(executable)
     }
 
-    private func graphicsComponent(_ configuration: GraphicsConfiguration) throws -> URL {
+    private func graphicsComponent(_ configuration: GraphicsConfiguration) throws -> (provider: any GraphicsComponentProvider, root: URL) {
         guard let componentID = configuration.componentID else {
             throw MagicWineError.setup("This bottle has no pinned \(configuration.backend.displayName) component. Choose Standard to restore its original graphics files, then enable the backend again.")
         }
-        switch configuration.backend {
-        case .standard: throw MagicWineError.setup("Standard graphics does not use a graphics component.")
-        case .dxvk: return try DXVKInstallation.validate(componentID: componentID, paths: paths)
-        case .dxmt: return try DXMTInstallation.validate(componentID: componentID, paths: paths)
-        case .d3dmetal: return try D3DMetalInstallation.validate(componentID: componentID, paths: paths)
+        guard let provider = graphicsProviders[configuration.backend] else {
+            throw MagicWineError.setup("Standard graphics does not use a graphics component.")
         }
+        return (provider, try provider.validate(componentID: componentID, paths: paths))
     }
 
     /// Validates the pinned component and installed footprint, creates the bottle's
     /// graphics folders, and prepares a Metal backend's private runtime view.
     private func prepareGraphicsLaunch(for bottle: Bottle, prefix: URL) throws -> GraphicsLaunchFacts {
-        let backend = bottle.graphics.backend
-        let component = try graphicsComponent(bottle.graphics)
-        try validateGraphicsRuntime(backend, executable: bottle.runtime.executableURL)
+        let (provider, component) = try graphicsComponent(bottle.graphics)
+        try provider.validateRuntime(bottle.runtime.executableURL)
         let directory = prefix.deletingLastPathComponent()
         try GraphicsPrefix.validateInstalled(configuration: bottle.graphics, prefix: prefix, bottleDirectory: directory)
-        if backend == .dxmt || backend == .d3dmetal {
-            let settings = try backend == .dxmt
-                ? DXMTInstallation.environment(component: component, showHUD: bottle.graphics.showHUD)
-                : D3DMetalInstallation.environment(component: component, showHUD: bottle.graphics.showHUD)
-            let folders = backend == .dxmt ? try graphicsDirectories(for: bottle, directory: directory) : nil
-            let loader = try GraphicsRuntimeView.prepare(executable: bottle.runtime.executableURL,
-                                                         component: component, backend: backend, paths: paths)
-            return try .metal(componentSettings: settings, loader: loader,
-                              server: bottle.runtime.executableURL.deletingLastPathComponent().appendingPathComponent("wineserver"),
-                              folders: folders)
-        }
-        return .dxvk(component: component, folders: try graphicsDirectories(for: bottle, directory: directory),
-                     showHUD: bottle.graphics.showHUD)
+        let folders = try provider.cacheFolder.map { try graphicsDirectories(for: bottle, directory: directory, cache: $0) }
+        let loader = provider.viewSubstitutions.isEmpty ? nil
+            : try GraphicsRuntimeView.prepare(executable: bottle.runtime.executableURL,
+                                              component: component, backend: provider.backend, paths: paths)
+        return try provider.launchFacts(component: component, showHUD: bottle.graphics.showHUD, folders: folders,
+                                        loader: loader,
+                                        server: bottle.runtime.executableURL.deletingLastPathComponent().appendingPathComponent("wineserver"))
     }
 
-    private func graphicsDirectories(for bottle: Bottle, directory: URL) throws -> GraphicsFolders {
+    private func graphicsDirectories(for bottle: Bottle, directory: URL, cache: String) throws -> GraphicsFolders {
         let backend = bottle.graphics.backend
-        let cache = directory.appendingPathComponent(backend == .dxvk ? "graphics/cache" : "graphics/dxmt-cache",
-                                                     isDirectory: true)
+        let cache = directory.appendingPathComponent(cache, isDirectory: true)
         let logs = paths.logsDirectory.appendingPathComponent("\(bottle.id.uuidString)-\(backend.rawValue)", isDirectory: true)
         for folder in [cache, logs] {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

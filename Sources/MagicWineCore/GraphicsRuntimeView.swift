@@ -58,7 +58,9 @@ enum GraphicsRuntimeView {
 
     private static func plan(executable: URL, component: URL,
                              backend: GraphicsBackend) throws -> (receipt: Receipt, encoded: Data, identity: String) {
-        guard backend == .dxmt || backend == .d3dmetal else { throw failure("A private graphics view is only needed for Metal backends.") }
+        guard let substitutions = backend.componentProvider?.viewSubstitutions, !substitutions.isEmpty else {
+            throw failure("A private graphics view is only needed for Metal backends.")
+        }
         guard executable.isFileURL, executable.deletingLastPathComponent().lastPathComponent == "bin" else {
             throw failure("Select a compatible native Wine loader in its runtime's bin directory, not a wrapper or relocated executable.")
         }
@@ -67,9 +69,11 @@ enum GraphicsRuntimeView {
         try requireDirectory(runtime)
         try requireFile(originalLoader, allowHardLinks: true)
         guard originalLoader.path.hasPrefix(runtime.path + "/") else { throw failure("The selected loader escapes its runtime directory.") }
-        let provider = backend == .d3dmetal ? component.appendingPathComponent("wine") : component
         try requireDirectory(component)
-        try requireDirectory(provider)
+        // Provider directories holding substituted modules must be owned directories too.
+        for directory in Set(substitutions.compactMap({ $0.source.split(separator: "/").dropLast().first })) {
+            try requireDirectory(component.appendingPathComponent(String(directory)))
+        }
         let wineRoots = ["lib/wine", "lib64/wine"].filter {
             FileManager.default.fileExists(atPath: runtime.appendingPathComponent($0 + "/x86_64-unix/ntdll.so").path)
         }
@@ -81,17 +85,7 @@ enum GraphicsRuntimeView {
         var copies: [String: String] = [:]
         var hashes: [String: String] = [:]
         var links: [String: Link] = [:]
-        let substitutions: [String]
-        if backend == .dxmt {
-            substitutions = ["x86_64-windows", "i386-windows"].flatMap { architecture in
-                ["d3d10core", "d3d11", "dxgi", "winemetal"].map { architecture + "/" + $0 + ".dll" }
-            } + ["x86_64-unix/winemetal.so"]
-        } else {
-            substitutions = ["d3d11", "d3d12", "dxgi"].flatMap {
-                ["x86_64-windows/" + $0 + ".dll", "x86_64-unix/" + $0 + ".so"]
-            }
-        }
-        let replacementNames = Set(substitutions.map { wineRoot + "/" + $0 })
+        let replacementNames = Set(substitutions.map { wineRoot + "/" + $0.name })
         let loaderNames = Set(["wine", "wine64", "wineloader", executable.lastPathComponent])
         var sourceHashes: [String: String] = [:]
         func addCopy(_ source: URL, _ name: String, within root: URL) throws {
@@ -145,19 +139,12 @@ enum GraphicsRuntimeView {
         if copies[wineRoot + "/x86_64-unix/wine"] == nil {
             try addCopy(originalLoader, wineRoot + "/x86_64-unix/wine", within: runtime)
         }
-        for name in substitutions {
-            let relative = wineRoot + "/" + name
-            directories.insert(wineRoot + "/" + String(name.split(separator: "/")[0]))
-            // Apple's Unix modules are aliases of one shared dispatch image. Loading
-            // expanded archive copies separately breaks global state and @loader_path
-            // framework lookup. The importer verifies their identical bytes.
-            let source = backend == .d3dmetal && name.hasPrefix("x86_64-unix/")
-                ? component.appendingPathComponent("external/libd3dshared.dylib")
-                : provider.appendingPathComponent(name)
+        for substitution in substitutions {
+            let relative = wineRoot + "/" + substitution.name
+            directories.insert(wineRoot + "/" + String(substitution.name.split(separator: "/")[0]))
+            let source = component.appendingPathComponent(substitution.source)
             try requireFile(source)
-            if backend == .dxmt && name == "x86_64-unix/winemetal.so" {
-                // dyld resolves @loader_path from the real image path. A provider
-                // symlink cannot find this runtime's @rpath/winemac.so dependency.
+            if substitution.copies {
                 try addCopy(source, relative, within: component)
             } else {
                 try addLink(source, relative, within: component)
