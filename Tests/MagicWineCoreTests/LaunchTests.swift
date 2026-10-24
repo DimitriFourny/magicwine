@@ -34,6 +34,7 @@ struct LaunchTests {
             if [ "$1" = wineboot ]; then exit 7; fi
             if [ "$1" = hold ]; then touch "$WINEPREFIX/holding"; exec /bin/sleep 30; fi
             if [ "$1" = -k ]; then touch "$WINEPREFIX/killed"; fi
+            if [ "$1" = start ]; then case "$3" in *fail*) exit 1 ;; esac; exit 0; fi
             case "$1" in
               *exit-*.exe) env > "$WINEPREFIX/launch-environment"; code="${1##*exit-}"; exit "${code%.exe}" ;;
               *.exe) env > "$WINEPREFIX/launch-environment" ;;
@@ -160,5 +161,76 @@ struct LaunchTests {
             try WineRuntime.prepareIntegrations(gamepad: .failure(stopped), rosetta: { false },
                                                 bridge: { GamepadBridge.overrides })
         }
+    }
+
+    @Test func programExitCodeIsResultWhileSetupAndDispatchFailuresThrow() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.remove() }
+        let result = try await fixture.wine.launch(try fixture.program("exit-3.exe"), in: fixture.bottle)
+        #expect(result.exitCode == 3)
+        #expect(FileManager.default.fileExists(atPath: result.logURL.path))
+
+        do {
+            _ = try await fixture.wine.launch(try fixture.program("dispatch-fail.url"), in: fixture.bottle)
+            Issue.record("A failed shortcut dispatch must remain an error.")
+        } catch MagicWineError.processFailed(let code, _) {
+            #expect(code == 1)
+        }
+        do {
+            _ = try await fixture.wine.run(arguments: ["exit-4.exe"], in: fixture.bottle)
+            Issue.record("Wine commands keep error semantics for nonzero status.")
+        } catch MagicWineError.processFailed(let code, _) {
+            #expect(code == 4)
+        }
+        do {
+            _ = try await fixture.wine.initialize(fixture.bottle)
+            Issue.record("Bottle setup must fail on a nonzero wineboot status.")
+        } catch MagicWineError.processFailed(let code, _) {
+            #expect(code == 7)
+        }
+    }
+
+    @Test func logSummaryReportsOnlyTheLastWineErrorsInABoundedTail() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let log = root.appendingPathComponent("program.log")
+        #expect(ProcessLogSummary.summary(at: log) == nil)
+
+        try Data("""
+        Command: "wine" "game.exe"
+
+        0024:err:module:first
+        0024:fixme:ntdll:ignored
+        0024:err:module:second\r
+        err:winediag:third
+        0030:err:d3d:fourth
+        0030:trace:ignored
+
+        """.utf8).write(to: log)
+        #expect(ProcessLogSummary.summary(at: log) == "0024:err:module:second\nerr:winediag:third\n0030:err:d3d:fourth")
+        #expect(ProcessLogSummary.summary(at: log, maximumLines: 1) == "0030:err:d3d:fourth")
+
+        let link = root.appendingPathComponent("linked.log")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: log)
+        #expect(ProcessLogSummary.summary(at: link) == nil)
+
+        try Data("fixme:only\n".utf8).write(to: log)
+        #expect(ProcessLogSummary.summary(at: log) == nil)
+
+        // An error outside the tail is never read; an overlong line is shortened.
+        let long = "0024:err:module:" + String(repeating: "x", count: 1_000)
+        let filler = String(repeating: "0024:fixme:filler\n", count: 20_000)
+        try Data(("0024:err:module:early\n" + filler + long + "\n").utf8).write(to: log)
+        let summary = try #require(ProcessLogSummary.summary(at: log))
+        #expect(!summary.contains("early"))
+        #expect(summary.hasPrefix("0024:err:module:xxx"))
+        #expect(summary.count == ProcessLogSummary.lineLimit)
+
+        // The tail starts inside a line: its matching fragment is not reported.
+        let rest = ":err:fragment\n"
+        let padding = String(repeating: "f", count: ProcessLogSummary.tailBytes + 1 - rest.utf8.count - 1) + "\n"
+        try Data(("0024" + rest + padding).utf8).write(to: log)
+        #expect(ProcessLogSummary.summary(at: log) == nil)
     }
 }

@@ -156,6 +156,12 @@ public actor WineRuntime {
 
     /// `onStart` runs once the program's process has started (for LNK/URL, once
     /// `start /unix` has), with any skipped-integration warnings and its log.
+    ///
+    /// A direct EXE's exit status is returned in `OperationResult.exitCode`, never
+    /// thrown: games and launchers may quit normally with a nonzero code. It is the low
+    /// 8 bits of the Windows exit code. Errors remain for failing to start, Stop,
+    /// leases/validation, and a signal. For LNK/URL a nonzero `start /unix` status means
+    /// Wine could not dispatch the shortcut, so it stays `processFailed`.
     public func launch(_ program: WindowsProgram, in bottle: Bottle,
                        onStart: (@Sendable (LaunchStart) -> Void)? = nil) async throws -> OperationResult {
         let executable = try windowsFile(URL(fileURLWithPath: program.executablePath), extensions: ["exe", "lnk", "url"])
@@ -163,7 +169,7 @@ public actor WineRuntime {
         let arguments = isShortcut ? ["start", "/unix", executable.path] : [executable.path]
         let result = try await execute(arguments: arguments, bottle: bottle,
                                        directory: executable.deletingLastPathComponent(), timeout: nil,
-                                       onStart: onStart)
+                                       onStart: onStart, exitStatusIsResult: !isShortcut)
         if isShortcut {
             // ShellExecute launches shortcuts asynchronously. Observe the prefix's
             // server lifetime instead of start /wait's unreliable shortcut handle.
@@ -393,7 +399,8 @@ public actor WineRuntime {
 
     private func execute(arguments: [String], bottle: Bottle, directory: URL?, timeout: TimeInterval?,
                          server: Bool = false, tracked: Bool = true, idleProbe: Bool = false,
-                         onStart: (@Sendable (LaunchStart) -> Void)? = nil) async throws -> OperationResult {
+                         onStart: (@Sendable (LaunchStart) -> Void)? = nil,
+                         exitStatusIsResult: Bool = false) async throws -> OperationResult {
         guard server || !settingsChanging.contains(bottle.id) else {
             throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
         }
@@ -493,7 +500,7 @@ public actor WineRuntime {
         let log = logURL(name: "\(bottle.id.uuidString)-\(server ? "wineserver" : "wine")")
         let operation = ProcessOperation(executable: executable, arguments: arguments,
             environment: processEnvironment, directory: directory ?? prefix,
-            logURL: log, timeout: timeout, warnings: warnings)
+            logURL: log, timeout: timeout, warnings: warnings, exitStatusIsResult: exitStatusIsResult)
         if tracked { active[bottle.id, default: [:]][id] = operation }
         defer {
             if tracked {

@@ -85,7 +85,15 @@ struct MagicWineCLI {
                 guard rest.count == 1, let id = UUID(uuidString: rest[0]), let program = bottle.programs.first(where: { $0.id == id }) else {
                     throw argumentError("launch <bottle-UUID> <program-UUID> (see apps)")
                 }
-                print("Log: \(try await runtime.launch(program, in: bottle, onStart: printWarnings).logURL.path)")
+                let result = try await runtime.launch(program, in: bottle, onStart: printWarnings)
+                print("Log: \(result.logURL.path)")
+                print("Exit code: \(result.exitCode)")
+                if result.exitCode != 0 {
+                    if let summary = ProcessLogSummary.summary(at: result.logURL) {
+                        FileHandle.standardError.write(Data("\(summary)\n".utf8))
+                    }
+                    exit(result.exitCode)
+                }
             case "stop": print("Log: \(try await runtime.stop(bottle).logURL.path)")
             case "configure": print("Log: \(try await runtime.configure(bottle).logURL.path)")
             case "synchronization":
@@ -145,8 +153,15 @@ struct MagicWineCLI {
                 print("\(updated.graphics.backend.rawValue)\t\(updated.graphics.componentID ?? "Wine default")\tHUD \(updated.graphics.showHUD ? "on" : "off")")
             case "exec":
                 guard !rest.isEmpty else { throw argumentError("exec <bottle-UUID> <wine-arguments…>") }
-                let result = try await runtime.run(arguments: rest, in: bottle, onStart: printWarnings)
-                print(try String(contentsOf: result.logURL, encoding: .utf8))
+                do {
+                    let result = try await runtime.run(arguments: rest, in: bottle, onStart: printWarnings)
+                    print(try String(contentsOf: result.logURL, encoding: .utf8))
+                } catch MagicWineError.processFailed(let code, let log) {
+                    // Report Wine's own status instead of the generic CLI failure status.
+                    print(try String(contentsOf: log, encoding: .utf8))
+                    FileHandle.standardError.write(Data("error: Wine exited with code \(code)\n".utf8))
+                    exit(code)
+                }
             default: break
             }
         default: throw argumentError("Unknown command: \(command)")
@@ -198,6 +213,7 @@ struct MagicWineCLI {
       refresh <bottle-UUID>                    Discover Start Menu and Desktop LNK/URL shortcuts
       apps <bottle-UUID>                        List saved program UUIDs
       launch <bottle-UUID> <program-UUID>       Run a saved program
+        Prints its exit code and exits with it (low 8 bits of the Windows code)
       stop <bottle-UUID>                        Stop this bottle only
       configure <bottle-UUID>                   Open Wine configuration
       graphics <bottle-UUID> [standard|dxvk|dxmt|d3dmetal]
@@ -211,5 +227,6 @@ struct MagicWineCLI {
       runtime upgrade <bottle-UUID>             Explicitly adopt installed updated Wine for an old managed bottle
         Run install-wine --accept-unsigned first; does not download Wine or change custom runtime bottles
       exec <bottle-UUID> <wine-arguments…>       Run Wine with isolated prefix
+        Prints the log; exits with Wine's exit code
     """
 }

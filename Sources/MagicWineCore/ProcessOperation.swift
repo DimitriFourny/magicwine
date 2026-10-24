@@ -9,6 +9,8 @@ final class ProcessOperation: @unchecked Sendable {
     private let logURL: URL
     private let timeout: TimeInterval?
     private let warnings: [String]
+    /// A program's own exit status is data; setup/server/installer failures are errors.
+    private let exitStatusIsResult: Bool
     private var continuation: CheckedContinuation<OperationResult, any Error>?
     private var output: FileHandle?
     private var timer: DispatchWorkItem?
@@ -16,10 +18,12 @@ final class ProcessOperation: @unchecked Sendable {
     private var finished = false
 
     init(executable: URL, arguments: [String], environment: [String: String],
-         directory: URL?, logURL: URL, timeout: TimeInterval?, warnings: [String] = []) {
+         directory: URL?, logURL: URL, timeout: TimeInterval?, warnings: [String] = [],
+         exitStatusIsResult: Bool = false) {
         self.logURL = logURL
         self.timeout = timeout
         self.warnings = warnings
+        self.exitStatusIsResult = exitStatusIsResult
         process.executableURL = executable
         process.arguments = arguments
         process.environment = environment
@@ -59,8 +63,9 @@ final class ProcessOperation: @unchecked Sendable {
             process.standardError = handle
             process.standardInput = FileHandle.nullDevice
             process.terminationHandler = { [self] process in
-                if process.terminationStatus == 0 {
-                    finish(.success(OperationResult(exitCode: 0, logURL: logURL)))
+                // A signal is not an exit status, even when the exit status is data.
+                if process.terminationStatus == 0 || (exitStatusIsResult && process.terminationReason == .exit) {
+                    finish(.success(OperationResult(exitCode: process.terminationStatus, logURL: logURL)))
                 } else {
                     finish(.failure(MagicWineError.processFailed(exitCode: process.terminationStatus, logURL: logURL)))
                 }

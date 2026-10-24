@@ -401,6 +401,13 @@ final class AppModel: ObservableObject {
                     }
                 }
                 recordLog(result.logURL, for: bottle.id)
+                // A normal quit with a nonzero code is status, not an operation failure.
+                if result.exitCode != 0 {
+                    let summary = ProcessLogSummary.summary(at: result.logURL)
+                        ?? "Wine reported no errors at the end of the log. Many games and launchers use nonzero codes for normal exits."
+                    recordNotice(BottleNotice(title: "\(program.name) exited with code \(result.exitCode)",
+                                              message: summary, logURL: result.logURL), for: bottle.id)
+                }
             } catch {
                 recordError(error, for: bottle.id)
             }
