@@ -251,6 +251,29 @@ struct MagicWineCLI {
             print("avx\t\(updated.compatibility.advertiseAVX ? "on" : "off")\t\(avx)")
             print("winedebug\t\(updated.compatibility.wineDebug.rawValue)\t\(updated.compatibility.wineDebug == .quiet ? "WINEDEBUG=\(WineRuntime.quietWineDebug)" : "Wine's default")")
             print("dxvk-hud\t\(updated.compatibility.dxvkHUD.rawValue)\tDXVK_HUD=\(updated.compatibility.dxvkHUD.value) when the HUD is on")
+        case "cleanup":
+            let flags = Set(values)
+            guard flags.count == values.count, flags.isSubset(of: ["--apply", "--include-current"]) else {
+                throw argumentError("cleanup [--apply] [--include-current]")
+            }
+            let plan = try await StorageCleanup.plan(paths: paths, includeCurrent: flags.contains("--include-current"))
+            for category in StorageCleanupItem.Category.allCases {
+                let items = plan.items.filter { $0.category == category }
+                guard !items.isEmpty else { continue }
+                print(category.title)
+                for item in items { print("  \(byteCount(item.size))\t\(item.url.path)\n    \(item.reason)") }
+            }
+            for item in plan.keptCurrent {
+                print("Kept (current; add --include-current to remove): \(byteCount(item.size))\t\(item.url.path)")
+            }
+            guard flags.contains("--apply") else {
+                print("Total: \(plan.items.count) items, \(byteCount(plan.totalSize)). Dry run; run cleanup --apply to remove them.")
+                return
+            }
+            let result = try await StorageCleanup.apply(plan.items, paths: paths)
+            for item in result.removed { print("Removed\t\(item.url.path)") }
+            for item in result.skipped { print("Skipped (no longer removable)\t\(item.url.path)") }
+            print("Removed \(result.removed.count) items, \(byteCount(result.reclaimedSize)).")
         default: throw argumentError("Unknown command: \(command)")
         }
     }
@@ -294,6 +317,8 @@ struct MagicWineCLI {
     }
 
     private static func argumentError(_ detail: String) -> MagicWineError { .setup("\(detail)\nRun magicwine --help for usage.") }
+
+    private static func byteCount(_ size: Int64) -> String { ByteCountFormatter.string(fromByteCount: size, countStyle: .file) }
 
     private static let graphicsUsage = "graphics <bottle-UUID> standard|dxvk|dxmt|d3dmetal [--accept-experimental] [--hud|--no-hud] [--import <D3DMetal-library-folder>]"
 
@@ -345,5 +370,9 @@ struct MagicWineCLI {
         Show or change launch switches: Rosetta AVX advertising (x86_64 Wine, macOS 15+),
         Wine debug output (quiet = WINEDEBUG=fixme-all), and the DXVK HUD preset
         Saved for later launches; running programs are not stopped
+      cleanup [--apply] [--include-current]
+        List unused components, managed Wine runtimes, private graphics views, installer leftovers
+        and lock files of deleted bottles with sizes (dry run); --apply removes them while all bottles are idle
+        Current managed Wine and bundled components are kept unless --include-current
     """
 }

@@ -744,6 +744,66 @@ final class AppModel: ObservableObject {
             changingCompatibility.remove(bottle.id)
         }
     }
+
+    // MARK: Storage cleanup
+
+    @Published private(set) var storagePlan: StorageCleanupPlan?
+    @Published private(set) var storageActivity: String?
+    @Published private(set) var storageError: String?
+    @Published private(set) var storageIncludesCurrent = false
+
+    /// Bottle work and Wine installation can still reference what a plan lists. The core
+    /// independently refuses while any bottle (including another process's) is busy.
+    var blocksStorageCleanup: Bool {
+        isLoading || isCreating || runtimeActivity != nil || storageActivity != nil ||
+            activities.values.contains { $0.blocksPrefixMutation }
+    }
+
+    func refreshStoragePlan(includeCurrent: Bool? = nil) {
+        guard storageActivity == nil else { return }
+        if let includeCurrent { storageIncludesCurrent = includeCurrent }
+        storageActivity = "Measuring unused files…"
+        storageError = nil
+        Task {
+            await loadStoragePlan()
+            storageActivity = nil
+        }
+    }
+
+    /// Call only after the view's confirmation listing exactly these items.
+    func removeStorage(_ items: [StorageCleanupItem]) {
+        guard !blocksStorageCleanup, !items.isEmpty else { return }
+        storageActivity = "Removing unused files…"
+        // Keeps Wine installation and bottle creation from racing the removal.
+        runtimeActivity = "Removing unused files…"
+        storageError = nil
+        let paths = paths
+        Task {
+            var removedRuntime = false
+            do {
+                let result = try await StorageCleanup.apply(items, paths: paths)
+                removedRuntime = result.removed.contains { $0.category == .runtime }
+                let size = ByteCountFormatter.string(fromByteCount: result.reclaimedSize, countStyle: .file)
+                notice = AppNotice(title: "Unused Files Removed", message: "Removed \(result.removed.count) of \(items.count) items (\(size))."
+                    + (result.skipped.isEmpty ? "" : " \(result.skipped.count) items were kept because they are in use again or already gone."))
+            } catch {
+                storageError = error.localizedDescription
+            }
+            runtimeActivity = nil
+            if removedRuntime { await discoverRuntimes() }
+            await loadStoragePlan()
+            storageActivity = nil
+        }
+    }
+
+    private func loadStoragePlan() async {
+        do {
+            storagePlan = try await StorageCleanup.plan(paths: paths, includeCurrent: storageIncludesCurrent)
+        } catch {
+            storagePlan = nil
+            if storageError == nil { storageError = error.localizedDescription }
+        }
+    }
 }
 
 /// A dismissible, non-error status for one bottle, tied to one specific process log.

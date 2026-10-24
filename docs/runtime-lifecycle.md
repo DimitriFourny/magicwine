@@ -80,6 +80,32 @@ BOTTLE="<bottle-UUID>"
 
 Replace `BOTTLE` with an eligible idle bottle UUID in that library. Installation runs third-party code after explicit consent; adoption is a separate operation. See [development](development.md) for packaging and [debugging](debugging.md) for creating an isolated bottle.
 
+## Reclaiming storage
+
+Because bottles keep their pinned Wine and components are never upgraded in place, old runtimes, components and private graphics views accumulate; nothing removes them automatically. [`StorageCleanup`](../Sources/MagicWineCore/StorageCleanup.swift) plans and applies an explicit cleanup of one library root.
+
+**Plan (read-only).** An entry is kept when anything references it:
+
+| Category | Candidates | Kept when |
+| --- | --- | --- |
+| Managed runtime | `Runtimes/wine-<version>-<12-hex>-<driver>/` directories | A bottle's pinned executable or `settings.json`'s custom/preferred Wine lies inside it (literal or symlink-resolved path); the current managed runtime is also kept unless current items are included |
+| Component | `Components/dxvk-*`, `dxmt-*`, `d3dmetal-*` directories | A bottle's `graphics.componentID` names it; the currently bundled DXVK and DXMT IDs are also kept unless current items are included. Unreferenced `d3dmetal-*` imports are listed with *re-import required*: MagicWine cannot recreate the user's libraries |
+| Private view | `Runtimes/.graphics-views/<64-hex>/` | Its name equals the identity `GraphicsRuntimeView` computes now for a DXMT/D3DMetal bottle's pinned executable and `Components/<ID>` (the same receipt hash launch uses). If that computation fails for a bottle whose runtime and component exist, every view built from the same inputs, and every view with an unreadable receipt, is kept rather than guessed |
+| Staging | `.install-*` (and `.d3dmetal-*` in `Components`) under `Runtimes`, `Components`, `.graphics-views` | Anything inside changed during the last 24 hours (an installer may still be working); `.cleanup-*` entries left by an interrupted cleanup are always listed |
+| Lock file | `Bottles/.graphics-locks/<UUID>{,-launch,-lifetime}.lock` | `Bottles/<UUID>` exists |
+
+A bottle pinned to a missing runtime (for example an old `…metal.2` path) only references that path; with its runtime or component gone no view is reachable from it, and it does not stop cleanup. Symbolic links and unrecognized names are never candidates, and a linked `Runtimes` or `Components` directory fails the plan. Sizes are allocated bytes counted without following links; APFS clones (private views copy runtime files as clones) and hard links can make the space actually freed smaller. View identities include absolute paths, so a view built through a differently spelled library root (for example a `/tmp` versus `/private/tmp` `--root`) is listed as stale and rebuilt on its next launch.
+
+**Apply.** Removal takes the library-wide `storage-cleanup.lock`, then every bottle's exclusive launch and lifetime lease without waiting, and probes each bottle's pinned `wineserver -w` for 0.5 seconds (the same idle check as synchronization changes; skipped when the pinned runtime is missing). Any held lease or live server refuses the whole cleanup before anything is removed. While holding them, it recomputes the plan and removes only confirmed entries the fresh plan still contains; anything now referenced, gone, or of a different file type is reported as skipped. Each managed parent is opened with `O_NOFOLLOW` from the library root and all removal is relative to directory descriptors, so a link is removed itself and never followed. A directory is first renamed to `.cleanup-<UUID>` so a half-removed runtime, component or view never remains under a name launch would trust; lock files are unlinked only while their `flock` can be taken. Only `Runtimes/`, `Components/` and `Bottles/.graphics-locks/` entries are touched, never `Bottles/<UUID>/`. Running cleanup again is a no-op.
+
+The leases exclude graphics configuration, runtime adoption, launches and setup of existing bottles in any MagicWine process. They do not cover an `install-wine` running concurrently in another process; current Wine and bundled components are kept by default for that reason too. In the app, removal also blocks Wine installation and bottle creation until it finishes.
+
+| Entry point | Behavior |
+| --- | --- |
+| GUI **Downloads › Storage** | Shows the plan by category with sizes and reasons; **Include current Wine and bundled components** re-plans with them. **Remove…** lists every path and size for confirmation and is unavailable while any bottle or Wine operation is busy in the app. |
+| CLI `cleanup [--include-current]` | Dry run: prints each item with size and reason, current items that are kept, and the total. |
+| CLI `cleanup --apply [--include-current]` | Removes the listed items as above and prints what was removed or skipped. |
+
 ## Creating and initializing a bottle
 
 `BottleStore.create` makes a UUID-named directory and empty `prefix`, then atomically writes `bottle.json` with `isInitialized = false`. If the first metadata write fails, it removes the newly created directory. The GUI selects the new bottle and starts setup; CLI `create <name> <wine-executable>` first inspects that executable and prints the new bottle UUID before setup.

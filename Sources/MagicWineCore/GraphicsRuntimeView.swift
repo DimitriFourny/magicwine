@@ -43,8 +43,21 @@ enum GraphicsRuntimeView {
         let links: [String: Link]
     }
 
-    static func prepare(executable: URL, component: URL, backend: GraphicsBackend,
-                        paths: ApplicationPaths) throws -> URL {
+    /// The `.graphics-views` directory name `prepare` uses for these inputs right now.
+    /// It hashes the exact receipt, so it changes whenever the runtime or provider files do.
+    static func identity(executable: URL, component: URL, backend: GraphicsBackend) throws -> String {
+        try plan(executable: executable, component: component, backend: backend).identity
+    }
+
+    /// The inputs a published view was built from, read without following links.
+    static func receiptInputs(of view: URL) -> (runtime: String, component: String, backend: GraphicsBackend)? {
+        guard let data = try? readFile(view.appendingPathComponent("installation.json"), maximum: 16 * 1_048_576),
+              let receipt = try? JSONDecoder().decode(Receipt.self, from: data) else { return nil }
+        return (receipt.runtime, receipt.component, receipt.backend)
+    }
+
+    private static func plan(executable: URL, component: URL,
+                             backend: GraphicsBackend) throws -> (receipt: Receipt, encoded: Data, identity: String) {
         guard backend == .dxmt || backend == .d3dmetal else { throw failure("A private graphics view is only needed for Metal backends.") }
         guard executable.isFileURL, executable.deletingLastPathComponent().lastPathComponent == "bin" else {
             throw failure("Select a compatible native Wine loader in its runtime's bin directory, not a wrapper or relocated executable.")
@@ -156,6 +169,14 @@ enum GraphicsRuntimeView {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let encoded = try encoder.encode(receipt)
         let identity = SHA256.hash(data: encoded).map { String(format: "%02x", $0) }.joined()
+        return (receipt, encoded, identity)
+    }
+
+    static func prepare(executable: URL, component: URL, backend: GraphicsBackend,
+                        paths: ApplicationPaths) throws -> URL {
+        let (receipt, encoded, identity) = try plan(executable: executable, component: component, backend: backend)
+        let runtime = URL(fileURLWithPath: receipt.runtime, isDirectory: true)
+        let loaderName = receipt.loader, copies = receipt.copies, links = receipt.links
         try requireDirectory(paths.root)
         try requireDirectory(paths.runtimesDirectory)
         let parent = paths.runtimesDirectory.appendingPathComponent(".graphics-views", isDirectory: true)

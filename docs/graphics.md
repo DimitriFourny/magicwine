@@ -138,7 +138,7 @@ Wine resolves builtin DLL paths relative to the real path of `ntdll.so` before `
 Runtimes/.graphics-views/<receipt-digest>/
 ```
 
-The identity depends on the runtime, component, backend, and recorded source inventory. Views belong to the application data root and may be reused by bottles with the same inputs; they are not stored inside a bottle.
+The identity depends on the runtime, component, backend, and recorded source inventory. Views belong to the application data root and may be reused by bottles with the same inputs; they are not stored inside a bottle. A changed input produces a new view and leaves the old one in place until [storage cleanup](runtime-lifecycle.md#reclaiming-storage) removes views that no bottle's current inputs produce.
 
 The view copies unchanged native loaders and Unix modules where real-path or `@loader_path` resolution matters, links other runtime entries, and overlays the selected graphics modules. Loader aliases and the `ntdll`-relative child loader stay inside the view so `CreateProcess` does not escape back to the original renderer.
 

@@ -49,7 +49,7 @@ flowchart TB
 MagicWine/
 ├── settings.json
 ├── Bottles/
-│   ├── .graphics-locks/<bottle-UUID>-{launch,lifetime}.lock
+│   ├── .graphics-locks/<bottle-UUID>{,-launch,-lifetime}.lock, storage-cleanup.lock
 │   └── <bottle-UUID>/
 │       ├── bottle.json
 │       ├── prefix/
@@ -59,14 +59,17 @@ MagicWine/
 │       │   └── user.reg
 │       └── graphics/                 # backend state and caches, when used
 ├── Runtimes/
-│   └── wine-11.0_1-b50dc50ec7f4-winemac-wine11.0-metal.7/
-│       ├── installation.json
-│       └── Wine Stable.app/Contents/Resources/wine/
+│   ├── wine-11.0_1-b50dc50ec7f4-winemac-wine11.0-metal.7/
+│   │   ├── installation.json
+│   │   └── Wine Stable.app/Contents/Resources/wine/
+│   └── .graphics-views/<receipt-digest>/  # private Metal runtime views
 ├── Components/                       # managed/imported graphics components
 └── Logs/                             # process/install logs and backend subdirectories
 ```
 
-This is the principal layout, not an exhaustive list of controller, compatibility, or transaction files. Graphics state is described in [graphics](graphics.md); controller persistence in [controllers](controllers.md). Installation uses temporary `.install-<UUID>` directories under `Runtimes` and removes them on exit.
+This is the principal layout, not an exhaustive list of controller, compatibility, or transaction files. Graphics state is described in [graphics](graphics.md); controller persistence in [controllers](controllers.md). Installers stage into temporary `.install-<UUID>` (and `.d3dmetal-<UUID>`) directories under `Runtimes`, `Components` or `.graphics-views` and remove them on exit.
+
+Nothing in normal operation deletes a runtime, component, private view, or lock file: an old managed Wine stays for bottles pinned to it, a replaced component stays until no bottle needs it, and any change to the runtime or component files a view records (including metadata such as a re-consented quarantine removal) produces a new view next to the old one. [`StorageCleanup`](../Sources/MagicWineCore/StorageCleanup.swift) (CLI `cleanup`, **Downloads › Storage**) computes what nothing references from the bottles' pinned runtimes and component IDs, `settings.json`, and the exact view identities launch would use, and removes only entries confirmed from that plan while every bottle is idle. It never touches `Bottles/<UUID>/`; see [runtime lifecycle](runtime-lifecycle.md#reclaiming-storage) for the rules.
 
 Names are display metadata, never directory paths. `BottleStore` trims names and permits 1–80 characters; UUIDs identify bottles and launchers. A bottle stores creation time, its `RuntimeDescriptor` (executable URL and reported version), initialization status, program list, graphics configuration, MSync preference, display preference, and compatibility switches (Rosetta AVX advertising, Wine debug output, DXVK HUD preset). New defaults are Standard graphics, MSync enabled, Retina enabled at 192 DPI, AVX advertising off, quiet Wine debug output, and the detailed DXVK HUD. Legacy records without graphics/MSync/display/compatibility fields receive compatibility defaults; absence of explicit display metadata is retained internally so normalization can be handled deliberately.
 

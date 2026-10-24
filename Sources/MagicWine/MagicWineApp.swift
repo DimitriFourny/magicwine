@@ -154,6 +154,10 @@ private struct LibraryView: View {
                         }
                     }
                 }
+                WineCard(title: "Storage", icon: "internaldrive",
+                         trailing: model.storagePlan.map { ByteCountFormatter.string(fromByteCount: $0.totalSize, countStyle: .file) + " unused" }) {
+                    StorageCleanupView(model: model)
+                }
             }
             .padding(24).frame(maxWidth: 850, alignment: .leading)
         }
