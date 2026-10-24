@@ -30,7 +30,7 @@ if [ "${1:-}" = --native ]; then
     exit
 fi
 
-[ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage; fi
 WINE="$1"
 if [ "$#" -eq 2 ] && [ "$2" != --expect-disabled ]; then usage; fi
 case "$WINE" in /*) ;; *) usage ;; esac

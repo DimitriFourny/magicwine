@@ -9,4 +9,5 @@ if [[ -z "${MAGICWINE_SDK:-}" && "$TOOLCHAIN_USR" == /Library/Developer/CommandL
     SDK="$(xcrun --sdk macosx26.5 --show-sdk-path)"
     printf 'Using complete macOS 26.5 SDK; preview Command Line Tools lack SwiftUIMacros.\n'
 fi
+# shellcheck disable=SC2034 # consumed by the scripts that source this file
 SWIFT_OPTIONS=(--sdk "$SDK")

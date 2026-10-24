@@ -91,6 +91,17 @@ Never point integration experiments at a valuable game prefix. See [Debugging](d
 
 The [test directory](../Tests/MagicWineCoreTests/) covers persistence, safe paths, shortcut/icon parsing, display/synchronization state, graphics transactions/leases, component validation, profile transforms, and compatibility backup rules. `SecureFSTests` covers the shared filesystem, hashing, Mach-O and PE helpers described in [architecture](architecture.md#packaged-resources-and-trust); component suites remain the regression net for each caller's policy. Tests use isolated fixtures; they do not establish that a real Windows game renders, receives physical input, or survives a launcher workflow.
 
+## Continuous integration
+
+[ci.yml](../.github/workflows/ci.yml) runs on pushes to `main`, pull requests, and manual dispatch. It has two jobs:
+
+- **Build, test, and package** (`macos-15`): selects the newest installed Xcode 16 (Swift 6 and Swift Testing), then runs `./scripts/test.sh`, `./scripts/build-app.sh`, and smoke-tests the packaged CLI (`dist/magicwine --version` and an empty `--root … list`). Nothing is uploaded; the app bundle is large and CI builds are not releases.
+- **ShellCheck** (`ubuntu-latest`): `shellcheck -x scripts/*.sh`. To run it locally without installing anything system-wide, download the static release binary for your platform from the [ShellCheck releases](https://github.com/koalaman/shellcheck/releases) into the gitignored `.local/tools/`. Prefer fixing a finding; where a pattern is intentional, use a targeted `# shellcheck disable=SCxxxx` with a reason.
+
+CI deliberately does **not** run the real-Wine runners (`scripts/test-*.sh`), the component recipes, or any style/format gate. The runners need a graphical macOS session, MinGW, and a trusted managed Wine that GitHub-hosted runners do not provide; run them locally as described below. The workflow was reviewed and parsed as YAML but has not been exercised on GitHub-hosted runners from this repository.
+
+Compatibility archives under `Sources/MagicWineCore/Resources` may be stored in Git LFS. To conserve GitHub's LFS bandwidth the workflow checks out with `lfs: false`, caches `.git/lfs` with a key derived from `git lfs ls-files --long` (so it changes only when an LFS object changes), runs `git lfs pull` only on a cache miss, and always runs `git lfs checkout` to materialize the files. These steps are harmless while no files are LFS-tracked (the list is empty, nothing is fetched). Local clones need Git LFS installed once the archives migrate.
+
 ## Real Wine verification
 
 Use an absolute trusted Wine executable with its matching adjacent `wineserver`. These runners create temporary prefixes or application roots, execute real Wine, and clean up their own state. GUI/input/rendering probes require a usable graphical macOS session; they are not all suitable for headless CI. No runner below downloads Wine for you.

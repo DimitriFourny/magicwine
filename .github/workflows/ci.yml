@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The real-Wine runners (scripts/test-*.sh) are intentionally not part of CI:
+# they need a graphical macOS session, MinGW, and a trusted managed Wine.
+# See docs/development.md ("Continuous integration").
+jobs:
+  swift:
+    name: Build, test, and package
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out sources without LFS objects
+        uses: actions/checkout@v4
+        with:
+          # Large resource archives may be stored in Git LFS. Never smudge them
+          # during checkout; the cache/pull steps below fetch them at most once
+          # per distinct set of LFS objects, to conserve LFS bandwidth.
+          lfs: false
+
+      - name: Compute LFS cache key
+        id: lfs
+        run: |
+          # Empty list (no LFS-tracked files yet) still yields a stable key.
+          key="$({ echo "lfs-v1"; git lfs ls-files --long; } | shasum -a 256 | cut -d' ' -f1)"
+          echo "key=${key}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore LFS objects
+        id: lfs-cache
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ steps.lfs.outputs.key }}
+
+      - name: Download LFS objects on cache miss
+        if: steps.lfs-cache.outputs.cache-hit != 'true'
+        run: git lfs pull
+
+      - name: Materialize LFS files
+        run: git lfs checkout
+
+      - name: Select newest installed Xcode 16 (Swift 6)
+        run: |
+          xcode="$(ls -d /Applications/Xcode_16*.app | sort -V | tail -n 1)"
+          sudo xcode-select -s "${xcode}"
+          xcodebuild -version
+          swift --version
+
+      - name: Test
+        run: ./scripts/test.sh
+
+      - name: Package app and CLI
+        run: ./scripts/build-app.sh
+
+      - name: Smoke-test the packaged CLI
+        run: |
+          dist/magicwine --version
+          dist/magicwine --root "$(mktemp -d)" list
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Lint shell scripts
+        run: |
+          shellcheck --version
+          shellcheck -x scripts/*.sh
