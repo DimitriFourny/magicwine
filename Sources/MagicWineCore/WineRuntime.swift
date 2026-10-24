@@ -223,6 +223,7 @@ public actor WineRuntime {
         for operation in active[bottle.id]?.values ?? Dictionary<UUID, ProcessOperation>().values {
             operation.terminate()
         }
+        dependencyInstalls[bottle.id]?.cancel()
     }
 
     private func stopProcesses(_ bottle: Bottle) async throws {
@@ -924,6 +925,193 @@ public actor WineRuntime {
         let path = url.path.lowercased()
         return path.contains("/crossover.app/") || path.contains("/whisky.app/") ||
                path.contains("/application support/com.isaacmarovitz.whisky/") || path.contains("/whisky/")
+    }
+
+    // MARK: - Windows dependencies
+
+    private var dependencyInstalls: [UUID: Task<DependencyInstallResult, Error>] = [:]
+
+    /// Each catalog item's post-install checks against the prefix files. Registry checks read
+    /// Wine's saved registry, which a running Wine may not have written yet.
+    public func dependencyStatus(in bottle: Bottle) async throws -> [DependencyStatus] {
+        let current = try await store.current(bottle)
+        let prefix = try prefixURL(for: current)
+        return DependencyCatalog.items.map { item in
+            DependencyInstaller.status(of: item, prefix: prefix, record: current.dependencies.last { $0.id == item.id })
+        }
+    }
+
+    /// Installs catalog items in catalog order as one exclusive, stoppable bottle operation.
+    /// `acceptLicense` records that the user accepted every requested item's license. Pinned
+    /// downloads are cached under `Components/dependencies` and verified before every use;
+    /// items whose checks already pass are skipped. Success requires the post-install checks.
+    public func installDependencies(_ ids: [String], in bottle: Bottle, acceptLicense: Bool,
+                                    progress: (@Sendable (DependencyProgress) -> Void)? = nil) async throws -> DependencyInstallResult {
+        let requested = Set(ids)
+        let items = DependencyCatalog.items.filter { requested.contains($0.id) }
+        guard !requested.isEmpty, items.count == requested.count else {
+            let unknown = requested.subtracting(DependencyCatalog.items.map(\.id)).sorted()
+            throw MagicWineError.setup(requested.isEmpty ? "Choose at least one dependency to install."
+                                       : "Unknown dependency: \(unknown.joined(separator: ", ")).")
+        }
+        guard acceptLicense else {
+            let terms = items.map { "\($0.name): \($0.license.name) (\($0.license.url.absoluteString))" }
+            throw MagicWineError.setup("Installing these dependencies requires accepting their licenses:\n" + terms.joined(separator: "\n"))
+        }
+        guard !settingsChanging.contains(bottle.id), dependencyInstalls[bottle.id] == nil else {
+            throw MagicWineError.setup("Wait for this bottle's current setup to finish before installing dependencies.")
+        }
+        try paths.prepare()
+        // Held open for the whole installation so retention never removes it meanwhile.
+        let log = try ProcessLogFile.create(in: ProcessLogs.bottleDirectory(bottle.id, paths: paths),
+                                            operation: "dependencies", detail: items.map(\.id).joined(separator: " "))
+        defer { log.close() }
+        progress?(.started(logURL: log.url))
+        // Stop cancels this task through interruptOperations, like a pending launch.
+        let work = Task { try await self.performDependencyInstall(items, in: bottle, log: log, progress: progress) }
+        dependencyInstalls[bottle.id] = work
+        defer { dependencyInstalls[bottle.id] = nil }
+        do {
+            return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+        } catch {
+            if Task.isCancelled {
+                Self.note("Installation cancelled.", in: log)
+                throw CancellationError()
+            }
+            if error is CancellationError {
+                Self.note("Stopped.", in: log)
+                throw MagicWineError.stopped(logURL: log.url)
+            }
+            if case .stopped? = error as? MagicWineError { throw error }
+            Self.note("Failure: \(error.localizedDescription)", in: log)
+            throw MagicWineError.setup("\(error.localizedDescription)\nDependency log: \(log.url.path)")
+        }
+    }
+
+    private func performDependencyInstall(_ items: [DependencyItem], in bottle: Bottle, log: ProcessLogFile,
+                                          progress: (@Sendable (DependencyProgress) -> Void)?) async throws -> DependencyInstallResult {
+        var current = try await store.current(bottle)
+        guard current.isInitialized else {
+            throw MagicWineError.setup("Initialize this bottle before installing dependencies.")
+        }
+        let prefix = try prefixURL(for: current)
+        for item in items {
+            Self.note("License accepted for \(item.name) \(item.version): \(item.license.name) \(item.license.url.absoluteString)", in: log)
+        }
+        try await withIdleBottleForDependencies(current, log: log) { }
+        var installed: [String] = []
+        var present: [String] = []
+        for item in items {
+            try Task.checkCancellation()
+            if DependencyInstaller.status(of: item, prefix: prefix, record: nil).isInstalled {
+                Self.note("\(item.id): already present; nothing changed.", in: log)
+                present.append(item.id)
+                continue
+            }
+            var downloads: [URL] = []
+            for download in item.downloads {
+                progress?(.downloading(id: item.id, WineDownloadProgress(receivedBytes: 0, totalBytes: download.size)))
+                let file = try await DependencyInstaller.cachedDownload(download, of: item, paths: paths, progress: { update in
+                    progress?(.downloading(id: item.id, update))
+                })
+                Self.note("\(item.id): verified \(download.url.absoluteString) SHA-256 \(download.sha256) at \(file.path)", in: log)
+                downloads.append(file)
+            }
+            progress?(.verifying(id: item.id))
+            progress?(.installing(id: item.id))
+            let stage = DependencyInstaller.cacheDirectory(paths: paths)
+                .appendingPathComponent(".extract-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: stage) }
+            var extracted: [DependencyFile: URL] = [:]
+            for step in DependencyInstaller.steps(for: item) {
+                try Task.checkCancellation()
+                switch step {
+                case .runInstaller(let index, let arguments):
+                    // Verified again immediately before Wine executes it.
+                    let installer = try await DependencyInstaller.cachedDownload(item.downloads[index], of: item, paths: paths)
+                    let result = try await execute(arguments: [installer.path] + arguments, bottle: current,
+                                                   directory: installer.deletingLastPathComponent(), timeout: 1800,
+                                                   exitStatusIsResult: true, log: LogName("dependency", installer.lastPathComponent))
+                    // Installers report success-with-restart and similar as nonzero; the checks decide.
+                    Self.note("\(item.id): \(installer.lastPathComponent) exited with code \(result.exitCode). Log: \(result.logURL.path)", in: log)
+                    try await waitForDependencyWine(current)
+                case .extract(let index, let members):
+                    if !FileManager.default.fileExists(atPath: stage.path) {
+                        try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false,
+                                                                attributes: [.posixPermissions: 0o700])
+                    }
+                    guard case .files(let files) = item.method else { continue }
+                    let wanted = files.filter { $0.download == index && members.contains($0.member) }
+                    let output = try await DependencyInstaller.extract(wanted, from: downloads[index],
+                        into: stage.appendingPathComponent(String(index), isDirectory: true), paths: paths)
+                    extracted.merge(output) { $1 }
+                case .place(let files):
+                    let sources = extracted.filter { files.contains($0.key) }
+                    guard sources.count == files.count else {
+                        throw MagicWineError.setup("\(item.name): not every file was extracted.")
+                    }
+                    try await withIdleBottleForDependencies(current, log: log) {
+                        try GraphicsPrefix.withLock(bottleDirectory: prefix.deletingLastPathComponent()) {
+                            try DependencyInstaller.place(sources, prefix: prefix)
+                        }
+                    }
+                    Self.note("\(item.id): placed \(files.map(\.destination).joined(separator: ", ")) below drive_c/windows.", in: log)
+                case .importRegistry(let text):
+                    let temp = prefix.appendingPathComponent("drive_c/windows/temp", isDirectory: true)
+                    try DependencyInstaller.fs.requireDirectory(temp)
+                    let name = "magicwine-dependencies-\(UUID().uuidString).reg"
+                    let file = temp.appendingPathComponent(name)
+                    try Data(text.utf8).write(to: file, options: .withoutOverwriting)
+                    defer { try? FileManager.default.removeItem(at: file) }
+                    let result = try await execute(arguments: ["reg", "import", #"C:\windows\temp\"# + name], bottle: current,
+                                                   directory: nil, timeout: 120, log: LogName("dependency", "\(item.id) registry"))
+                    Self.note("\(item.id): imported registry values. Log: \(result.logURL.path)\n\(text)", in: log)
+                    try await waitForDependencyWine(current)
+                }
+            }
+            progress?(.checking(id: item.id))
+            let status = DependencyInstaller.status(of: item, prefix: prefix, record: nil)
+            guard status.isInstalled else {
+                throw MagicWineError.setup("\(item.name) did not pass its post-install check. Missing: \(status.missing.prefix(6).joined(separator: ", "))\(status.missing.count > 6 ? ", …" : "").")
+            }
+            // Whole seconds round-trip exactly through bottle.json, so later saves compare equal.
+            let installedAt = Date(timeIntervalSinceReferenceDate: Date().timeIntervalSinceReferenceDate.rounded(.down))
+            current = try await store.recordDependency(InstalledDependency(id: item.id, version: item.version, installedAt: installedAt),
+                                                       in: current)
+            Self.note("\(item.id): post-install check passed.", in: log)
+            installed.append(item.id)
+        }
+        return DependencyInstallResult(bottle: current, logURL: log.url, installed: installed, alreadyPresent: present)
+    }
+
+    /// Waits for every Wine process of the bottle, including installer children, so the
+    /// registry is saved before checks run and files are only placed in an idle prefix.
+    private func waitForDependencyWine(_ bottle: Bottle) async throws {
+        try await serverCommand("-w", in: bottle, timeout: 600, tracked: true)
+    }
+
+    /// Runs `body` while holding exclusive launch and lifetime leases of an idle bottle.
+    private func withIdleBottleForDependencies(_ bottle: Bottle, log: ProcessLogFile, _ body: () throws -> Void) async throws {
+        if active[bottle.id]?.isEmpty != false, pendingLaunches[bottle.id]?.isEmpty != false {
+            // Wine's server outlives the last program by a few seconds. Wait for it briefly
+            // (untracked, so a timeout never kills anything) instead of refusing at once.
+            try? await serverCommand("-w", in: bottle, timeout: 15)
+            try Task.checkCancellation()
+        }
+        let launch: GraphicsOperationLease
+        let lifetime: GraphicsOperationLease
+        do {
+            (_, launch, lifetime) = try await idleBottle(bottle)
+        } catch MagicWineError.setup(let detail) {
+            Self.note("Bottle not idle: \(detail)", in: log)
+            throw MagicWineError.setup("Close this bottle's Windows programs or use Stop before installing dependencies.")
+        }
+        defer { lifetime.release(); launch.release() }
+        try body()
+    }
+
+    private static func note(_ text: String, in log: ProcessLogFile) {
+        log.write(Data((text + "\n").utf8))
     }
 }
 

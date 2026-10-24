@@ -111,6 +111,8 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
     public var msyncEnabled: Bool
     /// Launch switches that never touch the prefix; see `BottleStore.setCompatibility`.
     public internal(set) var compatibility: CompatibilityOptions
+    /// Catalog dependencies MagicWine installed; see `WineRuntime.installDependencies`.
+    public internal(set) var dependencies: [InstalledDependency]
     private var displayPreference: DisplayConfiguration?
     public var display: DisplayConfiguration {
         get { displayPreference ?? .init() }
@@ -121,7 +123,7 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
     public init(id: UUID = UUID(), name: String, createdAt: Date = Date(), runtime: RuntimeDescriptor,
                 isInitialized: Bool = false, programs: [WindowsProgram] = [], graphics: GraphicsConfiguration = .init(),
                 display: DisplayConfiguration = .init(), msyncEnabled: Bool = true,
-                compatibility: CompatibilityOptions = .init()) {
+                compatibility: CompatibilityOptions = .init(), dependencies: [InstalledDependency] = []) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
@@ -132,10 +134,11 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
         self.displayPreference = display
         self.msyncEnabled = msyncEnabled
         self.compatibility = compatibility
+        self.dependencies = dependencies
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, createdAt, runtime, isInitialized, programs, graphics, msyncEnabled, compatibility
+        case id, name, createdAt, runtime, isInitialized, programs, graphics, msyncEnabled, compatibility, dependencies
         case displayPreference = "display"
     }
 
@@ -157,6 +160,7 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
         msyncEnabled = container.contains(.msyncEnabled)
             ? try container.decode(Bool.self, forKey: .msyncEnabled) : true
         compatibility = try container.decodeIfPresent(CompatibilityOptions.self, forKey: .compatibility) ?? .init()
+        dependencies = try container.decodeIfPresent([InstalledDependency].self, forKey: .dependencies) ?? []
     }
 }
 

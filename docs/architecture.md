@@ -64,6 +64,7 @@ MagicWine/
 │   │   └── Wine Stable.app/Contents/Resources/wine/
 │   └── .graphics-views/<receipt-digest>/  # private Metal runtime views
 ├── Components/                       # managed/imported graphics components
+│   └── dependencies/<id>-<sha256-prefix>/  # verified Windows dependency downloads
 └── Logs/
     ├── Bottles/<UUID>/               # one bottle's process logs; dxvk/, dxmt/ backend logs
     └── Library/                      # Wine/component installs, failed version inspections

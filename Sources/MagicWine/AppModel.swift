@@ -857,6 +857,66 @@ final class AppModel: ObservableObject {
         liveLogs[bottleID]?.removeAll { $0.id == launchID }
         if liveLogs[bottleID]?.isEmpty == true { liveLogs[bottleID] = nil }
     }
+
+    // MARK: - Windows dependencies
+
+    @Published private(set) var dependencyStatuses: [UUID: [DependencyStatus]] = [:]
+    @Published private(set) var dependencyProgress: [UUID: DependencyProgress] = [:]
+    @Published private(set) var dependencyErrors: [UUID: String] = [:]
+
+    /// Reads the post-install checks; Wine does not need to run.
+    func refreshDependencies(in bottle: Bottle) {
+        let bottle = current(bottle)
+        guard bottle.isInitialized else { return }
+        Task {
+            do {
+                dependencyStatuses[bottle.id] = try await wine.dependencyStatus(in: bottle)
+            } catch {
+                dependencyErrors[bottle.id] = error.localizedDescription
+            }
+        }
+    }
+
+    /// Call only after the view's license confirmation for exactly these items.
+    func installDependencies(_ ids: [String], in bottle: Bottle) {
+        let bottle = current(bottle)
+        guard !isLoading, bottle.isInitialized, !ids.isEmpty, !activity(for: bottle).blocksPrefixMutation else { return }
+        dependencyErrors[bottle.id] = nil
+        perform(in: bottle, title: "Preparing Windows dependencies…", canStop: true) { [self] in
+            defer {
+                self.dependencyProgress[bottle.id] = nil
+                self.refreshDependencies(in: bottle)
+            }
+            do {
+                let result = try await self.wine.installDependencies(ids, in: bottle, acceptLicense: true) { [weak self] progress in
+                    DispatchQueue.main.async { [weak self] in
+                        self?.updateDependencyProgress(progress, for: bottle.id)
+                    }
+                }
+                self.replace(result.bottle)
+                return OperationResult(exitCode: 0, logURL: result.logURL)
+            } catch {
+                if case .stopped? = error as? MagicWineError {} else {
+                    self.dependencyErrors[bottle.id] = error.localizedDescription
+                }
+                throw error
+            }
+        }
+    }
+
+    private func updateDependencyProgress(_ progress: DependencyProgress, for id: UUID) {
+        guard var state = activities[id], state.title != nil else { return }
+        func name(_ item: String) -> String { DependencyCatalog.item(id: item)?.name ?? item }
+        switch progress {
+        case .started(let log): state.logURL = log
+        case .downloading(let item, _): state.title = "Downloading \(name(item))…"
+        case .verifying(let item): state.title = "Verifying \(name(item))…"
+        case .installing(let item): state.title = "Installing \(name(item))…"
+        case .checking(let item): state.title = "Checking \(name(item))…"
+        }
+        activities[id] = state
+        dependencyProgress[id] = progress
+    }
 }
 
 /// A dismissible, non-error status for one bottle, tied to one specific process log.

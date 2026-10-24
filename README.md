@@ -23,8 +23,9 @@ This creates an ad-hoc-signed development build, not a notarized release. The CL
 
 1. In **Downloads**, choose **Install / Update Wine…** and review the unsigned-runtime trust confirmation.
 2. Create a bottle with **+**.
-3. Use **Install EXE/MSI** to run an installer, or **Add Program** to select an existing launcher.
-4. Launch the program. Experiment with the bottle's graphics settings as needed: Standard, DXVK, DXMT, or locally imported D3DMetal.
+3. If the game or launcher needs them, open **Dependencies…** in the bottle's **Tools** card to install the Visual C++ runtimes, D3DCompiler 47, or Microsoft core fonts (pinned, checksum-verified downloads under Microsoft's own licenses; see [Windows dependencies](docs/dependencies.md)).
+4. Use **Install EXE/MSI** to run an installer, or **Add Program** to select an existing launcher.
+5. Launch the program. Experiment with the bottle's graphics settings as needed: Standard, DXVK, DXMT, or locally imported D3DMetal.
 
 Wine downloads separately; compatibility components ship with the app. D3DMetal is proprietary, is not bundled, and requires a legally obtained local installation under its own terms. MagicWine is not affiliated with CodeWeavers, Apple, or the Wine project.
 

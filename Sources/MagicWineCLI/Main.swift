@@ -300,6 +300,37 @@ struct MagicWineCLI {
             } else {
                 FileHandle.standardOutput.write(try Data(contentsOf: latest.url))
             }
+        case "deps":
+            guard let identifier = values.first else { throw argumentError(depsUsage) }
+            let bottle = try await findBottle(identifier, store: store)
+            let rest = Array(values.dropFirst())
+            if rest.isEmpty {
+                for status in try await runtime.dependencyStatus(in: bottle) {
+                    let item = status.item
+                    let architecture = item.architectures.isEmpty ? "any" : item.architectures.map(\.rawValue).joined(separator: "+")
+                    print("\(item.id)\t\(status.isInstalled ? "installed" : "not installed")\t\(item.version)\t\(architecture)\t\(byteCount(item.downloadSize))\t\(item.name)")
+                    print("    License: \(item.license.name) \(item.license.url.absoluteString)")
+                    if status.isPartial {
+                        print("    Incomplete: \(status.missing.prefix(4).joined(separator: ", "))\(status.missing.count > 4 ? ", …" : "")")
+                    }
+                }
+                return
+            }
+            guard rest.first == "install" else { throw argumentError(depsUsage) }
+            let accepted = rest.contains("--accept-license")
+            let ids = rest.dropFirst().filter { $0 != "--accept-license" }
+            guard !ids.isEmpty, !ids.contains(where: { $0.hasPrefix("--") }) else { throw argumentError(depsUsage) }
+            let result = try await runtime.installDependencies(ids, in: bottle, acceptLicense: accepted) { progress in
+                switch progress {
+                case .started(let log): print("Log: \(log.path)")
+                case .verifying(let id): print("\(id): downloads verified (SHA-256)")
+                case .installing(let id): print("\(id): installing…")
+                case .checking(let id): print("\(id): checking…")
+                case .downloading: break
+                }
+            }
+            for id in result.alreadyPresent { print("\(id): already installed; nothing changed") }
+            for id in result.installed { print("\(id): installed; post-install check passed") }
         default: throw argumentError("Unknown command: \(command)")
         }
     }
@@ -351,6 +382,8 @@ struct MagicWineCLI {
     private static let programUsage = "program <bottle-UUID> <program-UUID> [--name <name>] [--args \"<arguments>\"] [--workdir <folder>|--clear-workdir] [--env KEY=VALUE]… [--unset-env KEY]… [--dll <name>=n|b|n,b|b,n|disabled]… [--unset-dll <name>]… [--avx inherit|on|off]"
 
     private static let compatUsage = "compat <bottle-UUID> [--avx on|off] [--winedebug quiet|default] [--dxvk-hud fps|detailed]"
+
+    private static let depsUsage = "deps <bottle-UUID> [install <dependency-id>… --accept-license]"
 
     /// The enclosing app's Info.plist when packaged (`Contents/MacOS/magicwine-cli`); plain `swift build` binaries have none.
     private static var versionDescription: String {
@@ -415,5 +448,9 @@ struct MagicWineCLI {
       logs <bottle-UUID> [--latest|--path]
         List the bottle's logs, newest first (date, size, operation, program, running/ended, path);
         --latest prints the newest log, --path prints its path (for example to follow it with tail -f)
+      deps <bottle-UUID>                        List Windows dependencies with status, size and license
+      deps <bottle-UUID> install <id>… --accept-license
+        Download (pinned, SHA-256 verified, cached) and install them; --accept-license accepts
+        each item's license shown by deps; refuses while this bottle's programs run
     """
 }

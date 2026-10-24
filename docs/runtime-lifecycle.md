@@ -224,8 +224,9 @@ Mutation semantics intentionally differ:
 | Graphics HUD only | Metadata-only `setGraphicsHUD`: allowed while programs run, never stops processes or touches prefix DLLs, applies to later launches. During its brief metadata write it excludes other setting changes of the same bottle, and a launch starting in that instant is refused with the usual "wait for setup" error. |
 | Program name or launch options | Metadata-only `BottleStore.updateProgram`: allowed while programs run, never stops processes or touches the prefix, applies to that program's next launch; refused when the saved record changed since the edit began. |
 | Compatibility switches | Metadata-only `BottleStore.setCompatibility`: allowed while programs run, never stops processes or touches the prefix, applies to later launches; refused when the saved switches changed since the caller read them. |
+| Windows dependency installation | Waits up to 15 seconds for a lingering server, then requires the same idle probe as synchronization changes; a running program refuses it, nothing is stopped. Files are placed only under exclusive leases. See [Windows dependencies](dependencies.md). |
 
-Retina on means 192 DPI / 200%; off means 96 DPI / 100%, bottle-wide, including games. `BottleStore.prepareDisplay` retains the previous registry bytes and restores them if saving metadata fails. General `BottleStore.save` rejects attempts to bypass the dedicated runtime/display/graphics/synchronization/program-option/compatibility APIs.
+Retina on means 192 DPI / 200%; off means 96 DPI / 100%, bottle-wide, including games. `BottleStore.prepareDisplay` retains the previous registry bytes and restores them if saving metadata fails. General `BottleStore.save` rejects attempts to bypass the dedicated runtime/display/graphics/synchronization/program-option/compatibility APIs and the installed-[dependency](dependencies.md) record.
 
 ## Stop, cancellation, failures, and deletion
 

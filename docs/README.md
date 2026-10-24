@@ -10,6 +10,7 @@ These guides describe the checked-in implementation. Source links identify the o
 | --- | --- |
 | [Architecture](architecture.md) | How do the native app, CLI, core library, Wine processes, and stored data fit together? What is and is not isolated? |
 | [Runtime lifecycle](runtime-lifecycle.md) | How is Wine installed and trusted? What happens during bottle creation, launch, stop, and runtime adoption? |
+| [Windows dependencies](dependencies.md) | Which Microsoft runtimes and fonts can MagicWine install into a bottle? How are they pinned, licensed, verified, and checked? Why is .NET Framework not offered? |
 | [Graphics](graphics.md) | Which path translates a game's graphics calls? How are components selected, validated, backed up, and restored? |
 | [Compatibility patches](compatibility.md) | Which changes live in Wine/DXMT/DXVK versus Swift launch policy? What must be rebuilt together? |
 | [Controllers and XInput](controllers.md) | How do physical input, saved profiles, shared memory, Windows DLLs, and vibration interact? |

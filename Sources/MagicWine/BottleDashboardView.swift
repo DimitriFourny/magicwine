@@ -9,6 +9,7 @@ struct BottleDashboardView: View {
     @State private var editingProgram: WindowsProgram?
     @State private var diagnosticProgram: WindowsProgram?
     @Environment(\.openWindow) private var openWindow
+    @State private var showsDependencies = false
 
     private var currentBottle: Bottle {
         model.bottles.first { $0.id == bottle.id } ?? bottle
@@ -58,6 +59,9 @@ struct BottleDashboardView: View {
         .navigationTitle(currentBottle.name)
         .sheet(item: $editingProgram) { program in
             ProgramEditorView(model: model, bottle: currentBottle, program: program)
+        }
+        .sheet(isPresented: $showsDependencies) {
+            DependenciesView(model: model, bottle: currentBottle)
         }
         .alert("Launch \(diagnosticProgram?.name ?? "") with Diagnostics?", isPresented: Binding(
             get: { diagnosticProgram != nil },
@@ -492,6 +496,9 @@ struct BottleDashboardView: View {
                 toolButton("Logs…", icon: "doc.text") { showLogs() }
                     .help("List this bottle’s logs and open them in the log viewer")
             }
+            toolButton("Dependencies…", icon: "puzzlepiece.extension") { showsDependencies = true }
+                .disabled(!currentBottle.isInitialized)
+                .help("Install Visual C++ runtimes, D3DCompiler 47 or Microsoft core fonts into this bottle")
             rowSeparator
             toolButton("Trash Bottle…", icon: "trash", destructive: true, action: trash)
                 .disabled(prefixLocked)

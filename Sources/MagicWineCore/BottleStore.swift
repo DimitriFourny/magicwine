@@ -77,6 +77,9 @@ public actor BottleStore {
             guard bottle.compatibility == current.compatibility else {
                 throw MagicWineError.setup("Compatibility settings must be changed through BottleStore.setCompatibility.")
             }
+            guard bottle.dependencies == current.dependencies else {
+                throw MagicWineError.setup("Installed dependencies are recorded only by WineRuntime.installDependencies.")
+            }
             for program in bottle.programs {
                 if let saved = current.programs.first(where: { $0.id == program.id }), saved != program {
                     throw MagicWineError.setup("Program names and launch options must be changed through BottleStore.updateProgram.")
@@ -199,6 +202,18 @@ public actor BottleStore {
             }
             guard current.compatibility != options else { return current }
             current.compatibility = options
+            try saveUnlocked(current)
+            return current
+        }
+    }
+
+    /// The runtime installed `record` and its post-install checks passed. Metadata only;
+    /// an earlier record of the same dependency is replaced.
+    internal func recordDependency(_ record: InstalledDependency, in bottle: Bottle) throws -> Bottle {
+        try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
+            var current = try loadUnlocked(bottle)
+            current.dependencies.removeAll { $0.id == record.id }
+            current.dependencies.append(record)
             try saveUnlocked(current)
             return current
         }
