@@ -207,8 +207,8 @@ enum GraphicsRuntimeView {
             // Foundation's APFS copy preserves executable permissions, signatures and
             // extended attributes without modifying or resigning the original image.
             try FileManager.default.copyItem(at: input, to: output)
-            try DXVKInstallation.preserveQuarantine(from: input, to: output)
-            try DXVKInstallation.preserveQuarantine(from: runtime, to: output)
+            try fs.preserveQuarantine(from: input, to: output)
+            try fs.preserveQuarantine(from: runtime, to: output)
         }
         for (name, link) in links {
             try FileManager.default.createSymbolicLink(atPath: stage.appendingPathComponent(name).path, withDestinationPath: link.target)
@@ -216,10 +216,7 @@ enum GraphicsRuntimeView {
         try encoded.write(to: stage.appendingPathComponent("installation.json"), options: .atomic)
         try validate(stage, receipt: receipt, encoded: encoded)
         try Task.checkCancellation()
-        let result = stage.path.withCString { from in destination.path.withCString { renamex_np(from, $0, UInt32(RENAME_EXCL)) } }
-        if result != 0 {
-            let code = errno
-            guard code == EEXIST || code == ENOTEMPTY else { throw failure("Cannot publish the private loader: \(String(cString: strerror(code))).") }
+        if try !fs.publish(stage, to: destination) {
             try validate(destination, receipt: receipt, encoded: encoded)
         }
         return destination.appendingPathComponent(loaderName)
@@ -259,48 +256,16 @@ enum GraphicsRuntimeView {
         guard actual == expected else { throw failure("The private loader is incomplete.") }
     }
 
-    private static func inspect(_ url: URL) throws -> stat {
-        var status = stat()
-        guard url.isFileURL, url.path.withCString({ lstat($0, &status) }) == 0 else { throw failure("Cannot inspect \(url.path).") }
-        return status
-    }
-    private static func requireDirectory(_ url: URL) throws {
-        guard try inspect(url).st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { throw failure("Expected an ordinary directory: \(url.path).") }
-    }
+    private static let fs = SecureFS(prefix: "Graphics runtime view: ")
+    private static let fileMaximum = 128 * 1_048_576
+    private static func inspect(_ url: URL) throws -> stat { try fs.status(url) }
+    private static func requireDirectory(_ url: URL) throws { try fs.requireDirectory(url) }
     private static func requireFile(_ url: URL, allowHardLinks: Bool = false) throws {
-        let status = try inspect(url)
-        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), (allowHardLinks || status.st_nlink == 1), status.st_size > 0,
-              status.st_size <= 128 * 1_048_576 else { throw failure("Expected an ordinary bounded runtime file: \(url.path).") }
+        try fs.requireFile(url, maximum: fileMaximum, allowsHardLinks: allowHardLinks)
     }
-    private static func openFile(_ url: URL, allowHardLinks: Bool = false) throws -> FileHandle {
-        try requireFile(url, allowHardLinks: allowHardLinks)
-        let descriptor = url.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) }
-        guard descriptor >= 0 else { throw failure("Cannot safely open runtime file.") }
-        var status = stat()
-        guard fstat(descriptor, &status) == 0, status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), (allowHardLinks || status.st_nlink == 1) else {
-            close(descriptor)
-            throw failure("Runtime file changed while opening.")
-        }
-        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-    }
-    private static func readFile(_ url: URL, maximum: Int) throws -> Data {
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        let data = try handle.read(upToCount: maximum + 1) ?? Data()
-        guard data.count <= maximum else { throw failure("Runtime metadata exceeds its safety limit.") }
-        return data
-    }
+    private static func readFile(_ url: URL, maximum: Int) throws -> Data { try fs.read(url, maximum: maximum) }
     private static func hash(_ url: URL, allowHardLinks: Bool = false) throws -> String {
-        let handle = try openFile(url, allowHardLinks: allowHardLinks)
-        defer { try? handle.close() }
-        var sha = SHA256(), count = 0
-        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
-            try Task.checkCancellation()
-            count += data.count
-            guard count <= 128 * 1_048_576 else { throw failure("Runtime file exceeds its safety limit.") }
-            sha.update(data: data)
-        }
-        return sha.finalize().map { String(format: "%02x", $0) }.joined()
+        try fs.sha256(url, maximum: fileMaximum, allowsHardLinks: allowHardLinks)
     }
-    private static func failure(_ message: String) -> MagicWineError { .setup("Graphics runtime view: " + message) }
+    private static func failure(_ message: String) -> MagicWineError { fs.failure(message) }
 }

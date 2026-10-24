@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -18,6 +17,7 @@ enum RosettaCPUCompatibility {
     private static let sourceMaximum = 512 * 1_048_576
     private static let licenseMaximum = 1_048_576
     private static var manager: FileManager { .default }
+    private static let fs = SecureFS(prefix: "Rosetta CPU compatibility: ")
 
     /// Explicit payload pins keep isolated filesystem tests independent of Wine.
     /// Production constructs this only from the curated bundle resources.
@@ -42,9 +42,9 @@ enum RosettaCPUCompatibility {
             for directory in [root, bin, root.appendingPathComponent("lib"),
                               root.appendingPathComponent("lib/wine"),
                               runtimeCPU.deletingLastPathComponent()] {
-                try requireDirectory(directory)
+                try fs.requireDirectory(directory)
             }
-            guard try hash(runtimeCPU, maximum: dllMaximum) == originalSHA256 else { return false }
+            guard try fs.sha256(runtimeCPU, maximum: dllMaximum) == originalSHA256 else { return false }
         } catch {
             // Missing, linked, unreadable or otherwise untrusted runtime CPUs
             // cannot establish the known ABI. Never modify such a runtime.
@@ -78,7 +78,7 @@ enum RosettaCPUCompatibility {
         }
         try validatePrefix(prefix, bottle: bottle)
         let destination = prefix.appendingPathComponent("drive_c/windows/system32/wow64cpu.dll")
-        let current = try hash(destination, maximum: dllMaximum)
+        let current = try fs.sha256(destination, maximum: dllMaximum)
         guard current == originalSHA256 || current == payload.dllSHA256 else {
             throw MagicWineError.setup("The bottle has a custom wow64cpu.dll. Rosetta CPU compatibility will not overwrite it.")
         }
@@ -86,7 +86,7 @@ enum RosettaCPUCompatibility {
         // Validate every bundled artifact before creating any installation files.
         for url in [payload.dll, payload.source, payload.license] {
             guard url.isFileURL else { throw MagicWineError.setup("Rosetta CPU resources must be local files.") }
-            try requireDirectory(url.deletingLastPathComponent())
+            try fs.requireDirectory(url.deletingLastPathComponent())
         }
         try verify(payload.dll, digest: payload.dllSHA256, maximum: dllMaximum)
         try verify(payload.source, digest: payload.sourceSHA256, maximum: sourceMaximum)
@@ -94,17 +94,17 @@ enum RosettaCPUCompatibility {
 
         let compatibility = bottle.appendingPathComponent("runtime-compatibility", isDirectory: true)
         let backup = compatibility.appendingPathComponent(componentID, isDirectory: true)
-        if try exists(compatibility) { try requireDirectory(compatibility) }
-        if try exists(backup) {
+        if try fs.exists(compatibility) { try fs.requireDirectory(compatibility) }
+        if try fs.exists(backup) {
             try validateBackup(backup, payload: payload, originalSHA256: originalSHA256)
         } else {
             guard current == originalSHA256 else {
                 throw MagicWineError.setup("The managed wow64cpu.dll has no verified original backup. The bottle was left unchanged.")
             }
-            if try !exists(compatibility) {
+            if try !fs.exists(compatibility) {
                 try manager.createDirectory(at: compatibility, withIntermediateDirectories: false)
             }
-            try requireDirectory(compatibility)
+            try fs.requireDirectory(compatibility)
             let stage = compatibility.appendingPathComponent(".prepare-\(UUID().uuidString)", isDirectory: true)
             try manager.createDirectory(at: stage, withIntermediateDirectories: false,
                                         attributes: [.posixPermissions: 0o700])
@@ -114,11 +114,11 @@ enum RosettaCPUCompatibility {
             try manager.copyItem(at: payload.license, to: stage.appendingPathComponent(licenseName))
             try validateBackup(stage, payload: payload, originalSHA256: originalSHA256)
             try validatePrefix(prefix, bottle: bottle)
-            try requireDirectory(compatibility)
+            try fs.requireDirectory(compatibility)
             // Publish the complete original/source/license set without ever
             // replacing an existing directory or its possibly custom contents.
-            guard renamex_np(stage.path, backup.path, UInt32(RENAME_EXCL)) == 0 else {
-                throw pathError("publish the original CPU backup", backup)
+            guard try fs.publish(stage, to: backup) else {
+                throw fs.failure("Cannot publish the original CPU backup; \(backup.path) already exists.")
             }
         }
 
@@ -138,13 +138,13 @@ enum RosettaCPUCompatibility {
         try manager.copyItem(at: payload.dll, to: stagedDLL)
         try verify(stagedDLL, digest: payload.dllSHA256, maximum: dllMaximum)
         try validatePrefix(prefix, bottle: bottle)
-        try requireDirectory(compatibility)
+        try fs.requireDirectory(compatibility)
         try validateBackup(backup, payload: payload, originalSHA256: originalSHA256)
         try verify(destination, digest: originalSHA256, maximum: dllMaximum)
         // Same-filesystem rename is the last mutation. An already mapped DLL
         // keeps its original inode; no loaded image is truncated or written in place.
         guard rename(stagedDLL.path, destination.path) == 0 else {
-            throw pathError("atomically replace the bottle CPU", destination)
+            throw fs.posixFailure("atomically replace the bottle CPU", destination)
         }
         return true
     }
@@ -152,16 +152,16 @@ enum RosettaCPUCompatibility {
     private static func validatePrefix(_ prefix: URL, bottle: URL) throws {
         let bottles = bottle.deletingLastPathComponent()
         for directory in [bottles.deletingLastPathComponent(), bottles, bottle, prefix] {
-            try requireDirectory(directory)
+            try fs.requireDirectory(directory)
         }
         for path in ["drive_c", "drive_c/windows", "drive_c/windows/system32"] {
-            try requireDirectory(prefix.appendingPathComponent(path, isDirectory: true))
+            try fs.requireDirectory(prefix.appendingPathComponent(path, isDirectory: true))
         }
     }
 
     private static func validateBackup(_ backup: URL, payload: Payload,
                                        originalSHA256: String) throws {
-        try requireDirectory(backup)
+        try fs.requireDirectory(backup)
         guard Set(try manager.contentsOfDirectory(atPath: backup.path)) == Set([originalName, sourceName, licenseName]) else {
             throw MagicWineError.setup("The Rosetta CPU backup is incomplete or contains unrecognized files. It was left unchanged.")
         }
@@ -171,59 +171,8 @@ enum RosettaCPUCompatibility {
     }
 
     private static func verify(_ url: URL, digest: String, maximum: Int) throws {
-        guard try hash(url, maximum: maximum) == digest else {
+        guard try fs.sha256(url, maximum: maximum) == digest else {
             throw MagicWineError.setup("Rosetta CPU compatibility SHA-256 mismatch: \(url.path). No DLL was replaced.")
         }
-    }
-
-    private static func exists(_ url: URL) throws -> Bool {
-        var status = stat()
-        if lstat(url.path, &status) == 0 { return true }
-        if errno == ENOENT { return false }
-        throw pathError("inspect", url)
-    }
-
-    private static func requireDirectory(_ url: URL) throws {
-        var status = stat()
-        guard lstat(url.path, &status) == 0 else { throw pathError("inspect", url) }
-        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
-            throw MagicWineError.setup("Rosetta CPU compatibility requires an ordinary directory, not a symbolic link: \(url.path).")
-        }
-    }
-
-    private static func hash(_ url: URL, maximum: Int) throws -> String {
-        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        guard descriptor >= 0 else { throw pathError("read without following links", url) }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer { try? handle.close() }
-        var before = stat()
-        guard fstat(descriptor, &before) == 0,
-              before.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), before.st_nlink == 1,
-              before.st_size > 0, before.st_size <= maximum else {
-            throw MagicWineError.setup("Rosetta CPU compatibility requires a nonempty ordinary file without hard links and within its size limit: \(url.path).")
-        }
-        var digest = SHA256()
-        var count = 0
-        while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
-            count += chunk.count
-            guard count <= maximum else { throw MagicWineError.setup("Rosetta CPU file exceeds its size limit: \(url.path).") }
-            digest.update(data: chunk)
-        }
-        var after = stat()
-        guard lstat(url.path, &after) == 0, after.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-              after.st_nlink == 1, after.st_dev == before.st_dev, after.st_ino == before.st_ino,
-              after.st_size == before.st_size, count == before.st_size,
-              after.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec,
-              after.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec,
-              after.st_ctimespec.tv_sec == before.st_ctimespec.tv_sec,
-              after.st_ctimespec.tv_nsec == before.st_ctimespec.tv_nsec else {
-            throw MagicWineError.setup("A Rosetta CPU file changed during validation: \(url.path).")
-        }
-        return digest.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func pathError(_ operation: String, _ url: URL) -> MagicWineError {
-        let code = errno
-        return .setup("Cannot \(operation) Rosetta CPU path \(url.path): \(String(cString: strerror(code))).")
     }
 }

@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import Darwin
 
 struct RuntimeInstallation {
@@ -9,6 +8,7 @@ struct RuntimeInstallation {
     static let archiveSHA256 = "b50dc50ec7f41d58b115a6b685d4d1315ba3c797bd3aa0f49213f2703cb82388"
     static let version = "11.0_1"
     static let relativeExecutable = "Wine Stable.app/Contents/Resources/wine/bin/wine"
+    private static let fs = SecureFS(prefix: "Wine installation: ")
 
     static func install(paths: ApplicationPaths,
                         progress: (@Sendable (WineInstallationProgress) -> Void)? = nil) async throws -> URL {
@@ -116,7 +116,7 @@ struct RuntimeInstallation {
         try validateManagedDirectory(destination, paths: paths)
         _ = try validateLayout(at: destination)
         let receiptURL = destination.appendingPathComponent("installation.json")
-        guard try fileType(at: receiptURL) == mode_t(S_IFREG) else {
+        guard try fs.fileType(receiptURL) == mode_t(S_IFREG) else {
             throw MagicWineError.setup("The cached Wine installation receipt is not an ordinary file.")
         }
         let receipt = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: receiptURL))
@@ -159,43 +159,22 @@ struct RuntimeInstallation {
     }
 
     private static func hash(_ url: URL) async throws -> String {
-        let task = Task.detached(priority: .utility) {
-            let file = try FileHandle(forReadingFrom: url)
-            defer { try? file.close() }
-            var digest = SHA256()
-            var bytes = 0
-            while let data = try file.read(upToCount: 1_048_576), !data.isEmpty {
-                try Task.checkCancellation()
-                bytes += data.count
-                guard bytes <= 2_147_483_648 else { throw MagicWineError.setup("Wine archive exceeds the 2 GiB safety limit.") }
-                digest.update(data: data)
-            }
-            return digest.finalize().map { String(format: "%02x", $0) }.joined()
-        }
+        let task = Task.detached(priority: .utility) { try fs.sha256(url, maximum: 2_147_483_648) }
         return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
-    }
-
-    private static func fileType(at url: URL) throws -> mode_t {
-        var status = stat()
-        guard url.path.withCString({ lstat($0, &status) }) == 0 else {
-            let code = errno
-            throw MagicWineError.setup("Cannot inspect Wine installation path \(url.path): \(String(cString: strerror(code)))")
-        }
-        return status.st_mode & mode_t(S_IFMT)
     }
 
     private static func validateManagedDirectory(_ directory: URL, paths: ApplicationPaths) throws {
         let managed = paths.runtimesDirectory.standardizedFileURL
         let target = directory.standardizedFileURL
         guard directory.isFileURL, target.path.hasPrefix(managed.path + "/"),
-              try fileType(at: paths.root) == mode_t(S_IFDIR),
-              try fileType(at: managed) == mode_t(S_IFDIR),
+              try fs.fileType(paths.root) == mode_t(S_IFDIR),
+              try fs.fileType(managed) == mode_t(S_IFDIR),
               target.resolvingSymlinksInPath().path.hasPrefix(managed.resolvingSymlinksInPath().path + "/") else {
             throw MagicWineError.setup("Quarantine removal is restricted to ordinary directories inside MagicWine's managed Runtimes directory.")
         }
         var current = target
         while current.path != managed.path {
-            guard try fileType(at: current) == mode_t(S_IFDIR) else {
+            guard try fs.fileType(current) == mode_t(S_IFDIR) else {
                 throw MagicWineError.setup("The managed Wine installation contains a symbolic link or non-directory root: \(current.path)")
             }
             current.deleteLastPathComponent()
@@ -204,7 +183,7 @@ struct RuntimeInstallation {
 
     private static func validateLayout(at root: URL) throws -> [URL] {
         let app = root.appendingPathComponent("Wine Stable.app", isDirectory: true)
-        guard try fileType(at: app) == mode_t(S_IFDIR) else {
+        guard try fs.fileType(app) == mode_t(S_IFDIR) else {
             throw MagicWineError.setup("Wine Stable.app must be an ordinary directory.")
         }
         let base = root.resolvingSymlinksInPath().standardizedFileURL.path + "/"
@@ -222,7 +201,7 @@ struct RuntimeInstallation {
             guard let entry = item as? URL else {
                 throw MagicWineError.setup("Wine Stable.app enumeration returned an invalid entry.")
             }
-            let type = try fileType(at: entry)
+            let type = try fs.fileType(entry)
             guard entry.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(base) else {
                 throw MagicWineError.setup("The Wine archive contains an escaping symbolic link: \(entry.path)")
             }
@@ -239,7 +218,7 @@ struct RuntimeInstallation {
             let executable = app.appendingPathComponent("Contents/Resources/wine/bin/\(name)")
             guard FileManager.default.isExecutableFile(atPath: executable.path),
                   executable.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(base),
-                  try fileType(at: executable.resolvingSymlinksInPath()) == mode_t(S_IFREG) else {
+                  try fs.fileType(executable.resolvingSymlinksInPath()) == mode_t(S_IFREG) else {
                 throw MagicWineError.setup("The Wine archive is missing its executable \(name).")
             }
         }
@@ -253,7 +232,7 @@ struct RuntimeInstallation {
         let base = app.resolvingSymlinksInPath().standardizedFileURL.path
         var removed = 0
         for target in targets {
-            let type = try fileType(at: target)
+            let type = try fs.fileType(target)
             let resolved = target.resolvingSymlinksInPath().standardizedFileURL.path
             guard (type == mode_t(S_IFREG) || type == mode_t(S_IFDIR)),
                   resolved == base || resolved.hasPrefix(base + "/") else {
@@ -280,7 +259,7 @@ struct RuntimeInstallation {
         let data = try JSONEncoder().encode(receipt)
         let receiptURL = root.appendingPathComponent("installation.json")
         if FileManager.default.fileExists(atPath: receiptURL.path) {
-            guard try fileType(at: receiptURL) == mode_t(S_IFREG) else {
+            guard try fs.fileType(receiptURL) == mode_t(S_IFREG) else {
                 throw MagicWineError.setup("The Wine installation receipt is not an ordinary file.")
             }
             // Preserve the cached receipt's attributes outside the quarantine-removal scope.

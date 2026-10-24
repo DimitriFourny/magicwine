@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -34,28 +33,28 @@ final class GamepadBridgeSession {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
         }
-        try GamepadBridge.requireDirectory(root)
+        try GamepadBridge.fs.requireDirectory(root)
         var directory = root
         for name in ["Gamepads", "Sessions"] {
             directory.appendPathComponent(name, isDirectory: true)
-            if try !GamepadBridge.exists(directory) {
+            if try !GamepadBridge.fs.exists(directory) {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
                                                         attributes: [.posixPermissions: 0o700])
             }
-            try GamepadBridge.requireDirectory(directory)
+            try GamepadBridge.fs.requireDirectory(directory)
         }
         let file = directory.appendingPathComponent(UUID().uuidString + ".state")
         let fd = open(file.path, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { throw GamepadBridge.pathError("create the gamepad session", file) }
+        guard fd >= 0 else { throw GamepadBridge.fs.posixFailure("create the gamepad session at", file) }
         guard ftruncate(fd, off_t(Self.length)) == 0 else {
-            let error = GamepadBridge.pathError("size the gamepad session", file)
+            let error = GamepadBridge.fs.posixFailure("size the gamepad session at", file)
             close(fd)
             unlink(file.path)
             throw error
         }
         guard let address = mmap(nil, Self.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0),
               address != MAP_FAILED else {
-            let error = GamepadBridge.pathError("map the gamepad session", file)
+            let error = GamepadBridge.fs.posixFailure("map the gamepad session at", file)
             close(fd)
             unlink(file.path)
             throw error
@@ -222,6 +221,7 @@ enum GamepadBridge {
     private static let sourceMaximum = 16 * 1_048_576
     private static let licenseMaximum = 1_048_576
     private static var manager: FileManager { .default }
+    fileprivate static let fs = SecureFS(prefix: "Gamepad bridge: ")
 
     struct Payload {
         let i686: URL
@@ -286,11 +286,11 @@ enum GamepadBridge {
                                        (payload.x8664, payload.x8664SHA256, dllMaximum),
                                        (payload.source, payload.sourceSHA256, sourceMaximum),
                                        (payload.license, payload.licenseSHA256, licenseMaximum)] {
-            try requireDirectory(url.deletingLastPathComponent())
+            try fs.requireDirectory(url.deletingLastPathComponent())
             try verify(url, digest: digest, maximum: maximum)
         }
-        try validatePE(try readFile(payload.i686, maximum: dllMaximum), machine: 0x014c, builtin: false)
-        try validatePE(try readFile(payload.x8664, maximum: dllMaximum), machine: 0x8664, builtin: false)
+        try validatePE(try fs.read(payload.i686, maximum: dllMaximum), path: payload.i686.path, machine: 0x014c, builtin: false)
+        try validatePE(try fs.read(payload.x8664, maximum: dllMaximum), path: payload.x8664.path, machine: 0x8664, builtin: false)
         let destinations = ["system32", "syswow64"].flatMap { directory in
             dllNames.map { name in
                 Destination(path: directory + "/" + name + ".dll",
@@ -303,12 +303,12 @@ enum GamepadBridge {
         let windows = prefix.appendingPathComponent("drive_c/windows", isDirectory: true)
         let compatibility = bottle.appendingPathComponent("runtime-compatibility", isDirectory: true)
         let backup = compatibility.appendingPathComponent(componentID, isDirectory: true)
-        if try exists(compatibility) { try requireDirectory(compatibility) }
+        if try fs.exists(compatibility) { try fs.requireDirectory(compatibility) }
         // Preflight ALL names/architectures before creating backups or replacing
         // anything. One custom DLL must leave every other DLL untouched.
         let inspections = try destinations.map { try inspect(windows.appendingPathComponent($0.path), destination: $0) }
         let receipt: Receipt
-        if try exists(backup) {
+        if try fs.exists(backup) {
             receipt = try validateBackup(backup, destinations: destinations, payload: payload)
             try matchOriginals(inspections, receipt: receipt)
         } else {
@@ -316,11 +316,11 @@ enum GamepadBridge {
                 throw MagicWineError.setup("A managed XInput DLL has no original backup. The bottle was left unchanged.")
             }
             receipt = Receipt(version: 1, originals: inspections.compactMap(\.original))
-            if try !exists(compatibility) {
+            if try !fs.exists(compatibility) {
                 try manager.createDirectory(at: compatibility, withIntermediateDirectories: false,
                                             attributes: [.posixPermissions: 0o700])
             }
-            try requireDirectory(compatibility)
+            try fs.requireDirectory(compatibility)
             let stage = compatibility.appendingPathComponent(".gamepad-backup-" + UUID().uuidString, isDirectory: true)
             try manager.createDirectory(at: stage, withIntermediateDirectories: false,
                                         attributes: [.posixPermissions: 0o700])
@@ -352,9 +352,9 @@ enum GamepadBridge {
             try encoder.encode(receipt).write(to: stage.appendingPathComponent("originals.json"), options: .atomic)
             _ = try validateBackup(stage, destinations: destinations, payload: payload)
             try validatePrefix(prefix, bottle: bottle)
-            try requireDirectory(compatibility)
-            guard renamex_np(stage.path, backup.path, UInt32(RENAME_EXCL)) == 0 else {
-                throw pathError("publish the original XInput backup", backup)
+            try fs.requireDirectory(compatibility)
+            guard try fs.publish(stage, to: backup) else {
+                throw fs.failure("Cannot publish the original XInput backup; \(backup.path) already exists.")
             }
         }
 
@@ -369,7 +369,7 @@ enum GamepadBridge {
             try verify(temporary, digest: destination.digest, maximum: dllMaximum)
         }
         try validatePrefix(prefix, bottle: bottle)
-        try requireDirectory(compatibility)
+        try fs.requireDirectory(compatibility)
         _ = try validateBackup(backup, destinations: destinations, payload: payload)
         let finalInspections = try destinations.map { try inspect(windows.appendingPathComponent($0.path), destination: $0) }
         try matchOriginals(finalInspections, receipt: receipt)
@@ -379,23 +379,21 @@ enum GamepadBridge {
         for (temporary, destination) in staged {
             // Never truncate a loaded DLL or follow a destination symlink.
             let target = windows.appendingPathComponent(destination.path)
-            guard rename(temporary.path, target.path) == 0 else { throw pathError("install the XInput bridge", target) }
+            guard rename(temporary.path, target.path) == 0 else { throw fs.posixFailure("install the XInput bridge at", target) }
         }
         return overrides
     }
 
     private static func validatePrefix(_ prefix: URL, bottle: URL) throws {
         let bottles = bottle.deletingLastPathComponent()
-        for directory in [bottles.deletingLastPathComponent(), bottles, bottle, prefix] { try requireDirectory(directory) }
+        for directory in [bottles.deletingLastPathComponent(), bottles, bottle, prefix] { try fs.requireDirectory(directory) }
         for path in ["drive_c", "drive_c/windows", "drive_c/windows/system32", "drive_c/windows/syswow64"] {
-            try requireDirectory(prefix.appendingPathComponent(path, isDirectory: true))
+            try fs.requireDirectory(prefix.appendingPathComponent(path, isDirectory: true))
         }
     }
 
     private static func inspect(_ url: URL, destination: Destination) throws -> Inspection {
-        var status = stat()
-        if lstat(url.path, &status) != 0 {
-            guard errno == ENOENT else { throw pathError("inspect the XInput DLL", url) }
+        guard let status = try fs.statusIfPresent(url) else {
             return Inspection(original: Original(path: destination.path, kind: "absent", digest: nil, link: nil), content: nil)
         }
         let kind = status.st_mode & mode_t(S_IFMT)
@@ -404,15 +402,15 @@ enum GamepadBridge {
         }
         let link = kind == mode_t(S_IFLNK) ? try manager.destinationOfSymbolicLink(atPath: url.path) : nil
         let content = link != nil ? url.resolvingSymlinksInPath() : url
-        let data = try readFile(content, maximum: dllMaximum)
-        let digest = sha256(data)
+        let data = try fs.read(content, maximum: dllMaximum)
+        let digest = SecureFS.digest(data)
         if link == nil, digest == destination.digest { return Inspection(original: nil, content: nil) }
         if link == nil, digest == destination.redistributableDigest {
-            try validatePE(data, machine: destination.machine, builtin: false)
+            try validatePE(data, path: destination.path, machine: destination.machine, builtin: false)
             return Inspection(original: Original(path: destination.path, kind: "file", digest: digest, link: nil),
                               content: content, preservesNative: true)
         }
-        do { try validatePE(data, machine: destination.machine, builtin: true) }
+        do { try validatePE(data, path: destination.path, machine: destination.machine, builtin: true) }
         catch { throw MagicWineError.setup("The bottle has a custom or invalid \(destination.path). MagicWine will not overwrite it.") }
         return Inspection(original: Original(path: destination.path, kind: link == nil ? "file" : "link",
                                              digest: digest, link: link), content: content)
@@ -430,12 +428,12 @@ enum GamepadBridge {
     }
 
     private static func validateBackup(_ backup: URL, destinations: [Destination], payload: Payload) throws -> Receipt {
-        try requireDirectory(backup)
+        try fs.requireDirectory(backup)
         let entries = Set(try manager.contentsOfDirectory(atPath: backup.path))
         guard entries == Set(["originals.json", "system32", "syswow64", sourceName, licenseName]) else {
             throw MagicWineError.setup("The XInput backup contains missing or unrecognized files.")
         }
-        let receipt = try JSONDecoder().decode(Receipt.self, from: readFile(backup.appendingPathComponent("originals.json"), maximum: 65_536))
+        let receipt = try JSONDecoder().decode(Receipt.self, from: fs.read(backup.appendingPathComponent("originals.json"), maximum: 65_536))
         guard receipt.version == 1, receipt.originals.map(\.path) == destinations.map(\.path) else {
             throw MagicWineError.setup("The XInput backup manifest has an unsupported layout.")
         }
@@ -443,7 +441,7 @@ enum GamepadBridge {
         try verify(backup.appendingPathComponent(licenseName), digest: payload.licenseSHA256, maximum: licenseMaximum)
         var expected: [String: Set<String>] = ["system32": [], "syswow64": []]
         for directory in ["system32", "syswow64"] {
-            try requireDirectory(backup.appendingPathComponent(directory, isDirectory: true))
+            try fs.requireDirectory(backup.appendingPathComponent(directory, isDirectory: true))
         }
         for (original, destination) in zip(receipt.originals, destinations) {
             let saved = backup.appendingPathComponent(original.path + ".original")
@@ -458,9 +456,7 @@ enum GamepadBridge {
                 expected[directory, default: []].insert(saved.lastPathComponent)
                 content = saved
             case "link":
-                var status = stat()
-                guard let link = original.link, lstat(saved.path, &status) == 0,
-                      status.st_mode & mode_t(S_IFMT) == mode_t(S_IFLNK),
+                guard let link = original.link, (try? fs.fileTypeIfPresent(saved)) == mode_t(S_IFLNK),
                       try manager.destinationOfSymbolicLink(atPath: saved.path) == link else {
                     throw MagicWineError.setup("An original XInput symbolic link was changed or lost.")
                 }
@@ -468,15 +464,15 @@ enum GamepadBridge {
                 expected[directory, default: []].formUnion([saved.lastPathComponent, content.lastPathComponent])
             default: throw MagicWineError.setup("The XInput backup contains an unknown original type.")
             }
-            let data = try readFile(content, maximum: dllMaximum)
-            let digest = sha256(data)
+            let data = try fs.read(content, maximum: dllMaximum)
+            let digest = SecureFS.digest(data)
             guard digest == original.digest else { throw MagicWineError.setup("The preserved XInput original failed its SHA-256 check.") }
             let native = original.kind == "file" && digest == destination.redistributableDigest
-            try validatePE(data, machine: destination.machine, builtin: !native)
+            try validatePE(data, path: original.path, machine: destination.machine, builtin: !native)
         }
         for directory in ["system32", "syswow64"] {
             let url = backup.appendingPathComponent(directory, isDirectory: true)
-            try requireDirectory(url)
+            try fs.requireDirectory(url)
             guard Set(try manager.contentsOfDirectory(atPath: url.path)) == expected[directory] else {
                 throw MagicWineError.setup("The XInput original backup is incomplete or contains unrecognized files.")
             }
@@ -484,74 +480,18 @@ enum GamepadBridge {
         return receipt
     }
 
-    private static func validatePE(_ data: Data, machine: UInt16, builtin: Bool) throws {
-        func word(_ offset: Int) -> UInt16 { UInt16(data[offset]) | UInt16(data[offset + 1]) << 8 }
-        guard data.count >= 128, data[0] == 0x4d, data[1] == 0x5a else { throw MagicWineError.setup("Invalid XInput PE header.") }
-        let pe = Int(UInt32(word(0x3c)) | UInt32(word(0x3e)) << 16)
-        guard pe >= 64, pe <= data.count - 24,
-              data[pe] == 0x50, data[pe + 1] == 0x45, data[pe + 2] == 0, data[pe + 3] == 0,
-              word(pe + 4) == machine, word(pe + 22) & 0x2000 != 0 else {
-            throw MagicWineError.setup("The XInput DLL has an invalid PE architecture or image type.")
-        }
-        if builtin {
-            let markers = [Array("Wine builtin DLL\0".utf8), Array("Wine placeholder DLL\0".utf8)]
-            guard markers.contains(where: { data[64..<(64 + $0.count)].elementsEqual($0) }) else {
-                throw MagicWineError.setup("The existing XInput DLL is not a Wine builtin.")
-            }
-        }
+    /// Wine's own DLLs carry a builtin/placeholder marker; Microsoft and bundled
+    /// bridge DLLs are native. The optional header is not inspected here.
+    private static func validatePE(_ data: Data, path: String, machine: UInt16, builtin: Bool) throws {
+        guard data.count >= 128 else { throw MagicWineError.setup("Invalid XInput PE header.") }
+        try PEInspector.validateDLL(data, path: path, machine: machine, requiresOptionalHeader: false,
+                                    markers: builtin ? [.builtin, .placeholder] : [], fs: fs)
     }
 
     private static func verify(_ url: URL, digest: String, maximum: Int) throws {
         guard digest.count == 64, digest.allSatisfy({ $0.isHexDigit }),
-              try sha256(readFile(url, maximum: maximum)) == digest else {
+              try SecureFS.digest(fs.read(url, maximum: maximum)) == digest else {
             throw MagicWineError.setup("XInput bridge SHA-256 mismatch: \(url.path). The bridge payload must be independently pinned before installation.")
         }
-    }
-    private static func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
-
-    /// Match RosettaCPUCompatibility's no-symlink/no-hardlink bounded reads and
-    /// detect replacement or mutation while hashing. Backed-up links are never
-    /// followed here; their resolved original bytes are stored separately.
-    private static func readFile(_ url: URL, maximum: Int) throws -> Data {
-        guard url.isFileURL else { throw MagicWineError.setup("XInput resources must be local files.") }
-        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        guard fd >= 0 else { throw pathError("read without following links", url) }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        defer { try? handle.close() }
-        var before = stat()
-        guard fstat(fd, &before) == 0, before.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-              before.st_nlink == 1, before.st_size > 0, before.st_size <= maximum else {
-            throw MagicWineError.setup("XInput bridge files must be nonempty ordinary files without hard links and within their size limit: \(url.path).")
-        }
-        let data = try handle.read(upToCount: maximum + 1) ?? Data()
-        var after = stat()
-        guard lstat(url.path, &after) == 0, after.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), after.st_nlink == 1,
-              after.st_dev == before.st_dev, after.st_ino == before.st_ino, after.st_size == before.st_size,
-              data.count == before.st_size,
-              after.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec,
-              after.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec,
-              after.st_ctimespec.tv_sec == before.st_ctimespec.tv_sec,
-              after.st_ctimespec.tv_nsec == before.st_ctimespec.tv_nsec else {
-            throw MagicWineError.setup("An XInput bridge file changed during validation: \(url.path).")
-        }
-        return data
-    }
-
-    fileprivate static func exists(_ url: URL) throws -> Bool {
-        var status = stat()
-        if lstat(url.path, &status) == 0 { return true }
-        if errno == ENOENT { return false }
-        throw pathError("inspect", url)
-    }
-    fileprivate static func requireDirectory(_ url: URL) throws {
-        var status = stat()
-        guard lstat(url.path, &status) == 0 else { throw pathError("inspect", url) }
-        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
-            throw MagicWineError.setup("The gamepad bridge requires an ordinary directory, not a symbolic link: \(url.path).")
-        }
-    }
-    fileprivate static func pathError(_ operation: String, _ url: URL) -> MagicWineError {
-        let code = errno
-        return .setup("Cannot \(operation) at \(url.path): \(String(cString: strerror(code))).")
     }
 }

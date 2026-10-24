@@ -749,30 +749,8 @@ public actor WineRuntime {
     private nonisolated func requiresRosetta(_ executable: URL) throws -> Bool {
         let handle = try FileHandle(forReadingFrom: executable)
         defer { try? handle.close() }
-        let data = try handle.read(upToCount: 4096) ?? Data()
-        func word(_ offset: Int, little: Bool) -> UInt32? {
-            guard offset + 4 <= data.count else { return nil }
-            return (0..<4).reduce(UInt32(0)) { value, index in
-                value | (UInt32(data[offset + index]) << (8 * (little ? index : 3 - index)))
-            }
-        }
-        guard let magic = word(0, little: false) else { return false }
-        if magic == 0xcffaedfe || magic == 0xcefaedfe { return word(4, little: true) == 0x01000007 }
-        if magic == 0xfeedfacf || magic == 0xfeedface { return word(4, little: false) == 0x01000007 }
-        if magic == 0xcafebabe || magic == 0xcafebabf || magic == 0xbebafeca || magic == 0xbfbafeca {
-            let little = magic == 0xbebafeca || magic == 0xbfbafeca
-            let stride = (magic == 0xcafebabf || magic == 0xbfbafeca) ? 32 : 20
-            let count = Int(word(4, little: little) ?? 0)
-            guard count <= (data.count - 8) / stride else { return false }
-            var intel = false
-            for index in 0..<count {
-                let cpu = word(8 + index * stride, little: little)
-                if cpu == 0x0100000c { return false }
-                if cpu == 0x01000007 { intel = true }
-            }
-            return intel
-        }
-        return false
+        let cpus = MachOInspector.cpuTypes(in: try handle.read(upToCount: 4096) ?? Data()) ?? []
+        return cpus.contains(MachOInspector.x86_64) && !cpus.contains(MachOInspector.arm64)
     }
 
     private func isReferenceRuntime(_ url: URL) -> Bool {

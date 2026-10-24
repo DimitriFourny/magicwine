@@ -2,10 +2,12 @@ import Darwin
 import Foundation
 
 internal enum BottleDesktop {
+    private static let fs = SecureFS(prefix: "Bottle Desktop setup: ")
+
     /// Call under the bottle lock, before starting Wine or scanning its Desktop.
     static func prepare(prefix: URL) throws {
         guard prefix.isFileURL else { throw MagicWineError.invalidBottle }
-        try requireDirectory(prefix)
+        try fs.requireDirectory(prefix)
         let drive = prefix.appendingPathComponent("drive_c")
         try ensureDirectory(drive)
         let users = drive.appendingPathComponent("users")
@@ -19,17 +21,17 @@ internal enum BottleDesktop {
         let profiles = try FileManager.default.contentsOfDirectory(
             at: users, includingPropertiesForKeys: nil)
         for profile in profiles {
-            let type = try fileType(profile)
+            let type = try fs.fileTypeIfPresent(profile)
             guard type != mode_t(S_IFLNK) else {
-                throw unsafeDirectory(profile)
+                throw fs.directoryFailure(profile)
             }
             guard type == mode_t(S_IFDIR) else { continue }
             let desktop = profile.appendingPathComponent("Desktop")
-            if try fileType(desktop) == mode_t(S_IFLNK) {
+            if try fs.fileTypeIfPresent(desktop) == mode_t(S_IFLNK) {
                 // unlink removes the link itself, including a broken one. Never
                 // enumerate, copy, move, or remove anything at its host target.
                 guard unlink(desktop.path) == 0 else {
-                    throw fileError("Cannot remove Desktop link at \(desktop.path)")
+                    throw fs.posixFailure("remove the Desktop link at", desktop)
                 }
             }
             // shell32/shellpath.c checks PathFileExistsW before create_link, so
@@ -69,28 +71,9 @@ internal enum BottleDesktop {
     }
 
     private static func ensureDirectory(_ url: URL) throws {
-        if try fileType(url) == nil {
+        if try fs.fileTypeIfPresent(url) == nil {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         }
-        try requireDirectory(url)
-    }
-
-    private static func requireDirectory(_ url: URL) throws {
-        guard try fileType(url) == mode_t(S_IFDIR) else { throw unsafeDirectory(url) }
-    }
-
-    private static func fileType(_ url: URL) throws -> mode_t? {
-        var status = stat()
-        if lstat(url.path, &status) == 0 { return status.st_mode & mode_t(S_IFMT) }
-        if errno == ENOENT { return nil }
-        throw fileError("Cannot inspect \(url.path)")
-    }
-
-    private static func unsafeDirectory(_ url: URL) -> MagicWineError {
-        .setup("Bottle Desktop setup requires a real directory, not a symbolic link or file: \(url.path)")
-    }
-
-    private static func fileError(_ detail: String) -> MagicWineError {
-        .setup("\(detail): \(String(cString: strerror(errno)))")
+        try fs.requireDirectory(url)
     }
 }

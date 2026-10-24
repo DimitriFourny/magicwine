@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 import Metal
@@ -55,7 +54,7 @@ enum DXMTInstallation {
         files[stockArchiveName] = stockArchiveSHA256
         files[sourceArchiveName] = DXMTRemoteBuildPins.sourceSHA256
         files[provenanceName] = DXMTRemoteBuildPins.provenanceSHA256
-        files["PROVENANCE.txt"] = digest(Data(provenance.utf8))
+        files["PROVENANCE.txt"] = SecureFS.digest(Data(provenance.utf8))
         return files
     }
     private static var expectedReceipt: Receipt {
@@ -97,55 +96,31 @@ enum DXMTInstallation {
         default: throw MagicWineError.setup("Unsupported DXMT component \(requested). Restore Standard before selecting the current DXMT component.")
         }
     }
-    private struct FileStamp: Equatable, Sendable {
-        let device: Int32
-        let inode: UInt64
-        let size: Int64
-        let modifiedSeconds: Int
-        let modifiedNanoseconds: Int
-        let changedSeconds: Int
-        let changedNanoseconds: Int
+    private static let fs = SecureFS(prefix: "DXMT: ")
+    private static let cache = SecureFS.ValidationCache()
+    /// Historical limit of the DXVK PE validator these DLL checks originally shared.
+    private static let peMaximum = 32 * 1_048_576
 
-        init(_ status: stat) {
-            device = status.st_dev
-            inode = status.st_ino
-            size = status.st_size
-            modifiedSeconds = status.st_mtimespec.tv_sec
-            modifiedNanoseconds = status.st_mtimespec.tv_nsec
-            changedSeconds = status.st_ctimespec.tv_sec
-            changedNanoseconds = status.st_ctimespec.tv_nsec
-        }
+    private static func maximum(for name: String) -> Int {
+        name == sourceArchiveName ? 1_024 * 1_048_576 : 64 * 1_048_576
     }
 
-    // Process-local adoption cache, never persisted as evidence of integrity. The
-    // first adoption hashes every file; inode/size/mtime/ctime changes invalidate it.
-    private final class ValidationCache: @unchecked Sendable {
-        private let lock = NSLock()
-        private var entries: [String: [String: FileStamp]] = [:]
-
-        func matches(_ stamps: [String: FileStamp], at root: URL) -> Bool {
-            lock.withLock { entries[root.path] == stamps }
-        }
-
-        func remember(_ stamps: [String: FileStamp], at root: URL) {
-            lock.withLock { entries[root.path] = stamps }
-        }
+    private static func requireFile(_ url: URL) throws {
+        try fs.requireFile(url, maximum: maximum(for: url.lastPathComponent))
     }
-    private static let cache = ValidationCache()
-
 
     static func install(paths: ApplicationPaths,
                         progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> URL {
         try Task.checkCancellation()
         guard paths.root.isFileURL else { throw MagicWineError.setup("DXMT requires a local data directory.") }
-        if try exists(paths.root) {
-            try requireDirectory(paths.root)
-            if try exists(paths.componentsDirectory) { try requireDirectory(paths.componentsDirectory) }
+        if try fs.exists(paths.root) {
+            try fs.requireDirectory(paths.root)
+            if try fs.exists(paths.componentsDirectory) { try fs.requireDirectory(paths.componentsDirectory) }
         }
         try paths.prepare()
         try validateManagedParents(paths)
         let destination = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
-        if try exists(destination) {
+        if try fs.exists(destination) {
             progress?(.verifying)
             try validateRoot(destination)
             try Task.checkCancellation()
@@ -163,26 +138,13 @@ enum DXMTInstallation {
         try requireFile(bundled)
         try requireFile(license)
         let archive = stage.appendingPathComponent(archiveName + ".tar.gz")
-        try FileManager.default.copyItem(at: bundled, to: archive)
-        try DXVKInstallation.preserveQuarantine(from: bundled, to: archive)
-        let hashing = Task.detached(priority: .utility) { try hash(archive, maximum: 32 * 1_048_576) }
-        let checksum = try await withTaskCancellationHandler { try await hashing.value } onCancel: { hashing.cancel() }
-        guard checksum == archiveSHA256 else { throw MagicWineError.setup("DXMT archive SHA-256 mismatch; nothing was installed.") }
-        let listing = try await RuntimeInstallation.tool("/usr/bin/tar", arguments: ["-tf", archive.path],
-            paths: paths, name: "dxmt-archive-list", timeout: 60)
-        let verbose = try await RuntimeInstallation.tool("/usr/bin/tar", arguments: ["-tvf", archive.path],
-            paths: paths, name: "dxmt-archive-types", timeout: 60)
-        try validateArchiveMembers(logRows(listing.logURL), types: logRows(verbose.logURL).compactMap(\.first))
-        try Task.checkCancellation()
-        progress?(.installing)
-        let extraction = stage.appendingPathComponent("payload", isDirectory: true)
-        try FileManager.default.createDirectory(at: extraction, withIntermediateDirectories: false)
-        _ = try await RuntimeInstallation.tool("/usr/bin/tar", arguments: ["-xf", archive.path, "-C", extraction.path,
-            "--no-same-owner", "--no-same-permissions"], paths: paths, name: "dxmt-archive-extract", timeout: 180)
+        let extraction = try await BundledArchive.extract(bundled, to: archive, sha256: archiveSHA256,
+            maximum: 32 * 1_048_576, toolPrefix: "dxmt", paths: paths, fs: fs,
+            progress: progress, validateMembers: validateArchiveMembers)
         let component = extraction.appendingPathComponent(archiveRoot, isDirectory: true)
         try validatePayloadLayout(at: component)
         for (name, expected) in payloadDigests {
-            guard try hash(component.appendingPathComponent(name), maximum: 64 * 1_048_576) == expected else {
+            guard try fs.sha256(component.appendingPathComponent(name), maximum: 64 * 1_048_576) == expected else {
                 throw MagicWineError.setup("DXMT pinned payload checksum mismatch: \(name).")
             }
         }
@@ -196,13 +158,13 @@ enum DXMTInstallation {
             try requireFile(resource)
             let target = component.appendingPathComponent(name)
             try FileManager.default.copyItem(at: resource, to: target)
-            try DXVKInstallation.preserveQuarantine(from: resource, to: target)
+            try fs.preserveQuarantine(from: resource, to: target)
         }
         try writeReceipt(at: component)
         // Propagate quarantine to every loadable copy, not only its enclosing directory.
-        try DXVKInstallation.preserveQuarantine(from: bundled, to: component)
+        try fs.preserveQuarantine(from: bundled, to: component)
         for name in payloadDigests.keys {
-            try DXVKInstallation.preserveQuarantine(from: bundled, to: component.appendingPathComponent(name))
+            try fs.preserveQuarantine(from: bundled, to: component.appendingPathComponent(name))
         }
         try validateRoot(component)
         return try publish(component, paths: paths)
@@ -252,7 +214,7 @@ enum DXMTInstallation {
             unix = bin.deletingLastPathComponent().appendingPathComponent("lib/wine/x86_64-unix", isDirectory: true)
         } else if bin.lastPathComponent == "x86_64-unix" { unix = bin }
         else { throw MagicWineError.setup("DXMT requires Wine's bin/wine or lib/wine/x86_64-unix/wine layout.") }
-        try requireDirectory(unix)
+        try fs.requireDirectory(unix)
         let loader = try inspectMachO(resolved)
         guard loader.fileType == 2 else { throw MagicWineError.setup("DXMT requires a native x86_64 Wine loader.") }
         let driver = try inspectMachO(unix.appendingPathComponent("winemac.so"))
@@ -268,9 +230,10 @@ enum DXMTInstallation {
         let wineLib = unix.deletingLastPathComponent()
         for architecture in ["i386-windows", "x86_64-windows"] {
             let directory = wineLib.appendingPathComponent(architecture, isDirectory: true)
-            try requireDirectory(directory)
-            try DXVKInstallation.validatePE(directory.appendingPathComponent("winemac.drv"),
-                                            machine: architecture == "i386-windows" ? 0x014c : 0x8664)
+            try fs.requireDirectory(directory)
+            try PEInspector.validateDLL(directory.appendingPathComponent("winemac.drv"),
+                                        machine: architecture == "i386-windows" ? PEInspector.i386 : PEInspector.amd64,
+                                        fs: fs, maximum: peMaximum)
         }
     }
 
@@ -299,7 +262,7 @@ enum DXMTInstallation {
     }
 
     static func validatePayloadLayout(at root: URL, includesMetadata: Bool = false) throws {
-        try requireDirectory(root)
+        try fs.requireDirectory(root)
         let payloadNames = Array(payloadDigests.keys)
         var expected = Set(payloadNames).union(directories)
         if includesMetadata {
@@ -317,13 +280,15 @@ enum DXMTInstallation {
             guard entry.standardizedFileURL.path.hasPrefix(prefix) else { throw MagicWineError.setup("Escaping DXMT payload path.") }
             let name = String(entry.standardizedFileURL.path.dropFirst(prefix.count))
             guard expected.contains(name) else { throw MagicWineError.setup("Unexpected DXMT payload: \(name).") }
-            if directories.contains(name) { try requireDirectory(entry) } else { try requireFile(entry) }
+            if directories.contains(name) { try fs.requireDirectory(entry) } else { try requireFile(entry) }
             actual.insert(name)
         }
         if let enumerationError { throw enumerationError }
         guard actual == expected else { throw MagicWineError.setup("Missing DXMT payload: \(expected.subtracting(actual).sorted().joined(separator: ", ")).") }
         for name in payloadNames where name.hasSuffix(".dll") {
-            try DXVKInstallation.validatePE(root.appendingPathComponent(name), machine: name.hasPrefix("i386-") ? 0x014c : 0x8664)
+            try PEInspector.validateDLL(root.appendingPathComponent(name),
+                                        machine: name.hasPrefix("i386-") ? PEInspector.i386 : PEInspector.amd64,
+                                        fs: fs, maximum: peMaximum)
         }
         let nativeName = "x86_64-unix/winemetal.so"
         let native = try inspectMachO(root.appendingPathComponent(nativeName))
@@ -336,30 +301,27 @@ enum DXMTInstallation {
 
     private static func validateManagedParents(_ paths: ApplicationPaths) throws {
         guard paths.root.isFileURL else { throw MagicWineError.setup("DXMT requires a local data directory.") }
-        try requireDirectory(paths.root)
-        try requireDirectory(paths.componentsDirectory)
+        try fs.requireDirectory(paths.root)
+        try fs.requireDirectory(paths.componentsDirectory)
     }
 
     private static func validateRoot(_ root: URL) throws {
         let expectedReceipt = try pinnedReceipt(for: root.lastPathComponent)
         let expectedFiles = expectedReceipt.files
         try validatePayloadLayout(at: root, includesMetadata: true)
-        let receiptData = try boundedFile(root.appendingPathComponent("installation.json"), maximum: 65_536)
+        let receiptData = try fs.read(root.appendingPathComponent("installation.json"), maximum: 65_536)
         let receipt: Receipt
         do { receipt = try JSONDecoder().decode(Receipt.self, from: receiptData) }
         catch { throw MagicWineError.setup("DXMT installation receipt is malformed: \(error.localizedDescription)") }
         guard receipt == expectedReceipt else { throw MagicWineError.setup("DXMT receipt does not match the pinned component and file checksums.") }
-        let before = try stamps(at: root, names: Array(expectedFiles.keys) + ["installation.json", ""] + directories.sorted())
-        if cache.matches(before, at: root) { return }
-        for (name, expected) in expectedFiles {
-            let maximum = name == sourceArchiveName ? 1_024 * 1_048_576 : 64 * 1_048_576
-            guard try hash(root.appendingPathComponent(name), maximum: maximum) == expected else {
-                throw MagicWineError.setup("DXMT component changed or is corrupted: \(name). Restore Standard and reinstall this component; cached files were left untouched.")
+        try cache.verify(root, names: Array(expectedFiles.keys) + ["installation.json", ""] + directories.sorted(), fs: fs,
+                         rehash: false, changed: .setup("DXMT component changed during validation; nothing was adopted.")) {
+            for (name, expected) in expectedFiles {
+                guard try fs.sha256(root.appendingPathComponent(name), maximum: maximum(for: name)) == expected else {
+                    throw MagicWineError.setup("DXMT component changed or is corrupted: \(name). Restore Standard and reinstall this component; cached files were left untouched.")
+                }
             }
         }
-        let after = try stamps(at: root, names: Array(before.keys))
-        guard before == after else { throw MagicWineError.setup("DXMT component changed during validation; nothing was adopted.") }
-        cache.remember(after, at: root)
     }
 
     static func writeReceipt(at root: URL) throws {
@@ -373,201 +335,14 @@ enum DXMTInstallation {
         try validateManagedParents(paths)
         try Task.checkCancellation()
         let destination = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
-        let result = component.path.withCString { sourcePath in
-            destination.path.withCString { renamex_np(sourcePath, $0, UInt32(RENAME_EXCL)) }
-        }
-        if result == 0 { return destination }
-        let code = errno
-        if code == EEXIST || code == ENOTEMPTY {
-            try validateRoot(destination)
-            try Task.checkCancellation()
-            return destination
-        }
-        throw MagicWineError.setup("Cannot atomically publish DXMT; existing files were left untouched: \(String(cString: strerror(code))).")
+        if try fs.publish(component, to: destination) { return destination }
+        try validateRoot(destination)
+        try Task.checkCancellation()
+        return destination
     }
 
-    struct MachOInfo {
-        let fileType: UInt32
-        let minimumOS: UInt32?
-        let dependencies: Set<String>
-        let rpaths: Set<String>
-        let exports: Set<String>
-    }
-
-    /// Inspect, never dlopen, untrusted native code. A bounded LC_SYMTAB walk
-    /// distinguishes real public definitions from imports or embedded strings.
-    static func inspectMachO(_ url: URL) throws -> MachOInfo {
-        try requireFile(url)
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        let fileSize = Int(try inspect(url).st_size)
-        func bytes(_ offset: Int, _ count: Int) throws -> Data {
-            guard offset >= 0, count >= 0, offset <= fileSize, count <= fileSize - offset else {
-                throw MagicWineError.setup("Truncated DXMT/Wine Mach-O data: \(url.path).")
-            }
-            try handle.seek(toOffset: UInt64(offset))
-            let data = try handle.read(upToCount: count) ?? Data()
-            guard data.count == count else { throw MagicWineError.setup("Mach-O changed during inspection: \(url.path).") }
-            return data
-        }
-        func u32(_ data: Data, _ offset: Int) -> UInt32 {
-            UInt32(data[offset]) | UInt32(data[offset + 1]) << 8 |
-                UInt32(data[offset + 2]) << 16 | UInt32(data[offset + 3]) << 24
-        }
-        func string(_ data: Data, _ offset: Int, _ end: Int) throws -> String {
-            guard offset >= 0, offset < end, end <= data.count,
-                  let zero = data[offset..<end].firstIndex(of: 0),
-                  let value = String(data: data[offset..<zero], encoding: .utf8) else {
-                throw MagicWineError.setup("Malformed Mach-O string: \(url.path).")
-            }
-            return value
-        }
-        let header = try bytes(0, 32)
-        guard u32(header, 0) == 0xfeedfacf, u32(header, 4) == 0x01000007 else {
-            throw MagicWineError.setup("DXMT requires thin x86_64 Mach-O Wine/native libraries: \(url.path).")
-        }
-        let count = Int(u32(header, 16)), size = Int(u32(header, 20))
-        guard count > 0, count <= 4096, size >= count * 8, size <= 1_048_576 else {
-            throw MagicWineError.setup("Invalid Mach-O load command bounds: \(url.path).")
-        }
-        let commands = try bytes(32, size)
-        var cursor = 0
-        var dependencies = Set<String>(), rpaths = Set<String>()
-        var minimumOS: UInt32?
-        var symbols: (offset: Int, count: Int, strings: Int, stringSize: Int)?
-        for _ in 0..<count {
-            guard cursor <= size - 8 else { throw MagicWineError.setup("Truncated Mach-O load command.") }
-            let command = u32(commands, cursor), length = Int(u32(commands, cursor + 4))
-            guard length >= 8, length % 8 == 0, length <= size - cursor else {
-                throw MagicWineError.setup("Invalid Mach-O load command size.")
-            }
-            switch command {
-            case 0x0c, 0x80000018, 0x8000001f:
-                guard length >= 24 else { throw MagicWineError.setup("Truncated Mach-O dependency command.") }
-                let offset = Int(u32(commands, cursor + 8))
-                guard offset >= 24, offset < length else { throw MagicWineError.setup("Invalid Mach-O dependency name.") }
-                dependencies.insert(try string(commands, cursor + offset, cursor + length))
-            case 0x8000001c:
-                guard length >= 16 else { throw MagicWineError.setup("Truncated Mach-O rpath.") }
-                let offset = Int(u32(commands, cursor + 8))
-                guard offset >= 12, offset < length else { throw MagicWineError.setup("Invalid Mach-O rpath name.") }
-                rpaths.insert(try string(commands, cursor + offset, cursor + length))
-            case 0x32:
-                guard length >= 24, u32(commands, cursor + 8) == 1 else {
-                    throw MagicWineError.setup("DXMT requires a macOS Mach-O build target.")
-                }
-                minimumOS = u32(commands, cursor + 12)
-            case 0x24:
-                guard length >= 16 else { throw MagicWineError.setup("Truncated Mach-O deployment target.") }
-                minimumOS = u32(commands, cursor + 8)
-            case 2:
-                guard length == 24, symbols == nil else { throw MagicWineError.setup("Invalid Mach-O symbol-table command.") }
-                symbols = (Int(u32(commands, cursor + 8)), Int(u32(commands, cursor + 12)),
-                           Int(u32(commands, cursor + 16)), Int(u32(commands, cursor + 20)))
-            default: break
-            }
-            cursor += length
-        }
-        guard cursor == size else { throw MagicWineError.setup("Unexpected trailing Mach-O load command data.") }
-        var exports = Set<String>()
-        if let symbols {
-            guard symbols.count <= 1_048_576, symbols.stringSize <= 16 * 1_048_576 else {
-                throw MagicWineError.setup("Mach-O symbols exceed inspection bounds.")
-            }
-            let table = try bytes(symbols.offset, symbols.count * 16)
-            let strings = try bytes(symbols.strings, symbols.stringSize)
-            for index in 0..<symbols.count {
-                let offset = index * 16, type = table[offset + 4]
-                // N_EXT | N_SECT, excluding N_STAB and N_PEXT (hidden) symbols.
-                guard type & 0xe0 == 0, type & 0x10 == 0, type & 0x0f == 0x0f else { continue }
-                let name = Int(u32(table, offset))
-                exports.insert(try string(strings, name, strings.count))
-            }
-        }
-        return MachOInfo(fileType: u32(header, 12), minimumOS: minimumOS,
-                         dependencies: dependencies, rpaths: rpaths, exports: exports)
-    }
-    private static func logRows(_ logURL: URL) throws -> [String] {
-        try RuntimeInstallation.boundedLog(logURL, maximum: 1_048_576)
-            .components(separatedBy: "\n").dropFirst(2).filter { !$0.isEmpty }
-    }
-
-    private static func stamps(at root: URL, names: [String]) throws -> [String: FileStamp] {
-        var result: [String: FileStamp] = [:]
-        for name in names { result[name] = FileStamp(try inspect(name.isEmpty ? root : root.appendingPathComponent(name))) }
-        return result
-    }
-
-    private static func exists(_ url: URL) throws -> Bool {
-        var status = stat()
-        if url.path.withCString({ lstat($0, &status) }) == 0 { return true }
-        if errno == ENOENT { return false }
-        throw pathError("inspect", url)
-    }
-
-    private static func inspect(_ url: URL) throws -> stat {
-        var status = stat()
-        guard url.path.withCString({ lstat($0, &status) }) == 0 else { throw pathError("inspect", url) }
-        return status
-    }
-
-    private static func requireDirectory(_ url: URL) throws {
-        guard try inspect(url).st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
-            throw MagicWineError.setup("The DXMT path must be an ordinary directory, not a symbolic link: \(url.path).")
-        }
-    }
-
-    private static func requireFile(_ url: URL) throws {
-        let status = try inspect(url)
-        let maximum = url.lastPathComponent == sourceArchiveName ? 1_024 * 1_048_576 : 64 * 1_048_576
-        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), status.st_nlink == 1,
-              status.st_size > 0, status.st_size <= Int64(maximum) else {
-            throw MagicWineError.setup("The DXMT file must be a nonempty ordinary file without symbolic/hard links and within its \(maximum / 1_048_576) MiB safety limit: \(url.path).")
-        }
-    }
-
-    private static func boundedFile(_ url: URL, maximum: Int) throws -> Data {
-        try requireFile(url)
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        let data = try handle.read(upToCount: maximum + 1) ?? Data()
-        guard data.count <= maximum else { throw MagicWineError.setup("The DXMT receipt exceeds its inspection limit.") }
-        return data
-    }
-
-    private static func digest(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func hash(_ url: URL, maximum: Int) throws -> String {
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        var digest = SHA256()
-        var bytes = 0
-        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
-            try Task.checkCancellation()
-            bytes += data.count
-            guard bytes <= maximum else { throw MagicWineError.setup("DXMT file exceeds its hashing safety limit: \(url.path).") }
-            digest.update(data: data)
-        }
-        return digest.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func openFile(_ url: URL) throws -> FileHandle {
-        let descriptor = url.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) }
-        guard descriptor >= 0 else { throw pathError("open without following links", url) }
-        var status = stat()
-        guard fstat(descriptor, &status) == 0,
-              status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-              status.st_nlink == 1, status.st_size > 0 else {
-            close(descriptor)
-            throw MagicWineError.setup("The DXMT file changed or is not an ordinary non-hard-linked file: \(url.path).")
-        }
-        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-    }
-
-    private static func pathError(_ operation: String, _ url: URL) -> MagicWineError {
-        let code = errno
-        return .setup("Cannot \(operation) DXMT path \(url.path): \(String(cString: strerror(code))).")
+    /// Thin x86_64 only, with exports, within DXMT's 64 MiB file limit.
+    static func inspectMachO(_ url: URL) throws -> MachOInspector.Image {
+        try MachOInspector.inspect(url, fs: fs, maximum: 64 * 1_048_576, universal: false, exports: true)
     }
 }

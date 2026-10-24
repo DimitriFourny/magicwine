@@ -18,6 +18,7 @@ internal enum GraphicsPrefix {
     private static let legacyDLLCount = 4
     private static let schema = 2
     private static var manager: FileManager { FileManager.default }
+    private static let fs = SecureFS(prefix: "Graphics setup: ")
 
     private struct Mapping: Sendable {
         let source: String
@@ -111,13 +112,13 @@ internal enum GraphicsPrefix {
     /// Must be called while holding withLock, including for ordinary fresh metadata reads.
     static func recover(bottleDirectory: URL) throws {
         let graphics = bottleDirectory.appendingPathComponent("graphics", isDirectory: true)
-        guard try exists(graphics) else { return }
+        guard try fs.exists(graphics) else { return }
         try ensureDirectory(graphics)
         let transaction = graphics.appendingPathComponent("transaction", isDirectory: true)
-        guard try exists(transaction) else { return }
+        guard try fs.exists(transaction) else { return }
         try ensureDirectory(transaction)
         let journalURL = transaction.appendingPathComponent("journal.json")
-        guard try exists(journalURL) else {
+        guard try fs.exists(journalURL) else {
             // Preparation never modifies the prefix before the journal is published.
             try manager.removeItem(at: transaction)
             return
@@ -203,7 +204,7 @@ internal enum GraphicsPrefix {
         let active = graphics.appendingPathComponent("active", isDirectory: true)
         let incoming = mappings(for: next.backend)
         try validateDestinations(prefix: prefix, paths: incoming.map(\.destination))
-        if try exists(graphics) { try ensureDirectory(graphics) }
+        if try fs.exists(graphics) { try ensureDirectory(graphics) }
         let oldManifest: Manifest?
         if previous.backend != .standard {
             let manifest = try readManifest(active)
@@ -212,7 +213,7 @@ internal enum GraphicsPrefix {
             }
             oldManifest = manifest
         } else {
-            guard try !exists(active) else { throw MagicWineError.setup("The bottle has an unexpected graphics backup; refusing to overwrite it.") }
+            guard try !fs.exists(active) else { throw MagicWineError.setup("The bottle has an unexpected graphics backup; refusing to overwrite it.") }
             oldManifest = nil
         }
         let previousPaths = oldManifest?.resolvedPaths ?? []
@@ -235,7 +236,7 @@ internal enum GraphicsPrefix {
         }
         try ensureDirectory(graphics, create: true)
         let transaction = graphics.appendingPathComponent("transaction", isDirectory: true)
-        guard try !exists(transaction) else { throw MagicWineError.setup("A graphics transaction must be recovered before setup.") }
+        guard try !fs.exists(transaction) else { throw MagicWineError.setup("A graphics transaction must be recovered before setup.") }
         try ensureDirectory(transaction, create: true)
         do {
             let beforeDirectory = transaction.appendingPathComponent("before", isDirectory: true)
@@ -402,7 +403,7 @@ internal enum GraphicsPrefix {
             let original = active.appendingPathComponent("originals/\(index)")
             if manifest.entries[index].originalExists {
                 try requireFileOrLink(original)
-            } else if try exists(original) {
+            } else if try fs.exists(original) {
                 throw MagicWineError.setup("The bottle graphics backup contains an unexpected original DLL.")
             }
         }
@@ -448,7 +449,7 @@ internal enum GraphicsPrefix {
     private static func validateActiveBackup(journal: Journal, transaction: URL, after: Bool) throws {
         let active = transaction.appendingPathComponent(after ? "after-active" : "before-active")
         guard after ? journal.hasActive : journal.hadActive else {
-            guard try !exists(active) else { throw MagicWineError.setup("The graphics transaction has an unexpected active backup.") }
+            guard try !fs.exists(active) else { throw MagicWineError.setup("The graphics transaction has an unexpected active backup.") }
             return
         }
         let manifest = try readManifest(active)
@@ -481,7 +482,7 @@ internal enum GraphicsPrefix {
         }
         for path in paths {
             let file = prefix.appendingPathComponent(path)
-            if try exists(file) { try requireFileOrLink(file) }
+            if try fs.exists(file) { try requireFileOrLink(file) }
         }
     }
 
@@ -495,14 +496,14 @@ internal enum GraphicsPrefix {
     }
 
     private static func replace(_ destination: URL, with source: URL, exists sourceExists: Bool) throws {
-        if try exists(destination) { try manager.removeItem(at: destination) }
+        if try fs.exists(destination) { try manager.removeItem(at: destination) }
         if sourceExists { try manager.copyItem(at: source, to: destination) }
     }
 
     private static func snapshot(_ url: URL) throws -> Snapshot {
-        guard try exists(url) else { return Snapshot(exists: false, fingerprint: nil) }
+        guard try fs.exists(url) else { return Snapshot(exists: false, fingerprint: nil) }
         try requireFileOrLink(url)
-        if try fileType(url) == mode_t(S_IFLNK) {
+        if try fs.fileType(url) == mode_t(S_IFLNK) {
             return Snapshot(exists: true, fingerprint: "link:" + (try manager.destinationOfSymbolicLink(atPath: url.path)))
         }
         return Snapshot(exists: true, fingerprint: "file:" + (try hash(url)).hex)
@@ -525,43 +526,30 @@ internal enum GraphicsPrefix {
         return (hasher.finalize().map { String(format: "%02x", $0) }.joined(), UInt64(status.st_size))
     }
 
-    private static func exists(_ url: URL) throws -> Bool {
-        var status = stat()
-        if lstat(url.path, &status) == 0 { return true }
-        if errno == ENOENT { return false }
-        throw fileError("Cannot inspect \(url.lastPathComponent)")
-    }
-
     private static func ensureDirectory(_ url: URL, create: Bool = false) throws {
-        if create, try !exists(url) {
+        if create, try !fs.exists(url) {
             do { try manager.createDirectory(at: url, withIntermediateDirectories: false) }
             catch {
                 // Independent store processes can create the shared lock directory at once.
-                guard (try? fileType(url)) == mode_t(S_IFDIR) else { throw error }
+                guard (try? fs.fileType(url)) == mode_t(S_IFDIR) else { throw error }
             }
         }
-        guard try fileType(url) == mode_t(S_IFDIR) else {
+        guard try fs.fileType(url) == mode_t(S_IFDIR) else {
             throw MagicWineError.setup("Graphics setup requires an owned directory, not a symlink: \(url.path)")
         }
     }
 
     private static func requireRegularFile(_ url: URL) throws {
-        guard try fileType(url) == mode_t(S_IFREG) else {
+        guard try fs.fileType(url) == mode_t(S_IFREG) else {
             throw MagicWineError.setup("Graphics setup requires a regular file: \(url.path)")
         }
     }
 
     private static func requireFileOrLink(_ url: URL) throws {
-        let type = try fileType(url)
+        let type = try fs.fileType(url)
         guard type == mode_t(S_IFREG) || type == mode_t(S_IFLNK) else {
             throw MagicWineError.setup("Refusing to replace a non-file graphics DLL: \(url.path)")
         }
-    }
-
-    private static func fileType(_ url: URL) throws -> mode_t {
-        var status = stat()
-        guard lstat(url.path, &status) == 0 else { throw fileError("Cannot inspect \(url.path)") }
-        return status.st_mode & mode_t(S_IFMT)
     }
 
     private static func fileError(_ detail: String) -> MagicWineError {

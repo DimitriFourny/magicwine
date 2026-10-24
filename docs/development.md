@@ -89,7 +89,7 @@ Never point integration experiments at a valuable game prefix. See [Debugging](d
 
 [test.sh](../scripts/test.sh) forwards arguments to `swift test`, selects the same SDK helper, disables XCTest, and supplies the Swift Testing plugin path when available. The tests use Swift Testing. Do not substitute `--help` on a build script as a safe inspection command: most build scripts do not parse it and will build anyway.
 
-The [test directory](../Tests/MagicWineCoreTests/) covers persistence, safe paths, shortcut/icon parsing, display/synchronization state, graphics transactions/leases, component validation, profile transforms, and compatibility backup rules. Tests use isolated fixtures; they do not establish that a real Windows game renders, receives physical input, or survives a launcher workflow.
+The [test directory](../Tests/MagicWineCoreTests/) covers persistence, safe paths, shortcut/icon parsing, display/synchronization state, graphics transactions/leases, component validation, profile transforms, and compatibility backup rules. `SecureFSTests` covers the shared filesystem, hashing, Mach-O and PE helpers described in [architecture](architecture.md#packaged-resources-and-trust); component suites remain the regression net for each caller's policy. Tests use isolated fixtures; they do not establish that a real Windows game renders, receives physical input, or survives a launcher workflow.
 
 ## Real Wine verification
 

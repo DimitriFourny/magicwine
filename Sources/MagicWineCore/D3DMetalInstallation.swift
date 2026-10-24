@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -13,6 +12,9 @@ enum D3DMetalInstallation {
     private static let bridges = ["d3d11", "d3d12", "dxgi"]
     private static let optionalBridges = ["atidxx64", "nvapi64", "nvngx"]
     private static let maximumFile = 512 * 1_048_576
+    private static let fs = SecureFS(prefix: "D3DMetal: ")
+    /// Historical limit of the DXVK PE validator the bridge DLL check originally shared.
+    private static let peMaximum = 32 * 1_048_576
 
     private struct Receipt: Codable, Equatable {
         let schema: Int
@@ -69,14 +71,14 @@ enum D3DMetalInstallation {
     static func install(paths: ApplicationPaths, source: URL,
                         progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> URL {
         try Task.checkCancellation()
-        try requireDirectory(source)
+        try fs.requireDirectory(source)
         guard paths.root.isFileURL else { throw failure("The managed root must be a local directory.") }
         for directory in [paths.root, paths.componentsDirectory] where FileManager.default.fileExists(atPath: directory.path) {
-            try requireDirectory(directory)
+            try fs.requireDirectory(directory)
         }
         try paths.prepare()
-        try requireDirectory(paths.root)
-        try requireDirectory(paths.componentsDirectory)
+        try fs.requireDirectory(paths.root)
+        try fs.requireDirectory(paths.componentsDirectory)
         progress?(.verifying)
         let payload = try sourcePayload(source)
         let original = try inventory(payload)
@@ -95,11 +97,11 @@ enum D3DMetalInstallation {
             try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: input, to: output)
             try requireFile(output)
-            try DXVKInstallation.preserveQuarantine(from: input, to: output)
+            try fs.preserveQuarantine(from: input, to: output)
             var parent = input.deletingLastPathComponent()
             while parent.path.hasPrefix(payload.path + "/") {
-                try requireDirectory(parent)
-                try DXVKInstallation.preserveQuarantine(from: parent, to: output)
+                try fs.requireDirectory(parent)
+                try fs.preserveQuarantine(from: parent, to: output)
                 parent.deleteLastPathComponent()
             }
         }
@@ -107,23 +109,23 @@ enum D3DMetalInstallation {
             let output = stage.appendingPathComponent(name)
             try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.createSymbolicLink(atPath: output.path, withDestinationPath: target)
-            try DXVKInstallation.preserveQuarantine(from: payload.appendingPathComponent(name), to: output)
+            try fs.preserveQuarantine(from: payload.appendingPathComponent(name), to: output)
         }
         // Unix bridges are aliases of one shared image. Preserve their quarantine
         // on that canonical image too, including archives that expanded the links.
         for bridge in bridges + optionalBridges {
             let name = "wine/x86_64-unix/\(bridge).so"
             if original.files[name] != nil || original.links[name] != nil {
-                try DXVKInstallation.preserveQuarantine(from: payload.appendingPathComponent(name),
+                try fs.preserveQuarantine(from: payload.appendingPathComponent(name),
                     to: stage.appendingPathComponent("external/libd3dshared.dylib"))
             }
         }
         // Propagate directory/download quarantine even if it was not attached to each library.
         for name in original.files.keys {
-            try DXVKInstallation.preserveQuarantine(from: source, to: stage.appendingPathComponent(name))
-            if payload != source { try DXVKInstallation.preserveQuarantine(from: payload, to: stage.appendingPathComponent(name)) }
+            try fs.preserveQuarantine(from: source, to: stage.appendingPathComponent(name))
+            if payload != source { try fs.preserveQuarantine(from: payload, to: stage.appendingPathComponent(name)) }
         }
-        try DXVKInstallation.preserveQuarantine(from: source, to: stage)
+        try fs.preserveQuarantine(from: source, to: stage)
         guard try inventory(payload) == original, try inventory(stage) == original else {
             throw failure("The input changed during import; no component was published.")
         }
@@ -131,7 +133,7 @@ enum D3DMetalInstallation {
         if payload != source {
             var directory = payload.deletingLastPathComponent()
             while directory.path == source.path || directory.path.hasPrefix(source.path + "/") {
-                try requireDirectory(directory)
+                try fs.requireDirectory(directory)
                 try copyNotices(from: directory, to: stage)
                 if directory.path == source.path { break }
                 directory.deleteLastPathComponent()
@@ -141,23 +143,18 @@ enum D3DMetalInstallation {
         let receipt = Receipt(schema: 1, source: "local-user-supplied", architecture: "x86_64",
                               minimumMacOS: imported.minimumMacOS, files: imported.files, links: imported.links)
         let encoded = try encode(receipt)
-        let id = "d3dmetal-" + digest(encoded)
+        let id = "d3dmetal-" + SecureFS.digest(encoded)
         try encoded.write(to: stage.appendingPathComponent("installation.json"), options: .atomic)
         try Task.checkCancellation()
         let destination = paths.componentsDirectory.appendingPathComponent(id, isDirectory: true)
-        let result = stage.path.withCString { from in
-            destination.path.withCString { renamex_np(from, $0, UInt32(RENAME_EXCL)) }
-        }
-        if result == 0 { return destination }
-        let code = errno
-        if code == EEXIST || code == ENOTEMPTY { return try validate(componentID: id, paths: paths) }
-        throw failure("Cannot atomically publish the import: \(String(cString: strerror(code))). Existing components were not changed.")
+        if try fs.publish(stage, to: destination) { return destination }
+        return try validate(componentID: id, paths: paths)
     }
 
     static func validate(componentID: String, paths: ApplicationPaths) throws -> URL {
         guard supports(componentID: componentID) else { throw failure("Unrecognized component identifier. Choose Standard to restore original graphics.") }
-        try requireDirectory(paths.root)
-        try requireDirectory(paths.componentsDirectory)
+        try fs.requireDirectory(paths.root)
+        try fs.requireDirectory(paths.componentsDirectory)
         let root = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
         try validateRoot(root)
         return root
@@ -191,16 +188,18 @@ enum D3DMetalInstallation {
         for name in candidates {
             let driver = prefix.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: driver.path) {
-                guard (try? machO(driver, requiredExport: "_magicwine_dxmt_bridge_v1")) == nil else {
+                // An unreadable or malformed driver exports nothing.
+                let exports = (try? machO(driver, exports: true))?.exports ?? []
+                guard !exports.contains("_magicwine_dxmt_bridge_v1") else {
                     throw failure("This bottle uses the older DXMT-only Wine driver. Install Wine in Downloads or Settings, then create a new bottle with the installed Wine to use D3DMetal. This bottle's pinned runtime and graphics selection are unchanged.")
                 }
-                if (try? machO(driver, requiredExport: "_magicwine_metal_bridge_v1")) != nil {
+                if exports.contains("_magicwine_metal_bridge_v1") {
                     let ntdll = driver.deletingLastPathComponent().appendingPathComponent("ntdll.so")
-                    guard (try? machO(ntdll, requiredExport: "_magicwine_metal_ntdll_v1")) != nil else {
+                    guard (try? machO(ntdll, exports: true))?.exports.contains("_magicwine_metal_ntdll_v1") == true else {
                         throw failure("The Wine Metal driver is missing its matching native runtime support. Install Wine and create a new bottle with it; mixing driver files from different runtimes is unsupported.")
                     }
                 }
-                if (try? machO(driver, requiredExport: "_macdrv_functions")) != nil { return }
+                if exports.contains("_macdrv_functions") { return }
             }
         }
         throw failure("This Wine runtime does not export the D3DMetal macdrv_functions bridge ABI. Install Wine in Downloads or Settings, then create a new bottle with it, or choose a compatible custom Wine runtime. Unmodified Wine Stable cannot load these libraries. No runtime files were modified.")
@@ -208,11 +207,11 @@ enum D3DMetalInstallation {
 
     private static func validateRoot(_ root: URL) throws {
         guard supports(componentID: root.lastPathComponent) else { throw failure("Invalid managed component path.") }
-        try requireDirectory(root)
-        let data = try bounded(root.appendingPathComponent("installation.json"), maximum: 1_048_576)
+        try fs.requireDirectory(root)
+        let data = try fs.read(root.appendingPathComponent("installation.json"), maximum: 1_048_576)
         let receipt = try JSONDecoder().decode(Receipt.self, from: data)
         guard receipt.schema == 1, receipt.source == "local-user-supplied", receipt.architecture == "x86_64",
-              "d3dmetal-" + digest(try encode(receipt)) == root.lastPathComponent else {
+              "d3dmetal-" + SecureFS.digest(try encode(receipt)) == root.lastPathComponent else {
             throw failure("The receipt does not match its content-addressed directory.")
         }
         let actual = try inventory(root, receiptAllowed: true)
@@ -237,10 +236,10 @@ enum D3DMetalInstallation {
                FileManager.default.fileExists(atPath: root.appendingPathComponent("wine").path) {
                 var current = root
                 while current.path != source.path {
-                    try requireDirectory(current)
+                    try fs.requireDirectory(current)
                     current.deleteLastPathComponent()
                 }
-                try requireDirectory(root)
+                try fs.requireDirectory(root)
                 return root
             }
         }
@@ -251,7 +250,7 @@ enum D3DMetalInstallation {
     static func inspectPayload(_ root: URL) throws { _ = try inventory(root) }
 
     private static func inventory(_ root: URL, receiptAllowed: Bool = false) throws -> Inventory {
-        try requireDirectory(root)
+        try fs.requireDirectory(root)
         var result = Inventory()
         var directories = Set<String>()
         var enumerationError: Error?
@@ -266,7 +265,7 @@ enum D3DMetalInstallation {
             guard count <= 256, item.standardizedFileURL.path.hasPrefix(base) else { throw failure("Unsafe or oversized import tree.") }
             let name = String(item.standardizedFileURL.path.dropFirst(base.count))
             guard safe(name) else { throw failure("Unsafe import path: \(name).") }
-            let status = try inspect(item)
+            let status = try fs.status(item)
             let type = status.st_mode & mode_t(S_IFMT)
             if type == mode_t(S_IFLNK) {
                 let target = try FileManager.default.destinationOfSymbolicLink(atPath: item.path)
@@ -291,18 +290,12 @@ enum D3DMetalInstallation {
                 guard allowedFile(name) else { throw failure("Unrecognized file: \(name).") }
                 total += status.st_size
                 guard total <= 1_073_741_824 else { throw failure("Import exceeds the 1 GiB safety limit.") }
-                result.files[name] = try hash(item)
+                result.files[name] = try fs.sha256(item, maximum: maximumFile)
                 if name.hasSuffix(".dll") {
-                    try DXVKInstallation.validatePE(item, machine: 0x8664)
-                    let handle = try openFile(item)
-                    defer { try? handle.close() }
-                    let header = try handle.read(upToCount: 81) ?? Data()
-                    guard header.count == 81, header[64..<81].elementsEqual(Data("Wine builtin DLL\0".utf8)) else {
-                        throw failure("Expected an unchanged Wine builtin bridge, not a native replacement: \(name).")
-                    }
+                    try PEInspector.validateDLL(item, machine: PEInspector.amd64, markers: [.builtin], fs: fs, maximum: peMaximum)
                 }
                 if name.hasSuffix(".so") || name.hasSuffix(".dylib") || name.hasSuffix("/D3DMetal") {
-                    result.minimumMacOS = max(result.minimumMacOS, try machO(item))
+                    result.minimumMacOS = max(result.minimumMacOS, try machO(item).minimumOS ?? 0)
                 }
             }
         }
@@ -397,8 +390,8 @@ enum D3DMetalInstallation {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let output = folder.appendingPathComponent(input.lastPathComponent)
             try FileManager.default.copyItem(at: input, to: output)
-            try DXVKInstallation.preserveQuarantine(from: input, to: output)
-            try DXVKInstallation.preserveQuarantine(from: source, to: output)
+            try fs.preserveQuarantine(from: input, to: output)
+            try fs.preserveQuarantine(from: source, to: output)
         }
     }
 
@@ -407,135 +400,19 @@ enum D3DMetalInstallation {
             name.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
 
-    /// Reads only Mach-O headers/load commands; never loads executable code into MagicWine.
-    /// The optional symbol check requires a defined, external nlist entry (not a string match).
-    private static func machO(_ url: URL, requiredExport: String? = nil) throws -> UInt32 {
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        let fileSize = UInt64(try inspect(url).st_size)
-        func readAt(_ offset: UInt64, _ count: Int) throws -> Data {
-            guard count >= 0, count <= 16 * 1_048_576, offset <= fileSize, UInt64(count) <= fileSize - offset else { throw failure("Truncated Mach-O: \(url.path).") }
-            try handle.seek(toOffset: offset)
-            let data = try handle.read(upToCount: count) ?? Data()
-            guard data.count == count else { throw failure("Truncated Mach-O: \(url.path).") }
-            return data
+    /// Reads only Mach-O headers/load commands (and, on request, the symbol table);
+    /// never loads executable code into MagicWine. Exports are defined, external
+    /// nlist entries, not string matches.
+    private static func machO(_ url: URL, exports: Bool = false) throws -> MachOInspector.Image {
+        let image = try MachOInspector.inspect(url, fs: fs, maximum: maximumFile, universal: true, exports: exports)
+        guard [UInt32(2), 6, 8].contains(image.fileType) else {
+            throw failure("Expected an x86_64 Mach-O executable/library: \(url.path).")
         }
-        func u32(_ data: Data, _ index: Int, big: Bool = false) -> UInt32 {
-            (0..<4).reduce(UInt32(0)) { $0 | UInt32(data[index + $1]) << ((big ? 3 - $1 : $1) * 8) }
-        }
-        let initial = try readAt(0, 8)
-        var offset: UInt64 = 0
-        var sliceSize = fileSize
-        if u32(initial, 0, big: true) == 0xcafebabe {
-            let count = Int(u32(initial, 4, big: true))
-            guard (1...16).contains(count) else { throw failure("Invalid universal Mach-O architecture table.") }
-            let table = try readAt(8, count * 20)
-            var found = false
-            for i in 0..<count where u32(table, i * 20, big: true) == 0x01000007 {
-                guard !found else { throw failure("Duplicate x86_64 Mach-O slice.") }
-                found = true
-                offset = UInt64(u32(table, i * 20 + 8, big: true))
-                sliceSize = UInt64(u32(table, i * 20 + 12, big: true))
-            }
-            guard found, offset <= fileSize, sliceSize <= fileSize - offset else { throw failure("No valid x86_64 Mach-O slice.") }
-        }
-        let header = try readAt(offset, 32)
-        guard u32(header, 0) == 0xfeedfacf, u32(header, 4) == 0x01000007,
-              [UInt32(2), 6, 8].contains(u32(header, 12)) else { throw failure("Expected an x86_64 Mach-O executable/library: \(url.path).") }
-        let count = Int(u32(header, 16)), bytes = Int(u32(header, 20))
-        guard count > 0, count <= 4096, bytes <= 1_048_576, UInt64(bytes + 32) <= sliceSize else { throw failure("Invalid Mach-O load commands.") }
-        let commands = try readAt(offset + 32, bytes)
-        var cursor = 0
-        var minimum: UInt32 = 0
-        var symbolTable: (UInt32, UInt32, UInt32, UInt32)?
-        for _ in 0..<count {
-            guard cursor + 8 <= bytes else { throw failure("Truncated Mach-O command.") }
-            let command = u32(commands, cursor), length = Int(u32(commands, cursor + 4))
-            guard length >= 8, length % 4 == 0, length <= bytes - cursor else { throw failure("Invalid Mach-O command size.") }
-            if command == 0x32 {
-                guard length >= 24, u32(commands, cursor + 8) == 1 else { throw failure("The library is not built for macOS.") }
-                minimum = max(minimum, u32(commands, cursor + 12))
-            } else if command == 0x24 {
-                guard length >= 16 else { throw failure("Invalid macOS minimum-version command.") }
-                minimum = max(minimum, u32(commands, cursor + 8))
-            } else if command == 2 {
-                guard length >= 24 else { throw failure("Invalid Mach-O symbol table.") }
-                symbolTable = (u32(commands, cursor + 8), u32(commands, cursor + 12), u32(commands, cursor + 16), u32(commands, cursor + 20))
-            }
-            cursor += length
-        }
-        guard cursor == bytes else { throw failure("Inconsistent Mach-O command extent.") }
-        if let requiredExport {
-            guard let table = symbolTable else { throw failure("Wine's graphics ABI export table is unavailable.") }
-            let (symbolsOffset, number, stringsOffset, stringsSize) = table
-            guard number <= 1_000_000, UInt64(symbolsOffset) + UInt64(number) * 16 <= sliceSize,
-                  UInt64(stringsOffset) + UInt64(stringsSize) <= sliceSize else { throw failure("Wine's graphics ABI export table is unavailable.") }
-            let symbols = try readAt(offset + UInt64(symbolsOffset), Int(number) * 16)
-            let strings = try readAt(offset + UInt64(stringsOffset), Int(stringsSize))
-            let expected = Data((requiredExport + "\0").utf8)
-            var found = false
-            for i in 0..<Int(number) {
-                let start = i * 16, name = Int(u32(symbols, i * 16))
-                let type = symbols[start + 4]
-                if type & 0xe0 == 0, type & 1 == 1, type & 0x0e == 0x0e,
-                   name <= strings.count, expected.count <= strings.count - name,
-                   strings[name..<(name + expected.count)].elementsEqual(expected) { found = true; break }
-            }
-            guard found else { throw failure("Wine does not export \(requiredExport).") }
-        }
-        return minimum
-    }
-
-    private static func inspect(_ url: URL) throws -> stat {
-        guard url.isFileURL else { throw failure("Only local filesystem inputs are accepted.") }
-        var status = stat()
-        guard url.path.withCString({ lstat($0, &status) }) == 0 else { throw failure("Cannot inspect \(url.path): \(String(cString: strerror(errno))).") }
-        return status
-    }
-
-    private static func requireDirectory(_ url: URL) throws {
-        guard try inspect(url).st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { throw failure("Expected an ordinary directory, not a link: \(url.path).") }
+        return image
     }
 
     private static func requireFile(_ url: URL) throws {
-        let status = try inspect(url)
-        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), status.st_nlink == 1,
-              status.st_size > 0, status.st_size <= maximumFile else { throw failure("Expected a nonempty regular file without links, at most 512 MiB: \(url.path).") }
-    }
-
-    private static func openFile(_ url: URL) throws -> FileHandle {
-        try requireFile(url)
-        let descriptor = url.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) }
-        guard descriptor >= 0 else { throw failure("Cannot safely open \(url.path).") }
-        var status = stat()
-        guard fstat(descriptor, &status) == 0, status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-              status.st_nlink == 1, status.st_size > 0, status.st_size <= maximumFile else {
-            close(descriptor)
-            throw failure("File changed while opening: \(url.path).")
-        }
-        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-    }
-
-    private static func bounded(_ url: URL, maximum: Int) throws -> Data {
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        let data = try handle.read(upToCount: maximum + 1) ?? Data()
-        guard data.count <= maximum else { throw failure("Metadata exceeds its safety limit.") }
-        return data
-    }
-
-    private static func hash(_ url: URL) throws -> String {
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        var sha = SHA256()
-        var count = 0
-        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
-            try Task.checkCancellation()
-            count += data.count
-            guard count <= maximumFile else { throw failure("File grew beyond its safety limit.") }
-            sha.update(data: data)
-        }
-        return sha.finalize().map { String(format: "%02x", $0) }.joined()
+        try fs.requireFile(url, maximum: maximumFile)
     }
 
     private static func encode(_ receipt: Receipt) throws -> Data {
@@ -544,6 +421,5 @@ enum D3DMetalInstallation {
         return try encoder.encode(receipt)
     }
 
-    private static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
-    private static func failure(_ message: String) -> MagicWineError { .setup("D3DMetal: " + message) }
+    private static func failure(_ message: String) -> MagicWineError { fs.failure(message) }
 }

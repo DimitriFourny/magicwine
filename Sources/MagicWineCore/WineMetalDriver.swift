@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -80,6 +79,7 @@ enum WineMetalDriver {
               compressedDigest: "87581a5733350d694ef615b9b6a41dfc2eeea33233df4564a4f1d044c35aa693")
     ]
     private static var manager: FileManager { .default }
+    private static let fs = SecureFS(prefix: "Wine Metal driver: ")
 
     struct Artifact {
         let url: URL
@@ -102,7 +102,7 @@ enum WineMetalDriver {
             guard let url = Bundle.module.url(forResource: name, withExtension: nil) else {
                 throw failure("Bundled driver artifact is missing: \(name). Reinstall MagicWine.")
             }
-            try requireDirectory(url.deletingLastPathComponent())
+            try fs.requireDirectory(url.deletingLastPathComponent())
             try verify(url, digest: digest, maximum: maximum)
             return Artifact(url: url, digest: digest, maximum: maximum, image: image)
         }
@@ -113,12 +113,12 @@ enum WineMetalDriver {
         guard let image = artifact.image else { throw failure("Expected a compressed driver image.") }
         let compressed = try Data(contentsOf: artifact.url)
         guard compressed.count <= artifact.maximum,
-              SHA256.hash(data: compressed).map({ String(format: "%02x", $0) }).joined() == artifact.digest else {
+              SecureFS.digest(compressed) == artifact.digest else {
             throw failure("The compressed driver changed after validation.")
         }
         let payload = try (compressed as NSData).decompressed(using: .zlib) as Data
         guard !payload.isEmpty, payload.count <= nativeMaximum,
-              SHA256.hash(data: payload).map({ String(format: "%02x", $0) }).joined() == image.digest else {
+              SecureFS.digest(payload) == image.digest else {
             throw failure("The decompressed driver does not match its pinned image.")
         }
         try payload.write(to: destination, options: .withoutOverwriting)
@@ -135,14 +135,14 @@ enum WineMetalDriver {
         let artifacts = try bundledArtifacts()
         let compatibility = root.appendingPathComponent("runtime-compatibility", isDirectory: true)
         let backup = compatibility.appendingPathComponent(componentID, isDirectory: true)
-        if try exists(compatibility) { try requireDirectory(compatibility) }
-        guard try !exists(backup) else {
+        if try fs.exists(compatibility) { try fs.requireDirectory(compatibility) }
+        guard try !fs.exists(backup) else {
             throw failure("Driver preparation requires a fresh staging tree; an existing component will not be overwritten.")
         }
-        if try !exists(compatibility) {
+        if try !fs.exists(compatibility) {
             try manager.createDirectory(at: compatibility, withIntermediateDirectories: false)
         }
-        try requireDirectory(compatibility)
+        try fs.requireDirectory(compatibility)
         try manager.createDirectory(at: backup, withIntermediateDirectories: false,
                                     attributes: [.posixPermissions: 0o700])
         // Native and PE images form one ABI. The caller publishes the whole runtime
@@ -163,10 +163,13 @@ enum WineMetalDriver {
             try unpackImage(artifact, to: stage)
             _ = try validateLayout(executable)
             try validateOriginal(driver, image: image)
-            let result = image.originalDigest == nil
-                ? renamex_np(stage.path, driver.path, UInt32(RENAME_EXCL))
-                : rename(stage.path, driver.path)
-            guard result == 0 else { throw pathError("publish", driver) }
+            if image.originalDigest == nil {
+                guard try fs.publish(stage, to: driver) else {
+                    throw failure("An added driver image requires an absent destination: \(driver.path).")
+                }
+            } else {
+                guard rename(stage.path, driver.path) == 0 else { throw fs.posixFailure("publish", driver) }
+            }
         }
     }
 
@@ -182,7 +185,7 @@ enum WineMetalDriver {
             }
         }
         let compatibility = root.appendingPathComponent("runtime-compatibility", isDirectory: true)
-        try requireDirectory(compatibility)
+        try fs.requireDirectory(compatibility)
         try validateBackup(compatibility.appendingPathComponent(componentID, isDirectory: true), artifacts: artifacts)
     }
 
@@ -196,15 +199,15 @@ enum WineMetalDriver {
         let directories = [root, bin, root.appendingPathComponent("lib"), root.appendingPathComponent("lib/wine")] +
             images.map { root.appendingPathComponent($0.relativePath).deletingLastPathComponent() }
         for directory in directories {
-            try requireDirectory(directory)
+            try fs.requireDirectory(directory)
         }
         // The executable must be an ordinary file, not a linked alias.
-        _ = try hash(executable, maximum: nativeMaximum)
+        _ = try fs.sha256(executable, maximum: nativeMaximum)
         return root
     }
 
     private static func validateBackup(_ backup: URL, artifacts: [Artifact]) throws {
-        try requireDirectory(backup)
+        try fs.requireDirectory(backup)
         let notices = artifacts.filter { $0.image == nil }
         let names = Set(images.filter { $0.originalDigest != nil }.map(\.backupName) +
                         notices.map { $0.url.lastPathComponent })
@@ -225,69 +228,16 @@ enum WineMetalDriver {
     static func validateOriginal(_ url: URL, image: Image) throws {
         if let digest = image.originalDigest {
             try verify(url, digest: digest, maximum: nativeMaximum)
-        } else if try exists(url) {
+        } else if try fs.exists(url) {
             throw failure("An added driver image requires an absent destination: \(url.path).")
         }
     }
 
     private static func verify(_ url: URL, digest: String, maximum: Int) throws {
-        guard try hash(url, maximum: maximum) == digest else {
+        guard try fs.sha256(url, maximum: maximum) == digest else {
             throw failure("SHA-256 mismatch: \(url.path). This runtime must not be reused.")
         }
     }
 
-    private static func exists(_ url: URL) throws -> Bool {
-        var status = stat()
-        if lstat(url.path, &status) == 0 { return true }
-        if errno == ENOENT { return false }
-        throw pathError("inspect", url)
-    }
-
-    private static func requireDirectory(_ url: URL) throws {
-        var status = stat()
-        guard lstat(url.path, &status) == 0 else { throw pathError("inspect", url) }
-        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
-            throw failure("Expected an ordinary directory, not a symbolic link: \(url.path).")
-        }
-    }
-
-    private static func hash(_ url: URL, maximum: Int) throws -> String {
-        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        guard descriptor >= 0 else { throw pathError("read without following links", url) }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer { try? handle.close() }
-        var before = stat()
-        guard fstat(descriptor, &before) == 0,
-              before.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), before.st_nlink == 1,
-              before.st_size > 0, before.st_size <= maximum else {
-            throw failure("Expected a nonempty ordinary file without hard links within its size limit: \(url.path).")
-        }
-        var digest = SHA256()
-        var count = 0
-        while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
-            count += chunk.count
-            guard count <= maximum else { throw failure("File exceeds its size limit: \(url.path).") }
-            digest.update(data: chunk)
-        }
-        var after = stat()
-        guard lstat(url.path, &after) == 0, after.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-              after.st_nlink == 1, after.st_dev == before.st_dev, after.st_ino == before.st_ino,
-              after.st_size == before.st_size, count == before.st_size,
-              after.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec,
-              after.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec,
-              after.st_ctimespec.tv_sec == before.st_ctimespec.tv_sec,
-              after.st_ctimespec.tv_nsec == before.st_ctimespec.tv_nsec else {
-            throw failure("File changed during validation: \(url.path).")
-        }
-        return digest.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func pathError(_ operation: String, _ url: URL) -> MagicWineError {
-        let code = errno
-        return failure("Cannot \(operation) \(url.path): \(String(cString: strerror(code))).")
-    }
-
-    private static func failure(_ message: String) -> MagicWineError {
-        .setup("Wine Metal driver: " + message)
-    }
+    private static func failure(_ message: String) -> MagicWineError { fs.failure(message) }
 }

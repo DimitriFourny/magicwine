@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -132,7 +131,7 @@ enum DXVKInstallation {
     }
 
     private static var expectedReceipt: Receipt {
-        var metadataDigests = attributionFiles.mapValues { digest(Data($0.utf8)) }
+        var metadataDigests = attributionFiles.mapValues { SecureFS.digest(Data($0.utf8)) }
         metadataDigests[dependencyNoticeName] = dependencyNoticeSHA256
         return Receipt(schema: 1, componentID: componentID, version: version,
                        source: source, archiveSHA256: archiveSHA256, repository: repository,
@@ -140,41 +139,9 @@ enum DXVKInstallation {
                        files: payloadDigests.merging(metadataDigests) { original, _ in original })
     }
 
-    private struct FileStamp: Equatable, Sendable {
-        let device: Int32
-        let inode: UInt64
-        let size: Int64
-        let modifiedSeconds: Int
-        let modifiedNanoseconds: Int
-        let changedSeconds: Int
-        let changedNanoseconds: Int
-
-        init(_ status: stat) {
-            device = status.st_dev
-            inode = status.st_ino
-            size = status.st_size
-            modifiedSeconds = status.st_mtimespec.tv_sec
-            modifiedNanoseconds = status.st_mtimespec.tv_nsec
-            changedSeconds = status.st_ctimespec.tv_sec
-            changedNanoseconds = status.st_ctimespec.tv_nsec
-        }
-    }
-
-    // Process-local adoption cache, never persisted as evidence of integrity. The
-    // first adoption hashes every file; inode/size/mtime/ctime changes invalidate it.
-    private final class ValidationCache: @unchecked Sendable {
-        private let lock = NSLock()
-        private var entries: [String: [String: FileStamp]] = [:]
-
-        func matches(_ stamps: [String: FileStamp], at root: URL) -> Bool {
-            lock.withLock { entries[root.path] == stamps }
-        }
-
-        func remember(_ stamps: [String: FileStamp], at root: URL) {
-            lock.withLock { entries[root.path] = stamps }
-        }
-    }
-    private static let cache = ValidationCache()
+    private static let fs = SecureFS(prefix: "DXVK: ")
+    private static let fileMaximum = 32 * 1_048_576
+    private static let cache = SecureFS.ValidationCache()
 
     static func install(paths: ApplicationPaths,
                         progress: (@Sendable (GraphicsSetupProgress) -> Void)? = nil) async throws -> URL {
@@ -183,9 +150,9 @@ enum DXVKInstallation {
             throw MagicWineError.setup("DXVK installation requires a local MagicWine data directory.")
         }
         // Reject existing links before prepare can create any child directories.
-        if try exists(paths.root) {
-            try requireDirectory(paths.root)
-            if try exists(paths.componentsDirectory) { try requireDirectory(paths.componentsDirectory) }
+        if try fs.exists(paths.root) {
+            try fs.requireDirectory(paths.root)
+            if try fs.exists(paths.componentsDirectory) { try fs.requireDirectory(paths.componentsDirectory) }
         }
         try paths.prepare()
         try validateManagedParents(paths)
@@ -200,7 +167,7 @@ enum DXVKInstallation {
         defer { try? FileManager.default.removeItem(at: stage) }
         do {
             let destination = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
-            if try exists(destination) {
+            if try fs.exists(destination) {
                 progress?(.verifying)
                 try validateRoot(destination, rehash: false)
                 try Task.checkCancellation()
@@ -210,32 +177,11 @@ enum DXVKInstallation {
             guard let bundledArchive = Bundle.module.url(forResource: archiveRoot, withExtension: "tar.gz") else {
                 throw MagicWineError.setup("The bundled DXVK package is missing. Reinstall this MagicWine build; no component was installed.")
             }
-            try requireFile(bundledArchive)
+            try fs.requireFile(bundledArchive, maximum: fileMaximum)
             let archive = stage.appendingPathComponent("dxvk.tar.gz")
-            try FileManager.default.copyItem(at: bundledArchive, to: archive)
-            try preserveQuarantine(from: bundledArchive, to: archive)
-            try Task.checkCancellation()
-            let hashing = Task.detached(priority: .utility) { try hash(archive, maximum: 64 * 1_048_576) }
-            let checksum = try await withTaskCancellationHandler { try await hashing.value } onCancel: { hashing.cancel() }
-            guard checksum == archiveSHA256 else {
-                throw MagicWineError.setup("DXVK archive SHA-256 mismatch. No component was installed.")
-            }
-            try Task.checkCancellation()
-            let listing = try await RuntimeInstallation.tool("/usr/bin/tar", arguments: ["-tf", archive.path],
-                paths: paths, name: "dxvk-archive-list", timeout: 60)
-            let verbose = try await RuntimeInstallation.tool("/usr/bin/tar", arguments: ["-tvf", archive.path],
-                paths: paths, name: "dxvk-archive-types", timeout: 60)
-            let entries = try logRows(listing.logURL)
-            let types = try logRows(verbose.logURL).compactMap(\.first)
-            try validateArchiveMembers(entries, types: types)
-            progress?(.installing)
-            let extraction = stage.appendingPathComponent("payload", isDirectory: true)
-            try FileManager.default.createDirectory(at: extraction, withIntermediateDirectories: false)
-            // bsdtar's default link/traversal protections remain enabled. The
-            // preflight additionally forbids every link and non-pinned member.
-            _ = try await RuntimeInstallation.tool("/usr/bin/tar", arguments: ["-xf", archive.path,
-                "-C", extraction.path, "--no-same-owner", "--no-same-permissions"],
-                paths: paths, name: "dxvk-archive-extract", timeout: 180)
+            let extraction = try await BundledArchive.extract(bundledArchive, to: archive, sha256: archiveSHA256,
+                maximum: 64 * 1_048_576, toolPrefix: "dxvk", paths: paths, fs: fs,
+                progress: progress, validateMembers: validateArchiveMembers)
             let component = extraction.appendingPathComponent(archiveRoot, isDirectory: true)
             try validatePayloadLayout(at: component)
             for (name, contents) in attributionFiles {
@@ -244,7 +190,7 @@ enum DXVKInstallation {
             guard let dependencyNotice = Bundle.module.url(forResource: "LICENSE-DXVK-DEPENDENCIES", withExtension: "txt") else {
                 throw MagicWineError.setup("The bundled DXVK dependency notices are missing. Reinstall this MagicWine build.")
             }
-            try requireFile(dependencyNotice)
+            try fs.requireFile(dependencyNotice, maximum: fileMaximum)
             try FileManager.default.copyItem(at: dependencyNotice,
                                             to: component.appendingPathComponent(dependencyNoticeName))
             try writeReceipt(at: component)
@@ -275,8 +221,8 @@ enum DXVKInstallation {
 
     private static func validateManagedParents(_ paths: ApplicationPaths) throws {
         guard paths.root.isFileURL,
-              try inspect(paths.root).st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
-              try inspect(paths.componentsDirectory).st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+              try fs.fileType(paths.root) == mode_t(S_IFDIR),
+              try fs.fileType(paths.componentsDirectory) == mode_t(S_IFDIR) else {
             throw MagicWineError.setup("DXVK components must be inside ordinary MagicWine root and Components directories, not symbolic links.")
         }
     }
@@ -284,25 +230,21 @@ enum DXVKInstallation {
     private static func validateRoot(_ root: URL, rehash: Bool) throws {
         try validatePayloadLayout(at: root, includesMetadata: true)
         let receiptURL = root.appendingPathComponent("installation.json")
-        let receiptData = try boundedFile(receiptURL, maximum: 65_536)
+        let receiptData = try fs.read(receiptURL, maximum: 65_536)
         let receipt: Receipt
         do { receipt = try JSONDecoder().decode(Receipt.self, from: receiptData) }
         catch { throw MagicWineError.setup("The DXVK installation receipt is malformed: \(error.localizedDescription)") }
         guard receipt == expectedReceipt else {
             throw MagicWineError.setup("The DXVK installation receipt does not match the pinned component, source, license, or file checksums.")
         }
-        let before = try stamps(at: root, names: Array(receipt.files.keys) + ["installation.json", "", "x32", "x64"])
-        if !rehash && cache.matches(before, at: root) { return }
-        for (name, expected) in receipt.files {
-            guard try hash(root.appendingPathComponent(name), maximum: 32 * 1_048_576) == expected else {
-                throw MagicWineError.setup("The DXVK component was changed or corrupted (SHA-256 mismatch): \(name). Restore Standard, move this cached component out of Components, then enable DXVK again. Component: \(root.path)")
+        try cache.verify(root, names: Array(receipt.files.keys) + ["installation.json", "", "x32", "x64"], fs: fs, rehash: rehash,
+                         changed: .setup("The DXVK component changed during validation. No component was adopted.")) {
+            for (name, expected) in receipt.files {
+                guard try fs.sha256(root.appendingPathComponent(name), maximum: fileMaximum) == expected else {
+                    throw MagicWineError.setup("The DXVK component was changed or corrupted (SHA-256 mismatch): \(name). Restore Standard, move this cached component out of Components, then enable DXVK again. Component: \(root.path)")
+                }
             }
         }
-        let after = try stamps(at: root, names: Array(before.keys))
-        guard before == after else {
-            throw MagicWineError.setup("The DXVK component changed during validation. No component was adopted.")
-        }
-        cache.remember(after, at: root)
     }
 
     static func validateArchiveMembers(_ entries: [String], types: [Character]) throws {
@@ -324,7 +266,7 @@ enum DXVKInstallation {
     }
 
     static func validatePayloadLayout(at root: URL, includesMetadata: Bool = false) throws {
-        try requireDirectory(root)
+        try fs.requireDirectory(root)
         var expected = Set(payloadDigests.keys)
         expected.formUnion(["x32", "x64"])
         if includesMetadata {
@@ -346,8 +288,8 @@ enum DXVKInstallation {
             guard expected.contains(name) else {
                 throw MagicWineError.setup("The DXVK component contains an unexpected file: \(name).")
             }
-            if name == "x32" || name == "x64" { try requireDirectory(entry) }
-            else { try requireFile(entry) }
+            if name == "x32" || name == "x64" { try fs.requireDirectory(entry) }
+            else { try fs.requireFile(entry, maximum: fileMaximum) }
             actual.insert(name)
         }
         if let enumerationError { throw enumerationError }
@@ -355,37 +297,11 @@ enum DXVKInstallation {
             let missing = expected.subtracting(actual).sorted().joined(separator: ", ")
             throw MagicWineError.setup("The DXVK component is incomplete. Missing files: \(missing).")
         }
-        for (architecture, machine) in [("x32", UInt16(0x014c)), ("x64", UInt16(0x8664))] {
-            for name in dllNames { try validatePE(root.appendingPathComponent("\(architecture)/\(name)"), machine: machine) }
-        }
-    }
-
-    static func validatePE(_ url: URL, machine: UInt16) throws {
-        try requireFile(url)
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        let dos = try handle.read(upToCount: 64) ?? Data()
-        guard dos.count == 64, dos[0] == 0x4d, dos[1] == 0x5a else {
-            throw MagicWineError.setup("The DXVK DLL is not a PE image: \(url.lastPathComponent).")
-        }
-        let offset = dos[60..<64].enumerated().reduce(UInt32(0)) { $0 | UInt32($1.element) << ($1.offset * 8) }
-        let size = try inspect(url).st_size
-        guard offset >= 64, UInt64(offset) + 26 <= UInt64(max(0, size)) else {
-            throw MagicWineError.setup("The DXVK DLL has an invalid PE header offset: \(url.path).")
-        }
-        try handle.seek(toOffset: UInt64(offset))
-        let header = try handle.read(upToCount: 26) ?? Data()
-        guard header.count == 26, Array(header[0..<4]) == [0x50, 0x45, 0, 0] else {
-            throw MagicWineError.setup("The DXVK DLL has an invalid PE signature: \(url.path).")
-        }
-        let actual = UInt16(header[4]) | UInt16(header[5]) << 8
-        let characteristics = UInt16(header[22]) | UInt16(header[23]) << 8
-        let optionalSize = UInt16(header[20]) | UInt16(header[21]) << 8
-        let magic = UInt16(header[24]) | UInt16(header[25]) << 8
-        guard actual == machine, characteristics & 0x2000 != 0, optionalSize >= 2,
-              UInt64(offset) + 24 + UInt64(optionalSize) <= UInt64(size),
-              magic == (machine == 0x014c ? 0x010b : 0x020b) else {
-            throw MagicWineError.setup("The DXVK DLL has the wrong PE architecture or is not a native DLL: \(url.path) (expected \(String(machine, radix: 16)), found \(String(actual, radix: 16))).")
+        for (architecture, machine) in [("x32", PEInspector.i386), ("x64", PEInspector.amd64)] {
+            for name in dllNames {
+                try PEInspector.validateDLL(root.appendingPathComponent("\(architecture)/\(name)"), machine: machine,
+                                            fs: fs, maximum: fileMaximum)
+            }
         }
     }
 
@@ -399,124 +315,19 @@ enum DXVKInstallation {
         try validateManagedParents(paths)
         try Task.checkCancellation()
         let destination = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
-        let result = component.path.withCString { sourcePath in
-            destination.path.withCString { renamex_np(sourcePath, $0, UInt32(RENAME_EXCL)) }
+        if try fs.publish(component, to: destination) { return destination }
+        do {
+            try validateRoot(destination, rehash: true)
+            try Task.checkCancellation()
+            return destination
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw MagicWineError.setup("Another DXVK installation occupies the pinned component path but cannot be safely reused. Existing files were left untouched: \(error.localizedDescription)")
         }
-        if result == 0 { return destination }
-        let code = errno
-        if code == EEXIST || code == ENOTEMPTY {
-            do {
-                try validateRoot(destination, rehash: true)
-                try Task.checkCancellation()
-                return destination
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                throw MagicWineError.setup("Another DXVK installation occupies the pinned component path but cannot be safely reused. Existing files were left untouched: \(error.localizedDescription)")
-            }
-        }
-        throw MagicWineError.setup("Cannot atomically publish the DXVK component; existing files were left untouched: \(String(cString: strerror(code))).")
     }
 
     static func preserveQuarantine(from archive: URL, to root: URL) throws {
-        let name = "com.apple.quarantine"
-        let size = archive.path.withCString { getxattr($0, name, nil, 0, 0, XATTR_NOFOLLOW) }
-        if size < 0 {
-            guard errno == ENOATTR else { throw pathError("inspect package quarantine on", archive) }
-            return
-        }
-        guard size <= 65_536 else { throw MagicWineError.setup("DXVK package quarantine metadata exceeds its safety limit.") }
-        var data = Data(count: size)
-        let received = data.withUnsafeMutableBytes { bytes in
-            archive.path.withCString { getxattr($0, name, bytes.baseAddress, bytes.count, 0, XATTR_NOFOLLOW) }
-        }
-        guard received == size else { throw pathError("read package quarantine on", archive) }
-        let result = data.withUnsafeBytes { bytes in
-            root.path.withCString { setxattr($0, name, bytes.baseAddress, bytes.count, 0, XATTR_NOFOLLOW) }
-        }
-        guard result == 0 else { throw pathError("preserve package quarantine on", root) }
-    }
-
-    private static func logRows(_ logURL: URL) throws -> [String] {
-        try RuntimeInstallation.boundedLog(logURL, maximum: 1_048_576)
-            .components(separatedBy: "\n").dropFirst(2).filter { !$0.isEmpty }
-    }
-
-    private static func stamps(at root: URL, names: [String]) throws -> [String: FileStamp] {
-        var result: [String: FileStamp] = [:]
-        for name in names { result[name] = FileStamp(try inspect(name.isEmpty ? root : root.appendingPathComponent(name))) }
-        return result
-    }
-
-    private static func exists(_ url: URL) throws -> Bool {
-        var status = stat()
-        if url.path.withCString({ lstat($0, &status) }) == 0 { return true }
-        if errno == ENOENT { return false }
-        throw pathError("inspect", url)
-    }
-
-    private static func inspect(_ url: URL) throws -> stat {
-        var status = stat()
-        guard url.path.withCString({ lstat($0, &status) }) == 0 else { throw pathError("inspect", url) }
-        return status
-    }
-
-    private static func requireDirectory(_ url: URL) throws {
-        guard try inspect(url).st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
-            throw MagicWineError.setup("The DXVK path must be an ordinary directory, not a symbolic link: \(url.path).")
-        }
-    }
-
-    private static func requireFile(_ url: URL) throws {
-        let status = try inspect(url)
-        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), status.st_nlink == 1,
-              status.st_size > 0, status.st_size <= 32 * 1_048_576 else {
-            throw MagicWineError.setup("The DXVK file must be a nonempty ordinary file without symbolic/hard links and within the 32 MiB safety limit: \(url.path).")
-        }
-    }
-
-    private static func boundedFile(_ url: URL, maximum: Int) throws -> Data {
-        try requireFile(url)
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        let data = try handle.read(upToCount: maximum + 1) ?? Data()
-        guard data.count <= maximum else { throw MagicWineError.setup("The DXVK receipt exceeds its inspection limit.") }
-        return data
-    }
-
-    private static func digest(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func hash(_ url: URL, maximum: Int) throws -> String {
-        let handle = try openFile(url)
-        defer { try? handle.close() }
-        var digest = SHA256()
-        var bytes = 0
-        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
-            try Task.checkCancellation()
-            bytes += data.count
-            guard bytes <= maximum else { throw MagicWineError.setup("DXVK file exceeds its hashing safety limit: \(url.path).") }
-            digest.update(data: data)
-        }
-        return digest.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func openFile(_ url: URL) throws -> FileHandle {
-        let descriptor = url.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) }
-        guard descriptor >= 0 else { throw pathError("open without following links", url) }
-        var status = stat()
-        guard fstat(descriptor, &status) == 0,
-              status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-              status.st_nlink == 1, status.st_size > 0 else {
-            close(descriptor)
-            throw MagicWineError.setup("The DXVK file changed or is not an ordinary non-hard-linked file: \(url.path).")
-        }
-        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-    }
-
-    private static func pathError(_ operation: String, _ url: URL) -> MagicWineError {
-        let code = errno
-        return .setup("Cannot \(operation) DXVK path \(url.path): \(String(cString: strerror(code))).")
+        try fs.preserveQuarantine(from: archive, to: root)
     }
 }
