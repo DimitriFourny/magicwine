@@ -127,7 +127,32 @@ Controller integration (profile service plus XInput bridge) and the Rosetta/WoW6
 
 Skipped components produce human-readable warnings that are written below the command line at the top of the process log and delivered through `launch(_:in:onStart:)` / `run(arguments:in:timeout:onStart:)` as a `LaunchStart` (log URL plus warnings) as soon as the process starts, not when it exits. The dashboard shows them as a dismissible notice with **Reveal Log** for that launch; CLI `launch` and `exec` print `warning: …` lines to stderr immediately.
 
-An EXE launches with its containing directory as working directory. LNK/URL files use `wine start /unix <path>`, then wait on `wineserver -w` instead of trusting ShellExecute's asynchronous shortcut handle. `run(arguments:)` and `winecfg` use the prefix as their default working directory. Arguments are passed as an array, not interpolated into a shell command.
+An EXE launches with its containing directory as working directory unless the program has a saved working directory. LNK/URL files use `wine start /unix <path>`, then wait on `wineserver -w` instead of trusting ShellExecute's asynchronous shortcut handle. `run(arguments:)` and `winecfg` use the prefix as their default working directory. Arguments are passed as an array, not interpolated into a shell command.
+
+### Per-program launch options
+
+A saved `WindowsProgram` can carry launch options, all optional and omitted from `bottle.json` while empty (older records decode with none):
+
+| Option | Applies to | Effect |
+| --- | --- | --- |
+| `arguments` | EXE | Appended after the EXE path. The editor and CLI accept one shell-style string: whitespace separates arguments, `"…"` or `'…'` group, backslashes stay literal (only `\"` and `\\` inside double quotes are escapes), so `C:\Games\x` needs no escaping. |
+| `workingDirectory` | EXE | An absolute Mac folder used instead of the EXE's folder. It must exist and be a folder when saved (if changed) and again at every launch; a missing folder fails the launch instead of silently using another one. |
+| `environment` | EXE, LNK, URL | Variables in the program layer, above bottle and graphics values. Refused: `WINEDLLOVERRIDES` (use DLL overrides), any other `WINE…` key except `WINEDEBUG` and `WINE_…` (prefix, loader, server, DLL path, architecture, MSync/ESync/FSync), `PATH`, `DYLD_*`, `MAGICWINE_*`, and `CX_APPLEGPTK_LIBD3DSHARED_PATH`. Allowed examples: `WINEDEBUG`, `WINE_D3D_CONFIG`, `DXVK_*`, `MTL_HUD_*`, game-specific variables. |
+| `dllOverrides` | EXE, LNK, URL | A `DLLOverrides` value in the program layer: for the same DLL it replaces the integration or backend mode, for example `d3d11=b` on a DXVK bottle. |
+
+Arguments and the working directory are refused for LNK/URL programs: `start /unix` lets Wine start the shortcut's own target with the shortcut's own arguments and folder. Environment and DLL overrides reach the `start` process and are inherited by the process Wine starts for the shortcut; a URL handed to an already running launcher (for example a `steam://` URL while Steam runs) is handled by that launcher with its own environment.
+
+`BottleStore.updateProgram(_:from:in:)` saves a program's name and options under the bottle lock. It is metadata only, so it is allowed while programs run (the UI gates it with `blocksLibraryEdit`); running programs keep their settings and the next launch uses the new ones, because `launch` re-reads the saved record rather than trusting the caller's copy. The `from` argument is the record the edit started from: if the saved record differs (another window or the CLI changed it), nothing is written. The executable path cannot change, and general `save` refuses any change to an existing program's name or options. Launch validates the saved options again, so hand-edited metadata cannot bypass the refused keys.
+
+In the dashboard, **Edit…** in a program's ⋯ menu or context menu opens a sheet with Name, Arguments (showing the parsed arguments), Working Directory (folder picker and Reset), Environment Variables, and DLL Overrides (name plus load order), with problems shown inline; LNK/URL programs show only the fields that apply. The CLI equivalent shows or edits the same record:
+
+```sh
+"$CLI" --root "$ROOT" program "$BOTTLE" "$PROGRAM"
+"$CLI" --root "$ROOT" program "$BOTTLE" "$PROGRAM" --args '-windowed -config "My Settings.ini"' \
+    --workdir "/absolute/folder" --env WINEDEBUG=-all --dll d3d11=b --unset-dll xinput1_3
+```
+
+`--args ""` clears arguments, `--clear-workdir` restores the EXE folder, `--unset-env KEY` removes a variable, and `--env`/`--dll`/`--unset-*` may repeat. A DLL mode is `n`, `b`, `n,b`, `b,n`, or `disabled` (empty after `=` also disables).
 
 ## Environment, synchronization, and display
 
@@ -136,7 +161,8 @@ Side effects (Desktop, display adoption, prefix DLL repairs, component validatio
 1. **Managed base defaults:** start with the parent's environment minus inherited Wine/loader (`WINE*`), `DYLD_*`, DXVK/DXMT/D3DMetal (`DXVK_*`, `DXMT_*`, `D3DM_*`, `CX_APPLEGPTK_LIBD3DSHARED_PATH`), Metal (`MTL_*`), and controller (`MAGICWINE_GAMEPAD_*`) settings; external Wine keeps inherited `WINEMSYNC`/`WINEESYNC`/`WINEFSYNC`. Prepend the pinned runtime's `bin` to `PATH`, supply `WINEPREFIX`, `shdocvw=n,b`, managed synchronization, and the Mono TLS correction.
 2. **Compatibility integrations:** `wow64cpu=n`, the XInput bridge (`=n,b`) or forced builtin XInput (`=b`), and the controller session variable.
 3. **Graphics backend:** the backend's DLL overrides and variables, and for Metal backends the private loader as executable plus `WINELOADER`/`WINESERVER`.
-4. **Bottle settings**, then 5. **program settings** as the highest layer; both are reserved for per-bottle and per-program launch options and currently contribute nothing.
+4. **Bottle settings** (reserved for per-bottle launch options; currently empty).
+5. **Program settings**, the highest layer: the launched program's `environment` and `dllOverrides`, plus its arguments and working directory for an EXE.
 
 Server operations (`wineserver -k/-w`) and version inspection use only the base layer.
 
@@ -153,8 +179,9 @@ Mutation semantics intentionally differ:
 | Automatic display adoption before launch | Waits for idle ownership and server exit; never kills existing Wine solely to adopt display defaults. Failure asks the user to close programs or use Stop. |
 | Graphics configuration | Stops the bottle before changing graphics files under exclusive ownership; see [graphics](graphics.md) for transactions and component rules. |
 | Graphics HUD only | Metadata-only `setGraphicsHUD`: allowed while programs run, never stops processes or touches prefix DLLs, applies to later launches. During its brief metadata write it excludes other setting changes of the same bottle, and a launch starting in that instant is refused with the usual "wait for setup" error. |
+| Program name or launch options | Metadata-only `BottleStore.updateProgram`: allowed while programs run, never stops processes or touches the prefix, applies to that program's next launch; refused when the saved record changed since the edit began. |
 
-Retina on means 192 DPI / 200%; off means 96 DPI / 100%, bottle-wide, including games. `BottleStore.prepareDisplay` retains the previous registry bytes and restores them if saving metadata fails. General `BottleStore.save` rejects attempts to bypass the dedicated runtime/display/graphics/synchronization APIs.
+Retina on means 192 DPI / 200%; off means 96 DPI / 100%, bottle-wide, including games. `BottleStore.prepareDisplay` retains the previous registry bytes and restores them if saving metadata fails. General `BottleStore.save` rejects attempts to bypass the dedicated runtime/display/graphics/synchronization/program-option APIs.
 
 ## Stop, cancellation, failures, and deletion
 

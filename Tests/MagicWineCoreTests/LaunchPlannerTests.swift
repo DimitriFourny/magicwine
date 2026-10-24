@@ -168,4 +168,34 @@ struct LaunchPlannerTests {
         let inspection = LaunchPlanner.plan(older).environment
         #expect(inspection["MONO_DEBUG"] == nil && inspection["WINEPREFIX"] == nil)
     }
+
+    @Test func programLayerWinsOverBackendAndAppliesArgumentsToEXEOnly() throws {
+        let component = URL(fileURLWithPath: "/c")
+        var request = try Self.request(graphics: .dxvk(component: component,
+            folders: GraphicsFolders(cache: URL(fileURLWithPath: "/cache"), logs: URL(fileURLWithPath: "/logs")), showHUD: true))
+        var program = WindowsProgram(name: "Game", executablePath: Self.program.path, arguments: ["-windowed", "a b"],
+                                     workingDirectory: "/Users/player/Saves",
+                                     environment: ["DXVK_HUD": "fps", "WINE_D3D_CONFIG": "renderer=gl", "WINEDEBUG": "+loaddll"])
+        program.dllOverrides = try DLLOverrides(parsing: "dxgi=n;xinput1_3=b;mscoree=")
+        request.program = program
+        let plan = LaunchPlanner.plan(request)
+        #expect(plan.arguments == [Self.program.path, "-windowed", "a b"])
+        #expect(plan.directory == URL(fileURLWithPath: "/Users/player/Saves", isDirectory: true))
+        #expect(plan.environment["DXVK_HUD"] == "fps")
+        #expect(plan.environment["WINE_D3D_CONFIG"] == "renderer=gl")
+        #expect(plan.environment["WINEDEBUG"] == "+loaddll")
+        #expect(plan.environment["DXVK_CONFIG_FILE"] == "/c/dxvk.conf")
+        #expect(plan.environment["WINEDLLOVERRIDES"] ==
+                "shdocvw=n,b;wow64cpu=n;xinput1_1,xinput1_2=n,b;xinput1_3=b;xinput1_4,xinput9_1_0=n,b;d3d9,d3d10core,d3d11,dxgi=n;mscoree=")
+
+        // A shortcut gets the environment and load order, never EXE arguments or folder.
+        request.arguments = ["start", "/unix", "/drive_c/Game.lnk"]
+        request.program = WindowsProgram(name: "Game", executablePath: "/drive_c/Game.lnk", environment: ["DXVK_HUD": "fps"],
+                                         dllOverrides: try DLLOverrides(parsing: "dxgi=n"))
+        let shortcut = LaunchPlanner.plan(request)
+        #expect(shortcut.arguments == ["start", "/unix", "/drive_c/Game.lnk"])
+        #expect(shortcut.directory == Self.program.deletingLastPathComponent())
+        #expect(shortcut.environment["DXVK_HUD"] == "fps")
+        #expect(try DLLOverrides(parsing: shortcut.environment["WINEDLLOVERRIDES"] ?? "")["dxgi"] == .native)
+    }
 }

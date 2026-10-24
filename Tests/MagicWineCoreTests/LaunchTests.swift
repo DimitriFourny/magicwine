@@ -37,7 +37,8 @@ struct LaunchTests {
             if [ "$1" = start ]; then case "$3" in *fail*) exit 1 ;; esac; exit 0; fi
             case "$1" in
               *exit-*.exe) env > "$WINEPREFIX/launch-environment"; code="${1##*exit-}"; exit "${code%.exe}" ;;
-              *.exe) env > "$WINEPREFIX/launch-environment" ;;
+              *.exe) env > "$WINEPREFIX/launch-environment"; printf '%s\\n' "$@" > "$WINEPREFIX/launch-arguments"
+                     pwd -P > "$WINEPREFIX/launch-directory" ;;
             esac
             exit 0
             """
@@ -284,6 +285,77 @@ struct LaunchTests {
         #expect(finished.value == nil)
         #expect(!FileManager.default.fileExists(atPath: fixture.prefix.appendingPathComponent("killed").path))
         #expect(try FileManager.default.subpathsOfDirectory(atPath: fixture.prefix.path).sorted() == prefixBefore)
+        _ = try await fixture.wine.stop(fixture.bottle)
+        _ = await task.value
+    }
+
+    @Test func programOptionsSaveWhileAProgramRunsAndApplyToItsNextLaunch() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.remove() }
+        let finished = Box<Bool>()
+        let task = Task {
+            _ = try? await fixture.wine.run(arguments: ["hold"], in: fixture.bottle)
+            finished.set(true)
+        }
+        defer { task.cancel() }
+        let marker = fixture.prefix.appendingPathComponent("holding")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+
+        let registered = try await fixture.store.registerProgram(
+            in: fixture.bottle, executableURL: URL(fileURLWithPath: try fixture.program("game.exe").executablePath))
+        let original = try #require(registered.programs.first)
+        let folder = fixture.paths.root.appendingPathComponent("Saves Folder", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var edited = original
+        edited.name = "  Game (windowed) "
+        edited.arguments = ["-windowed", "My Settings.ini"]
+        edited.workingDirectory = folder.path
+        edited.environment = ["WINEDEBUG": "+loaddll", "DXVK_HUD": "fps"]
+        try edited.dllOverrides.set(.builtin, for: "xinput1_3")
+        try edited.dllOverrides.set(.native, for: "shdocvw")
+        let updated = try await fixture.store.updateProgram(edited, from: original, in: registered)
+        let saved = try #require(updated.programs.first)
+        #expect(saved.name == "Game (windowed)")
+        #expect(try await fixture.store.current(fixture.bottle).programs == [saved])
+
+        // A stale editor, the general save, denied keys, and a missing folder change nothing.
+        await #expect(throws: MagicWineError.self) { try await fixture.store.updateProgram(original, from: original, in: updated) }
+        var bypass = updated
+        bypass.programs[0].environment = [:]
+        await #expect(throws: MagicWineError.self) { try await fixture.store.save(bypass) }
+        var denied = saved
+        denied.environment["WINEPREFIX"] = "/tmp/elsewhere"
+        await #expect(throws: MagicWineError.self) { try await fixture.store.updateProgram(denied, from: saved, in: updated) }
+        var missing = saved
+        missing.workingDirectory = fixture.paths.root.appendingPathComponent("missing").path
+        await #expect(throws: MagicWineError.self) { try await fixture.store.updateProgram(missing, from: saved, in: updated) }
+        #expect(try await fixture.store.current(fixture.bottle).programs == [saved])
+        #expect(finished.value == nil)
+
+        // The caller's record is stale; the launch re-reads the saved options.
+        let result = try await fixture.wine.launch(original, in: fixture.bottle)
+        #expect(result.exitCode == 0)
+        let environment = try fixture.launchEnvironment()
+        #expect(environment["WINEDEBUG"] == "+loaddll")
+        #expect(environment["DXVK_HUD"] == "fps")
+        let overrides = try DLLOverrides(parsing: try #require(environment["WINEDLLOVERRIDES"]))
+        #expect(overrides["xinput1_3"] == .builtin)
+        #expect(overrides["shdocvw"] == .native)
+        let arguments = try String(contentsOf: fixture.prefix.appendingPathComponent("launch-arguments"), encoding: .utf8)
+        #expect(arguments == [saved.executablePath, "-windowed", "My Settings.ini"].joined(separator: "\n") + "\n")
+        let directory = try String(contentsOf: fixture.prefix.appendingPathComponent("launch-directory"), encoding: .utf8)
+        let physical = try #require(realpath(folder.path, nil))
+        defer { free(physical) }
+        #expect(directory == String(cString: physical) + "\n")
+
+        // A removed working directory fails the launch rather than using another folder.
+        try FileManager.default.removeItem(at: folder)
+        await #expect(throws: MagicWineError.self) { try await fixture.wine.launch(saved, in: fixture.bottle) }
+        #expect(finished.value == nil)
         _ = try await fixture.wine.stop(fixture.bottle)
         _ = await task.value
     }

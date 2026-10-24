@@ -99,7 +99,7 @@ The native bottle's **Reveal Logs** action opens the library logs. For an isolat
 | `Logs/<bottle-UUID>-wineserver-<UUID>.log` | Prefix-scoped stop/wait operations |
 | `Logs/<bottle-UUID>-not-started-<UUID>.log` | A requested Stop prevented a pending process from starting |
 | `Logs/<bottle-UUID>-dxvk/`, `Logs/<bottle-UUID>-dxmt/` | Backend output where provided |
-| `Bottles/<UUID>/bottle.json` | Pinned runtime, saved launchers, selected component, display/synchronization preferences |
+| `Bottles/<UUID>/bottle.json` | Pinned runtime, saved launchers and their launch options, selected component, display/synchronization preferences |
 | `Bottles/<UUID>/graphics/` | Active originals, transaction/recovery state, and renderer caches |
 | `Bottles/<UUID>/runtime-compatibility/` | CPU/XInput original backups and matching source/notices |
 
@@ -109,7 +109,7 @@ The presence of a backend log or cache directory does not prove the game reached
 
 ### Environment overrides are controlled
 
-MagicWine strips inherited Wine/loader and graphics variables and reconstructs its launch environment. In particular, `WINEDEBUG=... magicwine exec ...` is not a supported way to retain a diagnostic override, and inherited `DXVK_*`, `DXMT_*`, `D3DM_*`, `MTL_*`, and `DYLD_*` values are not authoritative.
+MagicWine strips inherited Wine/loader and graphics variables and reconstructs its launch environment. In particular, `WINEDEBUG=... magicwine exec ...` is not a supported way to retain a diagnostic override, and inherited `DXVK_*`, `DXMT_*`, `D3DM_*`, `MTL_*`, and `DYLD_*` values are not authoritative. To change them for one saved program, use its launch options (dashboard **Edit…**, or `"$CLI" --root "$ROOT" program "$BOTTLE" "$PROGRAM" --env WINEDEBUG=+loaddll --dll d3d11=b`); they are the highest launch layer and are recorded in `bottle.json`, so remove them (`--unset-env`, `--unset-dll`) after the experiment. Prefix, loader, server, `PATH`, and `DYLD_*` variables cannot be set this way.
 
 If deeper logging requires a source change, make that explicit in the research checkout and record it. A direct raw-Wine invocation bypasses MagicWine's preparation and can be a useful comparison only in a disposable prefix; it is not an equivalent reproduction of managed graphics/controller/runtime behavior. Do not manually modify a production bottle's overrides to force a diagnostic result.
 

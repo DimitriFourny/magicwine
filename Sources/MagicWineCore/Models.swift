@@ -35,11 +35,53 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public var name: String
     public let executablePath: String
+    /// Appended after the EXE path. Direct EXE launches only; see `supportsArgumentsAndDirectory`.
+    public var arguments: [String]
+    /// Host directory for a direct EXE launch; `nil` uses the EXE's folder.
+    public var workingDirectory: String?
+    /// Highest launch layer: wins over bottle and backend values of the same variable.
+    public var environment: [String: String]
+    /// Highest launch layer: wins over bottle, backend, and integration load orders.
+    public var dllOverrides: DLLOverrides
 
-    public init(id: UUID = UUID(), name: String, executablePath: String) {
+    public init(id: UUID = UUID(), name: String, executablePath: String, arguments: [String] = [],
+                workingDirectory: String? = nil, environment: [String: String] = [:],
+                dllOverrides: DLLOverrides = .init()) {
         self.id = id
         self.name = name
         self.executablePath = executablePath
+        self.arguments = arguments
+        self.workingDirectory = workingDirectory
+        self.environment = environment
+        self.dllOverrides = dllOverrides
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, executablePath, arguments, workingDirectory, environment, dllOverrides
+    }
+
+    /// Records saved before launch options existed decode with empty options.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        executablePath = try container.decode(String.self, forKey: .executablePath)
+        arguments = try container.decodeIfPresent([String].self, forKey: .arguments) ?? []
+        workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
+        environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
+        dllOverrides = try container.decodeIfPresent(DLLOverrides.self, forKey: .dllOverrides) ?? .init()
+    }
+
+    /// Empty options are omitted, so unedited programs keep their original shape.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(executablePath, forKey: .executablePath)
+        if !arguments.isEmpty { try container.encode(arguments, forKey: .arguments) }
+        try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
+        if !environment.isEmpty { try container.encode(environment, forKey: .environment) }
+        if !dllOverrides.isEmpty { try container.encode(dllOverrides, forKey: .dllOverrides) }
     }
 }
 

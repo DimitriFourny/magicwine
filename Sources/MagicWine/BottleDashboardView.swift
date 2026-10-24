@@ -6,6 +6,7 @@ struct BottleDashboardView: View {
     @ObservedObject var model: AppModel
     let bottle: Bottle
     let trash: () -> Void
+    @State private var editingProgram: WindowsProgram?
 
     private var currentBottle: Bottle {
         model.bottles.first { $0.id == bottle.id } ?? bottle
@@ -53,6 +54,9 @@ struct BottleDashboardView: View {
         }
         .foregroundStyle(WineTheme.text)
         .navigationTitle(currentBottle.name)
+        .sheet(item: $editingProgram) { program in
+            ProgramEditorView(model: model, bottle: currentBottle, program: program)
+        }
     }
 
     private var programsColumn: some View {
@@ -375,6 +379,7 @@ struct BottleDashboardView: View {
             .disabled(launchUnavailable)
             .accessibilityLabel("Launch \(program.name)")
             Menu {
+                Button("Edit…") { editingProgram = program }
                 Button("Remove from MagicWine", role: .destructive) {
                     model.removeProgram(program, in: currentBottle)
                 }
@@ -386,12 +391,14 @@ struct BottleDashboardView: View {
             .fixedSize()
             .disabled(activity.blocksLibraryEdit)
             .accessibilityLabel("Actions for \(program.name)")
-            .help("Remove this program from MagicWine without deleting its file")
+            .help("Edit this program’s launch options, or remove it from MagicWine without deleting its file")
         }
         .padding(.vertical, 10)
         .contextMenu {
             Button("Launch") { model.launch(program, in: currentBottle) }
                 .disabled(launchUnavailable)
+            Button("Edit…") { editingProgram = program }
+                .disabled(activity.blocksLibraryEdit)
             Button("Remove from MagicWine", role: .destructive) {
                 model.removeProgram(program, in: currentBottle)
             }

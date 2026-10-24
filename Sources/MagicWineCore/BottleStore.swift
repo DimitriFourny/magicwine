@@ -71,6 +71,11 @@ public actor BottleStore {
             guard bottle.runtime == current.runtime else {
                 throw MagicWineError.setup("The pinned runtime must be changed through WineRuntime.upgradeRuntime.")
             }
+            for program in bottle.programs {
+                if let saved = current.programs.first(where: { $0.id == program.id }), saved != program {
+                    throw MagicWineError.setup("Program names and launch options must be changed through BottleStore.updateProgram.")
+                }
+            }
             var normalized = bottle
             _ = normalizePrograms(in: &normalized)
             try saveUnlocked(normalized)
@@ -206,6 +211,31 @@ public actor BottleStore {
     public func removeProgram(id: UUID, in bottle: Bottle) throws -> Bottle {
         try mutateCurrent(bottle) { current, _ in
             current.programs.removeAll { $0.id == id }
+        }
+    }
+
+    /// Saves a program's name and launch options. Metadata only: allowed while programs
+    /// run and used by the next launch. `original` is the record the edit started from;
+    /// if the saved record differs, another editor changed it and nothing is written.
+    public func updateProgram(_ program: WindowsProgram, from original: WindowsProgram, in bottle: Bottle) throws -> Bottle {
+        try mutateCurrent(bottle) { current, _ in
+            guard let index = current.programs.firstIndex(where: { $0.id == program.id }) else {
+                throw MagicWineError.setup("\(original.name) is no longer saved in this bottle. Reload the bottle and try again.")
+            }
+            guard original.id == program.id, current.programs[index] == original else {
+                throw MagicWineError.setup("\(original.name) was changed elsewhere. Reload the bottle and edit it again.")
+            }
+            guard program.executablePath == original.executablePath else {
+                throw MagicWineError.setup("A saved program's file cannot be changed. Add the other file as a new program.")
+            }
+            var updated = program
+            updated.name = try validatedName(program.name)
+            try updated.validateLaunchOptions()
+            if updated.workingDirectory != original.workingDirectory {
+                updated.workingDirectory = try updated.launchDirectory()?.path
+            }
+            current.programs[index] = updated
+            current.programs.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         }
     }
 

@@ -701,6 +701,17 @@ final class AppModel: ObservableObject {
             }
         }
     }
+
+    // MARK: - Program launch options
+
+    /// Metadata only, like Add/Remove Program: allowed while programs run, and the next
+    /// launch of this program uses the new options. Errors return to the editor sheet.
+    func saveProgram(_ program: WindowsProgram, from original: WindowsProgram, in bottle: Bottle) async throws {
+        guard !activity(for: bottle).blocksLibraryEdit else {
+            throw MagicWineError.setup("Wait for this bottle’s operation to finish, then save again.")
+        }
+        replace(try await store.updateProgram(program, from: original, in: current(bottle)))
+    }
 }
 
 /// A dismissible, non-error status for one bottle, tied to one specific process log.

@@ -45,6 +45,8 @@ internal struct LaunchRequest: Sendable {
     var msyncEnabled = true
     var integrations: LaunchIntegrations?
     var graphics: GraphicsLaunchFacts?
+    /// A saved program's options (validated by `WineRuntime`), applied last.
+    var program: WindowsProgram?
 }
 
 internal struct LaunchPlan: Equatable, Sendable {
@@ -69,6 +71,8 @@ internal enum LaunchPlanner {
     static func plan(_ request: LaunchRequest) -> LaunchPlan {
         var environment = scrubbed(request.inherited, managedMSync: request.runtime.managedMSync)
         var executable = request.executable
+        var arguments = request.arguments
+        var directory = request.directory
         var layers = [base(request, scrubbed: environment)]
         if let integrations = request.integrations {
             layers.append(Layer(set: integrations.environment, overrides: integrations.overrides))
@@ -78,6 +82,13 @@ internal enum LaunchPlanner {
             layers.append(layer)
             if let loader { executable = loader }
         }
+        if let program = request.program {
+            layers.append(Layer(set: program.environment, overrides: program.dllOverrides))
+            if program.supportsArgumentsAndDirectory {
+                arguments += program.arguments
+                if let folder = program.workingDirectory { directory = URL(fileURLWithPath: folder, isDirectory: true) }
+            }
+        }
         var overrides = DLLOverrides()
         for layer in layers {
             for key in layer.unset { environment.removeValue(forKey: key) }
@@ -85,8 +96,8 @@ internal enum LaunchPlanner {
             overrides = overrides.layered(with: layer.overrides)
         }
         environment["WINEDLLOVERRIDES"] = overrides.serialized
-        return LaunchPlan(executable: executable, arguments: request.arguments, environment: environment,
-                          directory: request.directory, warnings: request.integrations?.warnings ?? [])
+        return LaunchPlan(executable: executable, arguments: arguments, environment: environment,
+                          directory: directory, warnings: request.integrations?.warnings ?? [])
     }
 
     /// Inherited loader/prefix/graphics settings never leak in. Custom Wine keeps its

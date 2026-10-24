@@ -171,6 +171,48 @@ struct MagicWineCLI {
                 }
             default: break
             }
+        case "program":
+            guard values.count >= 2, let id = UUID(uuidString: values[1]) else { throw argumentError(programUsage) }
+            let bottle = try await findBottle(values[0], store: store)
+            guard let original = bottle.programs.first(where: { $0.id == id }) else {
+                throw argumentError("Unknown program UUID (see apps).\n" + programUsage)
+            }
+            var edited = original
+            var index = 2
+            func next() throws -> String {
+                guard index + 1 < values.count else { throw argumentError(programUsage) }
+                index += 1
+                return values[index]
+            }
+            func pair(_ text: String) throws -> (String, String) {
+                guard let separator = text.firstIndex(of: "="), separator != text.startIndex else { throw argumentError(programUsage) }
+                return (String(text[..<separator]), String(text[text.index(after: separator)...]))
+            }
+            while index < values.count {
+                switch values[index] {
+                case "--name": edited.name = try next()
+                case "--args": edited.arguments = try WindowsProgram.parseArguments(next())
+                case "--workdir": edited.workingDirectory = URL(fileURLWithPath: try next(), isDirectory: true).standardizedFileURL.path
+                case "--clear-workdir": edited.workingDirectory = nil
+                case "--env":
+                    let (key, value) = try pair(next())
+                    edited.environment[key] = value
+                case "--unset-env": edited.environment[try next()] = nil
+                case "--dll":
+                    let (name, mode) = try pair(next())
+                    try edited.dllOverrides.set(DLLOverrides.Mode(parsing: mode), for: name)
+                case "--unset-dll": edited.dllOverrides.remove(try next())
+                default: throw argumentError(programUsage)
+                }
+                index += 1
+            }
+            var program = original
+            if edited != original {
+                // Metadata only: running programs keep going; the next launch uses it.
+                let updated = try await store.updateProgram(edited, from: original, in: bottle)
+                program = updated.programs.first { $0.id == id } ?? edited
+            }
+            printProgramOptions(program)
         default: throw argumentError("Unknown command: \(command)")
         }
     }
@@ -184,6 +226,18 @@ struct MagicWineCLI {
 
     private static func printPrograms(_ bottle: Bottle) {
         for program in bottle.programs { print("\(program.id)\t\(program.name)\t\(program.executablePath)") }
+    }
+
+    private static func printProgramOptions(_ program: WindowsProgram) {
+        print("\(program.id)\t\(program.name)\t\(program.executablePath)")
+        if program.supportsArgumentsAndDirectory {
+            print("arguments\t\(WindowsProgram.formatArguments(program.arguments))")
+            print("workdir\t\(program.workingDirectory ?? "(EXE folder)")")
+        } else {
+            print("arguments\t(not used: Wine starts LNK/URL shortcuts with their own arguments and folder)")
+        }
+        for key in program.environment.keys.sorted() { print("env\t\(key)=\(program.environment[key] ?? "")") }
+        if !program.dllOverrides.isEmpty { print("dll\t\(program.dllOverrides.serialized)") }
     }
 
     /// Called as soon as Wine starts; a long-running program can exit much later.
@@ -203,6 +257,8 @@ struct MagicWineCLI {
     private static func argumentError(_ detail: String) -> MagicWineError { .setup("\(detail)\nRun magicwine --help for usage.") }
 
     private static let graphicsUsage = "graphics <bottle-UUID> standard|dxvk|dxmt|d3dmetal [--accept-experimental] [--hud|--no-hud] [--import <D3DMetal-library-folder>]"
+
+    private static let programUsage = "program <bottle-UUID> <program-UUID> [--name <name>] [--args \"<arguments>\"] [--workdir <folder>|--clear-workdir] [--env KEY=VALUE]… [--unset-env KEY]… [--dll <name>=n|b|n,b|b,n|disabled]… [--unset-dll <name>]…"
 
     private static let usage = """
     MagicWine — isolated Windows apps on macOS
@@ -237,5 +293,10 @@ struct MagicWineCLI {
         Run install-wine --accept-unsigned first; does not download Wine or change custom runtime bottles
       exec <bottle-UUID> <wine-arguments…>       Run Wine with isolated prefix
         Prints the log; exits with Wine's exit code
+      program <bottle-UUID> <program-UUID> [options]
+        Show or edit a saved program's name and launch options for its next launch
+        --name N, --args "…" (quoted like a shell; "" clears), --workdir PATH | --clear-workdir,
+        --env K=V / --unset-env K, --dll name=n|b|n,b|b,n|disabled / --unset-dll name (repeatable)
+        Arguments and working directory apply to EXE programs only; running programs are not stopped
     """
 }

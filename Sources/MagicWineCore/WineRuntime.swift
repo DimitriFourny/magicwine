@@ -162,6 +162,10 @@ public actor WineRuntime {
     /// 8 bits of the Windows exit code. Errors remain for failing to start, Stop,
     /// leases/validation, and a signal. For LNK/URL a nonzero `start /unix` status means
     /// Wine could not dispatch the shortcut, so it stays `processFailed`.
+    ///
+    /// The program's saved launch options (re-read from the bottle, so an edit made while
+    /// other programs run applies here) form the highest launch layer. Arguments and the
+    /// working directory apply to EXE files only.
     public func launch(_ program: WindowsProgram, in bottle: Bottle,
                        onStart: (@Sendable (LaunchStart) -> Void)? = nil) async throws -> OperationResult {
         let executable = try windowsFile(URL(fileURLWithPath: program.executablePath), extensions: ["exe", "lnk", "url"])
@@ -169,7 +173,7 @@ public actor WineRuntime {
         let arguments = isShortcut ? ["start", "/unix", executable.path] : [executable.path]
         let result = try await execute(arguments: arguments, bottle: bottle,
                                        directory: executable.deletingLastPathComponent(), timeout: nil,
-                                       onStart: onStart, exitStatusIsResult: !isShortcut)
+                                       onStart: onStart, exitStatusIsResult: !isShortcut, program: program)
         if isShortcut {
             // ShellExecute launches shortcuts asynchronously. Observe the prefix's
             // server lifetime instead of start /wait's unreliable shortcut handle.
@@ -415,7 +419,7 @@ public actor WineRuntime {
     private func execute(arguments: [String], bottle: Bottle, directory: URL?, timeout: TimeInterval?,
                          server: Bool = false, tracked: Bool = true, idleProbe: Bool = false,
                          onStart: (@Sendable (LaunchStart) -> Void)? = nil,
-                         exitStatusIsResult: Bool = false) async throws -> OperationResult {
+                         exitStatusIsResult: Bool = false, program: WindowsProgram? = nil) async throws -> OperationResult {
         guard server || !settingsChanging.contains(bottle.id) else {
             throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
         }
@@ -454,6 +458,15 @@ public actor WineRuntime {
         let executable = server ? wine.deletingLastPathComponent().appendingPathComponent("wineserver") : wine
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(executable.path). Select an intact Wine distribution; this bottle was not migrated.")
+        }
+        // Options come from the saved record; hand-edited metadata is validated again.
+        let savedProgram = try program.map { requested in
+            let saved = current.programs.first {
+                $0.id == requested.id && $0.executablePath == requested.executablePath
+            } ?? requested
+            try saved.validateLaunchOptions()
+            _ = try saved.launchDirectory()
+            return saved
         }
         if !server, try await store.displayNeedsUpdate(current) {
             // Never rewrite a live wineserver's registry or terminate a game merely
@@ -507,7 +520,8 @@ public actor WineRuntime {
         let plan = LaunchPlanner.plan(LaunchRequest(
             inherited: ProcessInfo.processInfo.environment, runtime: runtimeFacts(for: wine),
             executable: executable, arguments: arguments, directory: directory ?? prefix, prefix: prefix,
-            msyncEnabled: current.msyncEnabled, integrations: integrations, graphics: graphics))
+            msyncEnabled: current.msyncEnabled, integrations: integrations, graphics: graphics,
+            program: savedProgram))
         let id = UUID()
         let log = logURL(name: "\(bottle.id.uuidString)-\(server ? "wineserver" : "wine")")
         let operation = ProcessOperation(executable: plan.executable, arguments: plan.arguments,
