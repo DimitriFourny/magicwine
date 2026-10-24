@@ -113,7 +113,7 @@ MagicWine strips inherited Wine/loader and graphics variables and reconstructs i
 
 If deeper logging requires a source change, make that explicit in the research checkout and record it. A direct raw-Wine invocation bypasses MagicWine's preparation and can be a useful comparison only in a disposable prefix; it is not an equivalent reproduction of managed graphics/controller/runtime behavior. Do not manually modify a production bottle's overrides to force a diagnostic result.
 
-Sources: [ProcessOperation.swift](../Sources/MagicWineCore/ProcessOperation.swift), `environment` in [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift).
+Sources: [ProcessOperation.swift](../Sources/MagicWineCore/ProcessOperation.swift), [LaunchPlanner.swift](../Sources/MagicWineCore/LaunchPlanner.swift).
 
 ## 5. Narrow the failing layer
 

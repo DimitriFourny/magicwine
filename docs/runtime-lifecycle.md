@@ -131,7 +131,16 @@ An EXE launches with its containing directory as working directory. LNK/URL file
 
 ## Environment, synchronization, and display
 
-The environment starts with the parent's environment, then removes inherited Wine/loader, `DYLD_`, DXVK/DXMT/D3DMetal, Metal, controller, and GPTK library-selection settings owned by the integration. It prepends the pinned runtime's `bin` to `PATH`, supplies `WINEPREFIX`, and establishes `WINEDLLOVERRIDES=shdocvw=n,b` before integration-specific additions. This is not a minimal environment or a security boundary.
+Side effects (Desktop, display adoption, prefix DLL repairs, component validation, graphics folders, private runtime views, leases) stay in `WineRuntime`. It then hands only facts to the pure [`LaunchPlanner`](../Sources/MagicWineCore/LaunchPlanner.swift), which returns the exact executable, arguments, environment, working directory, and warnings, and `execute` runs that plan. The planner applies layers in a fixed order, lowest to highest, where a higher layer wins per variable and per DLL:
+
+1. **Managed base defaults:** start with the parent's environment minus inherited Wine/loader (`WINE*`), `DYLD_*`, DXVK/DXMT/D3DMetal (`DXVK_*`, `DXMT_*`, `D3DM_*`, `CX_APPLEGPTK_LIBD3DSHARED_PATH`), Metal (`MTL_*`), and controller (`MAGICWINE_GAMEPAD_*`) settings; external Wine keeps inherited `WINEMSYNC`/`WINEESYNC`/`WINEFSYNC`. Prepend the pinned runtime's `bin` to `PATH`, supply `WINEPREFIX`, `shdocvw=n,b`, managed synchronization, and the Mono TLS correction.
+2. **Compatibility integrations:** `wow64cpu=n`, the XInput bridge (`=n,b`) or forced builtin XInput (`=b`), and the controller session variable.
+3. **Graphics backend:** the backend's DLL overrides and variables, and for Metal backends the private loader as executable plus `WINELOADER`/`WINESERVER`.
+4. **Bottle settings**, then 5. **program settings** as the highest layer; both are reserved for per-bottle and per-program launch options and currently contribute nothing.
+
+Server operations (`wineserver -k/-w`) and version inspection use only the base layer.
+
+`WINEDLLOVERRIDES` is never concatenated. Every layer contributes a typed [`DLLOverrides`](../Sources/MagicWineCore/DLLOverrides.swift) value (ordered DLL names with mode `n`, `b`, `n,b`, `b,n`, or disabled); setting a DLL a lower layer already named replaces its mode in place, so duplicate keys, which Wine itself resolves in no documented order, cannot occur. The result is serialized once, with adjacent DLLs of the same mode sharing a segment, for example `shdocvw=n,b;wow64cpu=n;xinput1_1,…,xinput9_1_0=n,b;d3d9,d3d10core,d3d11=n;dxgi=b` for DXVK. This is not a minimal environment or a security boundary.
 
 For the current managed runtime, capability is identified by canonical executable location, not its reported version string. MagicWine sets `WINEMSYNC` from bottle metadata (default `1`) and forces `WINEESYNC=0` and `WINEFSYNC=0`. External Wine retains inherited values for those three synchronization switches; MagicWine does not claim to own its policy. Older pinned managed Metal runtimes receive the Mono fallback-TLS correction but do not gain current-runtime MSync capability merely from a matching version label. See [compatibility](compatibility.md) for the underlying runtime changes.
 

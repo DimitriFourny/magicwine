@@ -129,7 +129,7 @@ struct LaunchTests {
             try RosettaCPUCompatibility.install(prefix: prefix, bottleDirectory: bottle, payload: payload, originalSHA256: digest)
         }, bridge: { GamepadBridge.overrides })
 
-        #expect(integrations.overrides == [GamepadBridge.overrides])
+        #expect(integrations.overrides == (try DLLOverrides(parsing: GamepadBridge.overrides)))
         #expect(integrations.environment == state)
         #expect(integrations.warnings.count == 1)
         #expect(try Data(contentsOf: destination) == custom)
@@ -142,7 +142,7 @@ struct LaunchTests {
             gamepad: .failure(GamepadError.invalidConfiguration("unreadable profiles")),
             rosetta: { true }, bridge: { bridgeCalled = true; return GamepadBridge.overrides })
         #expect(!bridgeCalled)
-        #expect(integrations.overrides == ["wow64cpu=n", GamepadBridge.builtinOverrides])
+        #expect(integrations.overrides == (try DLLOverrides(parsing: "wow64cpu=n;" + GamepadBridge.builtinOverrides)))
         #expect(integrations.environment.isEmpty)
         #expect(integrations.warnings.count == 1)
     }

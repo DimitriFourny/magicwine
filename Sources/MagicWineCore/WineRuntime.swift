@@ -451,7 +451,7 @@ public actor WineRuntime {
         // The descriptor is pinned, never fall back to whichever Wine is in PATH today.
         let wine = current.runtime.executableURL.standardizedFileURL
         try validateExecutable(wine)
-        var executable = server ? wine.deletingLastPathComponent().appendingPathComponent("wineserver") : wine
+        let executable = server ? wine.deletingLastPathComponent().appendingPathComponent("wineserver") : wine
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw MagicWineError.runtimeUnavailable("The bottle's pinned runtime is missing \(executable.path). Select an intact Wine distribution; this bottle was not migrated.")
         }
@@ -481,8 +481,7 @@ public actor WineRuntime {
                 try BottleDesktop.prepare(prefix: prefix)
             }
         }
-        var processEnvironment = environment(executable: wine, prefix: prefix, msyncEnabled: current.msyncEnabled)
-        var warnings: [String] = []
+        var integrations: LaunchIntegrations?
         if !server, current.isInitialized {
             let gamepad: Result<[String: String], any Error>
             do { gamepad = .success(try await GamepadService.shared.prepare(paths: paths)) }
@@ -492,7 +491,7 @@ public actor WineRuntime {
             try Task.checkCancellation()
             if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
             let directory = prefix.deletingLastPathComponent()
-            let integrations = try Self.prepareIntegrations(gamepad: gamepad, rosetta: {
+            integrations = try Self.prepareIntegrations(gamepad: gamepad, rosetta: {
                 try GraphicsPrefix.withLock(bottleDirectory: directory) {
                     try RosettaCPUCompatibility.prepare(runtime: current.runtime, prefix: prefix,
                                                          bottleDirectory: directory)
@@ -502,20 +501,18 @@ public actor WineRuntime {
                     try GamepadBridge.prepare(prefix: prefix, bottleDirectory: directory)
                 }
             })
-            for override in integrations.overrides { processEnvironment["WINEDLLOVERRIDES", default: ""] += ";" + override }
-            processEnvironment.merge(integrations.environment) { _, gamepadValue in gamepadValue }
-            warnings = integrations.warnings
         }
-        if !server, current.graphics.backend != .standard {
-            let graphics = try prepareGraphicsLaunch(for: current, prefix: prefix, base: processEnvironment)
-            executable = graphics.executable
-            processEnvironment = graphics.environment
-        }
+        let graphics = !server && current.graphics.backend != .standard
+            ? try prepareGraphicsLaunch(for: current, prefix: prefix) : nil
+        let plan = LaunchPlanner.plan(LaunchRequest(
+            inherited: ProcessInfo.processInfo.environment, runtime: runtimeFacts(for: wine),
+            executable: executable, arguments: arguments, directory: directory ?? prefix, prefix: prefix,
+            msyncEnabled: current.msyncEnabled, integrations: integrations, graphics: graphics))
         let id = UUID()
         let log = logURL(name: "\(bottle.id.uuidString)-\(server ? "wineserver" : "wine")")
-        let operation = ProcessOperation(executable: executable, arguments: arguments,
-            environment: processEnvironment, directory: directory ?? prefix,
-            logURL: log, timeout: timeout, warnings: warnings, exitStatusIsResult: exitStatusIsResult)
+        let operation = ProcessOperation(executable: plan.executable, arguments: plan.arguments,
+            environment: plan.environment, directory: plan.directory,
+            logURL: log, timeout: timeout, warnings: plan.warnings, exitStatusIsResult: exitStatusIsResult)
         if tracked { active[bottle.id, default: [:]][id] = operation }
         defer {
             if tracked {
@@ -523,7 +520,7 @@ public actor WineRuntime {
                 if active[bottle.id]?.isEmpty == true { active[bottle.id] = nil }
             }
         }
-        let started = LaunchStart(logURL: log, warnings: warnings)
+        let started = LaunchStart(logURL: log, warnings: plan.warnings)
         do {
             return try await operation.run(onStart: {
                 launch?.release()
@@ -550,7 +547,7 @@ public actor WineRuntime {
                                              bridge: () throws -> String) throws -> LaunchIntegrations {
         var result = LaunchIntegrations()
         do {
-            if try rosetta() { result.overrides.append("wow64cpu=n") }
+            if try rosetta() { try result.overrides.set(.native, for: "wow64cpu") }
         } catch let error where !isInterruption(error) {
             // Without an override Wine loads its builtin system CPU module.
             result.warnings.append("Rosetta CPU compatibility was skipped for this launch: \(error.localizedDescription) Wine's builtin wow64cpu.dll is used instead; some 32-bit programs may crash under Rosetta.")
@@ -559,10 +556,10 @@ public actor WineRuntime {
             // A controller service failure also skips the bridge so the prefix is not
             // changed for a component that could not run.
             let environment = try gamepad.get()
-            result.overrides.append(try bridge())
+            result.overrides = result.overrides.layered(with: try DLLOverrides(parsing: bridge()))
             result.environment = environment
         } catch let error where !isInterruption(error) {
-            result.overrides.append(GamepadBridge.builtinOverrides)
+            result.overrides = result.overrides.layered(with: try DLLOverrides(parsing: GamepadBridge.builtinOverrides))
             result.warnings.append("MagicWine controller support was skipped for this launch: \(error.localizedDescription) Wine's builtin XInput is used instead, so saved controller profiles do not apply.")
         }
         return result
@@ -591,44 +588,20 @@ public actor WineRuntime {
 
     internal nonisolated func environment(executable: URL, prefix: URL?, msyncEnabled: Bool = true,
                                          inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
-        var environment = inherited
-        let managedMSync = supportsMSync(RuntimeDescriptor(executableURL: executable, version: ""))
-        // Preserve custom Wine's synchronization policy; only our managed backend
-        // owns these switches. Other inherited loader/prefix settings remain isolated.
-        for key in Array(environment.keys) where (key.hasPrefix("WINE") &&
-            (managedMSync || (key != "WINEMSYNC" && key != "WINEESYNC" && key != "WINEFSYNC"))) || key.hasPrefix("DYLD_") ||
-            key.hasPrefix("DXVK_") || key.hasPrefix("DXMT_") || key.hasPrefix("D3DM_") ||
-            key.hasPrefix("MTL_") || key.hasPrefix("MAGICWINE_GAMEPAD_") ||
-            key == "CX_APPLEGPTK_LIBD3DSHARED_PATH" {
-            environment.removeValue(forKey: key)
-        }
-        environment["PATH"] = executable.deletingLastPathComponent().path + ":" +
-            (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
-        if let prefix { environment["WINEPREFIX"] = prefix.path }
-        // Prefer application-local browser interop assemblies over Wine's namesake DLL.
-        environment["WINEDLLOVERRIDES"] = "shdocvw=n,b"
-        if managedMSync {
-            environment["WINEMSYNC"] = msyncEnabled ? "1" : "0"
-            environment["WINEESYNC"] = "0"
-            environment["WINEFSYNC"] = "0"
-        }
-        // Managed Metal Wine keeps native pthread GS active. Mono's inline
-        // GS-relative dynamic TLS reads bypass the real Windows TEB; its API
-        // TLS mode works across Standard, DXVK, DXMT and D3DMetal launches.
-        // Older bottles retain their pinned Metal runtime when a newer managed
-        // build is installed; they still need the same Mono TLS correction.
+        LaunchPlanner.plan(LaunchRequest(inherited: inherited, runtime: runtimeFacts(for: executable),
+                                         executable: executable, arguments: [], directory: nil, prefix: prefix,
+                                         msyncEnabled: msyncEnabled)).environment
+    }
+
+    /// Managed capabilities follow the canonical executable location, never a version label.
+    internal nonisolated func runtimeFacts(for executable: URL) -> LaunchRuntimeFacts {
         let managedMetalRoot = paths.runtimesDirectory.resolvingSymlinksInPath().standardizedFileURL.path +
             "/wine-\(RuntimeInstallation.version)-\(RuntimeInstallation.archiveSHA256.prefix(12))-winemac-wine11.0-metal."
         let selectedPath = executable.resolvingSymlinksInPath().standardizedFileURL.path
-        if prefix != nil, selectedPath.hasPrefix(managedMetalRoot),
-           selectedPath.hasSuffix("/" + RuntimeInstallation.relativeExecutable) {
-            let option = "use-fallback-tls"
-            let existing = environment["MONO_DEBUG"] ?? ""
-            if !existing.split(separator: ",").contains(Substring(option)) {
-                environment["MONO_DEBUG"] = existing.isEmpty ? option : existing + "," + option
-            }
-        }
-        return environment
+        return LaunchRuntimeFacts(
+            managedMSync: supportsMSync(RuntimeDescriptor(executableURL: executable, version: "")),
+            managedMetal: selectedPath.hasPrefix(managedMetalRoot) &&
+                selectedPath.hasSuffix("/" + RuntimeInstallation.relativeExecutable))
     }
 
     private func validateVulkanRuntime(_ executable: URL) throws {
@@ -661,8 +634,9 @@ public actor WineRuntime {
         }
     }
 
-    private func prepareGraphicsLaunch(for bottle: Bottle, prefix: URL,
-                                       base: [String: String]) throws -> (executable: URL, environment: [String: String]) {
+    /// Validates the pinned component and installed footprint, creates the bottle's
+    /// graphics folders, and prepares a Metal backend's private runtime view.
+    private func prepareGraphicsLaunch(for bottle: Bottle, prefix: URL) throws -> GraphicsLaunchFacts {
         let backend = bottle.graphics.backend
         let component = try graphicsComponent(bottle.graphics)
         try validateGraphicsRuntime(backend, executable: bottle.runtime.executableURL)
@@ -672,36 +646,18 @@ public actor WineRuntime {
             let settings = try backend == .dxmt
                 ? DXMTInstallation.environment(component: component, showHUD: bottle.graphics.showHUD)
                 : D3DMetalInstallation.environment(component: component, showHUD: bottle.graphics.showHUD)
-            var result = base
-            for (key, value) in settings {
-                if key == "WINEDLLOVERRIDES" { result[key, default: ""] += ";" + value }
-                else { result[key] = value }
-            }
-            if backend == .dxmt {
-                let folders = try graphicsDirectories(for: bottle, directory: directory)
-                result["DXMT_LOG_PATH"] = folders.logs.path
-                result["DXMT_SHADER_CACHE_PATH"] = folders.cache.path
-            }
+            let folders = backend == .dxmt ? try graphicsDirectories(for: bottle, directory: directory) : nil
             let loader = try GraphicsRuntimeView.prepare(executable: bottle.runtime.executableURL,
                                                          component: component, backend: backend, paths: paths)
-            result["WINELOADER"] = loader.path
-            result["WINESERVER"] = bottle.runtime.executableURL.deletingLastPathComponent().appendingPathComponent("wineserver").path
-            return (loader, result)
+            return try .metal(componentSettings: settings, loader: loader,
+                              server: bottle.runtime.executableURL.deletingLastPathComponent().appendingPathComponent("wineserver"),
+                              folders: folders)
         }
-        let (cache, logs) = try graphicsDirectories(for: bottle, directory: directory)
-        var result = base
-        result["WINEDLLOVERRIDES", default: ""] += ";d3d9,d3d10core,d3d11=n;dxgi=b"
-        // Builtin DXGI enumerates a WineD3D adapter before handing devices to DXVK.
-        // Avoid its OpenGL/WoW64 initialization path even when the HUD is disabled.
-        result["WINE_D3D_CONFIG"] = "renderer=vulkan"
-        result["DXVK_CONFIG_FILE"] = component.appendingPathComponent("dxvk.conf").path
-        result["DXVK_STATE_CACHE_PATH"] = cache.path
-        result["DXVK_LOG_PATH"] = logs.path
-        if bottle.graphics.showHUD { result["DXVK_HUD"] = "version,api,devinfo,fps,frametimes" }
-        return (bottle.runtime.executableURL, result)
+        return .dxvk(component: component, folders: try graphicsDirectories(for: bottle, directory: directory),
+                     showHUD: bottle.graphics.showHUD)
     }
 
-    private func graphicsDirectories(for bottle: Bottle, directory: URL) throws -> (cache: URL, logs: URL) {
+    private func graphicsDirectories(for bottle: Bottle, directory: URL) throws -> GraphicsFolders {
         let backend = bottle.graphics.backend
         let cache = directory.appendingPathComponent(backend == .dxvk ? "graphics/cache" : "graphics/dxmt-cache",
                                                      isDirectory: true)
@@ -713,7 +669,7 @@ public actor WineRuntime {
                 throw MagicWineError.setup("The graphics cache/log directory must not be a symbolic link: \(folder.path)")
             }
         }
-        return (cache, logs)
+        return GraphicsFolders(cache: cache, logs: logs)
     }
 
     private func prefixURL(for bottle: Bottle) throws -> URL {
@@ -790,9 +746,9 @@ public actor WineRuntime {
     }
 }
 
-/// Process-local result of `WineRuntime.prepareIntegrations`, appended in order.
+/// Process-local result of `WineRuntime.prepareIntegrations`, layered in order.
 internal struct LaunchIntegrations: Sendable {
-    var overrides: [String] = []
+    var overrides = DLLOverrides()
     var environment: [String: String] = [:]
     var warnings: [String] = []
 }
