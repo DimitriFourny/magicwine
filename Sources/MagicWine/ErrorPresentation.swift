@@ -114,7 +114,7 @@ struct OperationErrorCard: View {
         case .reload:
             Button("Reload") { model.refreshBottles() }
                 .disabled(model.library.isLoading || activity.blocksLibraryEdit)
-        case .showLog, .updateWine, .installRosetta, .giveConsent, .retry:
+        case .showLog, .updateWine, .installRosetta, .giveConsent, .retry, .chooseProgramGraphics:
             EmptyView()
         }
     }

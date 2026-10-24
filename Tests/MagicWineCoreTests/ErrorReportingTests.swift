@@ -67,6 +67,12 @@ struct ErrorReportingTests {
             #expect(actions.filter { $0.isAvailable(for: bottle) }.isEmpty)
         }
         #expect(!RecoveryAction.retrySetup.isAvailable(for: current))
+        // A program's own graphics choice is fixed on that program, never by changing the bottle.
+        let program = UUID()
+        let refused = MagicWineError.programGraphicsUnavailable("DXVK needs the bottle's files.", programID: program)
+        #expect(refused.recoveryActions == [.chooseProgramGraphics(programID: program)])
+        #expect(CommandLineErrorReport.render(refused, bottle: current).contains(
+            "magicwine program \(current.id.uuidString) \(program.uuidString) --graphics default"))
     }
 
     @Test func wrappedFailuresKeepRecoveryAndUseTheOperationLog() {

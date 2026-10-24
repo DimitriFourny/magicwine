@@ -37,6 +37,10 @@ public enum MagicWineError: LocalizedError, Sendable {
     /// prefix, or can only be replaced from Standard graphics; restoring Standard (or
     /// updating an older supported component) fixes it.
     case componentInvalid(String)
+    /// A program's own graphics choice cannot be used in its bottle right now (backend
+    /// that needs the bottle's prefix files, missing or invalid component, incompatible
+    /// Wine or Mac, unsupported program architecture). The bottle itself is unaffected.
+    case programGraphicsUnavailable(String, programID: UUID)
     /// This Mac cannot run the requested component.
     case hostUnsupported(String)
     /// A file, archive, receipt, or backup does not match its pin or expected layout.
@@ -62,6 +66,7 @@ public enum MagicWineError: LocalizedError, Sendable {
         case .invalidInput(let message), .notInitialized(let message), .busy(let message, _, _),
              .conflict(let message), .consentRequired(let message, _), .timedOut(let message, _),
              .operationFailed(let message, _, _), .runtimeIncompatible(let message, _), .componentInvalid(let message),
+             .programGraphicsUnavailable(let message, _),
              .hostUnsupported(let message), .integrityFailure(let message), .unsafeFilesystem(let message),
              .newerVersion(let message),
              .downloadFailed(let message), .setup(let message):
@@ -90,6 +95,7 @@ public enum MagicWineError: LocalizedError, Sendable {
         case .consentRequired(_, let consent): actions.append(.giveConsent(consent))
         case .runtimeUnavailable(_, let remedy, _), .runtimeIncompatible(_, let remedy): actions.append(remedy.action)
         case .componentInvalid: actions += [.restoreStandardGraphics, .updateGraphicsComponent]
+        case .programGraphicsUnavailable(_, let programID): actions.append(.chooseProgramGraphics(programID: programID))
         case .operationFailed(_, _, let recovery): actions += recovery
         default: break
         }
@@ -172,6 +178,8 @@ public enum RecoveryAction: Hashable, Sendable {
     case restoreStandardGraphics
     /// Switch the bottle's older supported component to the current bundled one.
     case updateGraphicsComponent
+    /// Choose another graphics backend for one program, or let it follow its bottle.
+    case chooseProgramGraphics(programID: UUID)
     /// Install the current managed Wine if needed and switch this bottle to it.
     case updateWine
     /// Install or choose another Wine and create a new bottle with it.
@@ -192,6 +200,8 @@ public enum RecoveryAction: Hashable, Sendable {
             "Restore Standard graphics to put back this bottle’s original graphics files, then enable the backend again."
         case .updateGraphicsComponent:
             "If this bottle uses an older supported component, updating it to the bundled one also replaces its files."
+        case .chooseProgramGraphics:
+            "Edit this program and choose another graphics backend, or let it use the bottle’s."
         case .updateWine:
             "Update this bottle’s Wine: the current MagicWine-managed Wine is installed if needed and only this bottle switches to it; custom Wine is never changed."
         case .chooseWine:

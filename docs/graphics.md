@@ -198,6 +198,55 @@ DXVK cache files live in the bottle's `graphics/cache/`; DXMT shader cache files
 
 Source: `prepareGraphicsLaunch` in [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift) (validation, folders, runtime view), each provider's `launchFacts` and `cacheFolder` in [GraphicsComponentProvider.swift](../Sources/MagicWineCore/GraphicsComponentProvider.swift), and the graphics layer in [LaunchPlanner.swift](../Sources/MagicWineCore/LaunchPlanner.swift) (variables and DLL overrides).
 
+## Per-program graphics
+
+A launcher bottle hosts many games, but the backends cover different APIs (see the table above): a Direct3D 9 or 32-bit game and a Direct3D 12 game cannot both use one bottle-wide backend, and switching the bottle stops every program in it. A saved program can therefore choose its own backend (`WindowsProgram.graphics`, a `ProgramGraphics`; absent means **Bottle default**). The choice is launch policy only: it never changes the prefix, never takes part in the journaled `GraphicsPrefix` state, and the bottle's own switch keeps its transactional behavior described above.
+
+### How a backend reaches a process
+
+| Backend | Files the bottle switch places in the prefix (`prefixMappings`) | Per-launch only |
+| --- | --- | --- |
+| Standard | None | Nothing graphics-specific |
+| DXVK | Native (non-Wine) PE `d3d9`, `d3d10core`, `d3d11` in `system32` (64-bit) and `syswow64` (32-bit) | `d3d9,d3d10core,d3d11=n;dxgi=b`, `WINE_D3D_CONFIG`, `DXVK_*` paths; the bottle's own loader |
+| DXMT | Wine-builtin-marked PE `d3d10core`, `d3d11`, `dxgi`, `winemetal` in `system32` and `syswow64` | Private runtime view as executable and `WINELOADER` (overlaying those PE modules plus native `winemetal.so`), `WINEDLLPATH`, `=b` overrides, `MTL_HUD_ENABLED`, `DXMT_*` paths, original `WINESERVER` |
+| D3DMetal | Wine-builtin-marked PE bridges `d3d11`, `d3d12`, `dxgi` in `system32` only | Private view (bridges plus Unix aliases of `libd3dshared.dylib`), `WINEDLLPATH`, `CX_APPLEGPTK_LIBD3DSHARED_PATH`, `=b` overrides, `MTL_HUD_ENABLED`, original `WINESERVER` |
+
+Wine (wine-11.0 `dlls/ntdll/loader.c` and `unix/loader.c`) first looks for a DLL's file in the program's search path, which includes `system32`. A native file loads natively unless its load order is builtin; then Wine loads the builtin of the same name from the loader's DLL directories (the real path of `ntdll.so`, then `WINEDLLPATH`) instead. A builtin-marked file is always replaced by the builtin from those directories. So for DXMT and D3DMetal the loader (private view) selects the implementation and the prefix file only has to exist, while DXVK needs its native files. A DLL with no file in the prefix at all is loaded only during prefix bootstrap (`find_builtin_without_file`), so DXMT's `winemetal.dll`, which no ordinary prefix has, must come from the bottle's own DXMT files.
+
+Processes started through different loaders share the bottle's one wineserver session: a private view's `bin/wineserver` links to the bottle's pinned server binary, and the server is identified by the prefix, not the loader. A program started through a view and one started through the original loader run side by side in the same session.
+
+### What a program can choose
+
+| Bottle backend ↓ / program choice → | Bottle default | Wine builtin (Standard) | DXVK | DXMT | D3DMetal |
+| --- | --- | --- | --- | --- | --- |
+| Standard | Standard | Standard | Refused | Refused | Supported |
+| DXVK | DXVK | Supported | = bottle | Refused | Supported |
+| DXMT | DXMT | Supported | Refused | = bottle | Supported |
+| D3DMetal | D3DMetal | Supported | Refused | Refused | = bottle |
+
+- **Bottle default** and the bottle's own backend use exactly the bottle's selection: its component, prefix files (validated at launch), and HUD.
+- **Wine builtin (Standard)** starts the program with the bottle's own Wine loader and no backend variables, and sets every DLL of the bottle backend's prefix footprint to builtin (DXVK `d3d10core,d3d11,d3d9=b`; DXMT `d3d10core,d3d11,dxgi,winemetal=b`; D3DMetal `d3d11,d3d12,dxgi=b`), so Wine's own Direct3D loads even with DXVK's native DLLs in `system32`. The bottle's component is not needed.
+- **D3DMetal** in another bottle runs through its private runtime view with an imported component the program record names (`componentID`, offered from the bottle's own import or the installed imports), above the same builtin footprint of the bottle's backend. The bottle's **Show Graphics HUD** applies; there is no D3DMetal cache folder. Its import and view count as in use for [storage cleanup](runtime-lifecycle.md#reclaiming-storage).
+- **DXVK** and **DXMT** add DLLs to the prefix, so a program can only choose them while the bottle selects them. A program that saved one keeps it, and its launch is refused after the bottle switches away.
+
+These layers sit at the bottom of the planner's graphics layer, so bottle switches above it and the program's own `environment` and `dllOverrides` (for example `d3d9=n`) still win.
+
+### Validation and errors
+
+`WineRuntime.programGraphicsChoices(for:in:)` reads the bottle's current state and lists Bottle default and every backend with what it does there or why it cannot be chosen; the editor's **Graphics** picker shows only usable choices plus the reasons for the others, and `program … --graphics` prints them as `graphics-choice` lines. `WineRuntime.updateProgram(_:from:in:)` checks a changed choice and then saves through the metadata-only `BottleStore.updateProgram` transition (allowed while programs run, used by the next launch). Every launch resolves the saved choice again before any preparation and validates the component, Wine runtime, and private view.
+
+Refusals are `MagicWineError.programGraphicsUnavailable` with the recovery action **choose program graphics** (CLI hint: `program <bottle> <program> --graphics default`), never a bottle repair. They cover: DXVK or DXMT while the bottle uses another backend; D3DMetal for a 32-bit EXE (read from its PE header; LNK/URL targets are not inspected) because no 32-bit bridge exists; no installed, supported, or intact D3DMetal import; a Mac or Wine runtime the backend cannot run on; and a private view that cannot be planned for the bottle's Wine. Records with a component on a backend that has none, or D3DMetal without a supported one, are refused as invalid input.
+
+### Limits
+
+- The choice applies to the processes MagicWine starts for that program and their child processes, which inherit the loader and environment. A launcher that is already running starts its games with its own graphics: a `steam://` URL or a game Steam relaunches uses the backend Steam was started with. Start the game's EXE directly, or start the launcher itself with the backend its games need.
+- D3DMetal remains 64-bit Direct3D 11/12 only; DXMT has no Direct3D 9 or 12. Standard does not promise a feature level.
+- A program's D3DMetal import ID is fixed when chosen; importing other libraries requires choosing it again.
+
+Real-Wine evidence (managed `wine-11.0` metal.7, isolated root, `rundll32 d3d11.dll,…` probes with `WINEDEBUG=+loaddll,+module`): in a DXVK bottle the default program loaded `system32\d3d11.dll` as native (DXVK) while a Standard program loaded the builtin and a D3DMetal program the 0x1b000-byte D3DMetal bridge; in a DXMT bottle the default loaded DXMT's `d3d11` and `winemetal`, Standard Wine's own `d3d11`, and D3DMetal its bridge; a 32-bit Standard program loaded builtin `d3d11` from `syswow64`; a DXMT process kept running while Standard and D3DMetal programs started and exited. A DXMT choice outside a DXMT bottle failed with `winemetal.dll … not found`, which is why it is refused.
+
+Sources: `launchGraphics(in:providers:)` and `ProgramGraphics` in [GraphicsModels.swift](../Sources/MagicWineCore/GraphicsModels.swift), `launchesWithoutPrefixFiles` in [GraphicsComponentProvider.swift](../Sources/MagicWineCore/GraphicsComponentProvider.swift), `programGraphicsChoices`, `updateProgram`, and `prepareGraphicsLaunch` in [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift), `builtinGraphicsDLLs` in [LaunchPlanner.swift](../Sources/MagicWineCore/LaunchPlanner.swift), [ProgramEditorView.swift](../Sources/MagicWine/ProgramEditorView.swift).
+
 ## CLI examples
 
 Run from the checkout after building. Set `ROOT` to your isolated application data root and `BOTTLE` to a UUID printed by `list`. Backend selections change the selected bottle and may stop its Windows processes; a HUD-only change does not.

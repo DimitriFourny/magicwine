@@ -43,7 +43,8 @@ struct BottleSchemaTests {
         for key in Self.laterFields { #expect(json[key] != nil, "\(key)") }
 
         var bottle = fixture.bottle
-        var program = WindowsProgram(name: "Game", executablePath: "/tmp/game.exe", arguments: ["-windowed"])
+        var program = WindowsProgram(name: "Game", executablePath: "/tmp/game.exe", arguments: ["-windowed"],
+                                     graphics: ProgramGraphics(backend: .d3dmetal, componentID: "d3dmetal-" + String(repeating: "ab", count: 32)))
         program.lastLaunchedAt = Date(timeIntervalSinceReferenceDate: 800_000_100)
         program.playTime = 3_600.5
         program.isFavorite = true
@@ -79,6 +80,7 @@ struct BottleSchemaTests {
         let program = try #require(migrated.programs.first)
         #expect(program.id == programID && program.arguments.isEmpty && program.environment.isEmpty)
         #expect(program.lastLaunchedAt == nil && program.playTime == 0 && !program.isFavorite)
+        #expect(program.graphics == nil)
         // Each later field may be missing on its own, as records gained them one by one.
         for key in Self.laterFields {
             var partial = try fixture.json()
@@ -102,6 +104,9 @@ struct BottleSchemaTests {
         #expect(try JSONDecoder().decode(Bottle.self, from: Data(contentsOf: fixture.metadata)) == saved)
         #expect(saved.msyncEnabled && saved.graphics == GraphicsConfiguration() && saved.compatibility.advertiseAVX)
         #expect(saved.programs.map(\.id) == [programID])
+        // A program that follows its bottle's graphics stays without a `graphics` key.
+        let savedPrograms = try #require(fixture.json()["programs"] as? [[String: Any]])
+        #expect(savedPrograms.allSatisfy { $0["graphics"] == nil })
 
         // Play history of the migrated program is then saved in the current version too.
         let started = Date(timeIntervalSinceReferenceDate: 800_000_000)

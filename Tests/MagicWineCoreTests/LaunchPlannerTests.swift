@@ -201,6 +201,91 @@ struct LaunchPlannerTests {
         #expect(try DLLOverrides(parsing: shortcut.environment["WINEDLLOVERRIDES"] ?? "")["dxgi"] == .native)
     }
 
+    @Test func programGraphicsResolveAgainstTheBottleWithoutPrefixFiles() throws {
+        let d3dmetal = "d3dmetal-" + String(repeating: "ab", count: 32)
+        let standard = GraphicsConfiguration()
+        let dxvk = GraphicsConfiguration(backend: .dxvk, componentID: DXVKInstallation.componentID, showHUD: true)
+        let dxmt = GraphicsConfiguration(backend: .dxmt, componentID: DXMTInstallation.componentID)
+        let metal = GraphicsConfiguration(backend: .d3dmetal, componentID: d3dmetal)
+        var program = WindowsProgram(name: "Game", executablePath: Self.program.path)
+
+        // No choice, or the bottle's own backend, is exactly the bottle's selection.
+        for bottle in [standard, dxvk, dxmt, metal] {
+            #expect(try program.launchGraphics(in: bottle) == .bottle(bottle))
+        }
+        for (choice, bottle) in [(ProgramGraphics.standard, standard), (ProgramGraphics(backend: .dxvk), dxvk),
+                                 (ProgramGraphics(backend: .dxmt), dxmt),
+                                 (ProgramGraphics(backend: .d3dmetal, componentID: "d3dmetal-" + String(repeating: "cd", count: 32)), metal)] {
+            program.graphics = choice
+            #expect(try program.launchGraphics(in: bottle) == .bottle(bottle))
+        }
+        // Standard sets every DLL of the bottle backend's prefix footprint to builtin.
+        program.graphics = .standard
+        #expect(try program.launchGraphics(in: dxvk) ==
+                LaunchGraphics(configuration: standard, isBottleSelection: false, builtinDLLs: ["d3d10core", "d3d11", "d3d9"]))
+        #expect(try program.launchGraphics(in: dxmt).builtinDLLs == ["d3d10core", "d3d11", "dxgi", "winemetal"])
+        #expect(try program.launchGraphics(in: metal).builtinDLLs == ["d3d11", "d3d12", "dxgi"])
+        // D3DMetal runs from its own import with the bottle's HUD preference.
+        program.graphics = ProgramGraphics(backend: .d3dmetal, componentID: d3dmetal)
+        for bottle in [standard, dxvk, dxmt] {
+            let selection = try program.launchGraphics(in: bottle)
+            #expect(selection.configuration == GraphicsConfiguration(backend: .d3dmetal, componentID: d3dmetal, showHUD: bottle.showHUD))
+            #expect(!selection.isBottleSelection)
+        }
+        // DXVK and DXMT need their DLLs in the prefix; an unsupported import cannot launch.
+        for (choice, bottle) in [(ProgramGraphics(backend: .dxvk), standard), (ProgramGraphics(backend: .dxvk), dxmt),
+                                 (ProgramGraphics(backend: .dxmt), standard), (ProgramGraphics(backend: .dxmt), metal),
+                                 (ProgramGraphics(backend: .d3dmetal, componentID: "d3dmetal-old"), dxvk)] {
+            program.graphics = choice
+            #expect {
+                try program.launchGraphics(in: bottle)
+            } throws: { error in
+                guard case .programGraphicsUnavailable(_, let id)? = error as? MagicWineError else { return false }
+                return id == program.id
+            }
+        }
+    }
+
+    @Test func programGraphicsSetAsideTheBottleBackendBelowTheProgramsChoice() throws {
+        let dxvk = GraphicsConfiguration(backend: .dxvk, componentID: DXVKInstallation.componentID, showHUD: true)
+        var program = WindowsProgram(name: "Game", executablePath: Self.program.path, graphics: .standard)
+        let base = "shdocvw=n,b;wow64cpu=n;\(Self.xinput)=n,b;"
+
+        // Standard in a DXVK bottle (HUD on): Wine's loader, no DXVK variables or HUD.
+        var request = try Self.request()
+        request.program = program
+        request.builtinGraphicsDLLs = try program.launchGraphics(in: dxvk).builtinDLLs
+        var expected = Self.standard
+        expected["WINEDLLOVERRIDES"] = base + "d3d10core,d3d11,d3d9=b"
+        var plan = LaunchPlanner.plan(request)
+        #expect(plan.environment == expected)
+        #expect(plan.executable == Self.wine)
+
+        // D3DMetal in a DXVK bottle: its private view, the original server, DXVK set aside.
+        let loader = Self.root.appendingPathComponent("Runtimes/.graphics-views/v/bin/wine")
+        let server = Self.wine.deletingLastPathComponent().appendingPathComponent("wineserver")
+        let component = Self.root.appendingPathComponent("Components/d3dmetal-abc")
+        let shared = component.appendingPathComponent("external/libd3dshared.dylib").path
+        request.graphics = try .metal(
+            componentSettings: ["WINEDLLPATH": component.path + "/wine", "WINEDLLOVERRIDES": "d3d11,d3d12,dxgi=b",
+                                "CX_APPLEGPTK_LIBD3DSHARED_PATH": shared, "MTL_HUD_ENABLED": "1"],
+            loader: loader, server: server, folders: nil)
+        expected["WINEDLLOVERRIDES"] = base + "d3d10core,d3d11,d3d9,d3d12,dxgi=b"
+        expected["WINEDLLPATH"] = component.path + "/wine"
+        expected["CX_APPLEGPTK_LIBD3DSHARED_PATH"] = shared
+        expected["MTL_HUD_ENABLED"] = "1"
+        expected["WINELOADER"] = loader.path
+        expected["WINESERVER"] = server.path
+        plan = LaunchPlanner.plan(request)
+        #expect(plan.environment == expected)
+        #expect(plan.executable == loader)
+
+        // The program's own load order still wins over the set-aside DLLs.
+        program.dllOverrides = try DLLOverrides(parsing: "d3d9=n")
+        request.program = program
+        #expect(LaunchPlanner.plan(request).environment["WINEDLLOVERRIDES"] == base + "d3d10core,d3d11=b;d3d9=n;d3d12,dxgi=b")
+    }
+
     @Test func wineDebugAndHUDPresetComeFromBottleSwitches() throws {
         var request = try Self.request()
         request.compatibility = CompatibilityOptions(wineDebug: .wineDefault)

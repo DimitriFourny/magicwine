@@ -36,6 +36,8 @@ public enum CommandLineErrorReport {
         case .restoreStandardGraphics: return "run: \(invocation) graphics \(bottle) standard"
         case .updateGraphicsComponent:
             return "run: \(invocation) graphics \(bottle) \(backend?.rawValue ?? "<backend>") --update --accept-experimental"
+        case .chooseProgramGraphics(let programID):
+            return "run: \(invocation) program \(bottle) \(programID.uuidString) --graphics default (or another backend it lists)"
         case .updateWine:
             return "run: \(invocation) install-wine --accept-unsigned && \(invocation) runtime upgrade \(bottle)"
         case .chooseWine:

@@ -59,6 +59,16 @@ extension WindowsProgram {
                 throw MagicWineError.invalidInput("Environment variable \(key): \(problem)")
             }
         }
+        if let graphics {
+            // Only a backend a launch can supply without prefix files names its own component.
+            if let provider = graphics.backend.componentProvider, provider.launchesWithoutPrefixFiles {
+                guard let componentID = graphics.componentID, provider.supports(componentID: componentID) else {
+                    throw MagicWineError.invalidInput("\(graphics.backend.displayName) graphics for a program needs a supported component.")
+                }
+            } else if graphics.componentID != nil {
+                throw MagicWineError.invalidInput("\(graphics.backend.displayName) graphics for a program uses the bottle’s files and has no component of its own.")
+            }
+        }
     }
 
     /// The working directory, which must exist as a folder when the program launches.

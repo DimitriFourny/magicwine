@@ -47,6 +47,10 @@ internal struct LaunchRequest: Sendable {
     var msyncEnabled = true
     var integrations: LaunchIntegrations?
     var graphics: GraphicsLaunchFacts?
+    /// The bottle backend's prefix DLLs when a program uses another backend
+    /// (`LaunchGraphics.builtinDLLs`): builtin at the bottom of the graphics layer, so the
+    /// program's backend and every higher layer still win.
+    var builtinGraphicsDLLs: [String] = []
     /// Bottle switches for a Windows process (never for server operations).
     var compatibility: CompatibilityOptions?
     /// A saved program's options (validated by `WineRuntime`), applied last.
@@ -92,10 +96,16 @@ internal enum LaunchPlanner {
         if let integrations = request.integrations {
             layers.append(Layer(set: integrations.environment, overrides: integrations.overrides))
         }
-        if let graphics = request.graphics {
-            let (layer, loader) = graphicsLayer(graphics)
+        if request.graphics != nil || !request.builtinGraphicsDLLs.isEmpty {
+            var layer = Layer()
+            for dll in request.builtinGraphicsDLLs { try! layer.overrides.set(.builtin, for: dll) }
+            if let graphics = request.graphics {
+                let (backend, loader) = graphicsLayer(graphics)
+                layer.set = backend.set
+                layer.overrides = layer.overrides.layered(with: backend.overrides)
+                if let loader { executable = loader }
+            }
             layers.append(layer)
-            if let loader { executable = loader }
         }
         if let options = request.compatibility {
             var layer = Layer()

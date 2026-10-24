@@ -28,6 +28,9 @@ struct ProgramEditorView: View {
     @State private var variables: [Variable]
     @State private var overrides: [Override]
     @State private var advertiseAVX: Bool?
+    @State private var graphics: ProgramGraphics?
+    /// `nil` while loading; a failure keeps the saved choice and shows why.
+    @State private var graphicsChoices: Result<[ProgramGraphicsChoice], Error>?
     @State private var isSaving = false
     @State private var error: String?
 
@@ -43,6 +46,7 @@ struct ProgramEditorView: View {
         })
         _overrides = State(initialValue: program.dllOverrides.entries.map { Override(name: $0.dll, mode: $0.mode) })
         _advertiseAVX = State(initialValue: program.advertiseAVX)
+        _graphics = State(initialValue: program.graphics)
     }
 
     private var parsedArguments: Result<[String], Error> {
@@ -92,6 +96,7 @@ struct ProgramEditorView: View {
                 try program.dllOverrides.set(override.mode, for: override.name)
             }
             program.advertiseAVX = advertiseAVX
+            program.graphics = graphics
             try program.validateLaunchOptions()
             return program
         }
@@ -116,6 +121,7 @@ struct ProgramEditorView: View {
                     environmentSection
                     overridesSection
                     avxSection
+                    graphicsSection
                 }
                 .padding(.trailing, 8)
             }
@@ -140,6 +146,13 @@ struct ProgramEditorView: View {
         .padding(24)
         .frame(width: 600, height: 620)
         .interactiveDismissDisabled(isSaving)
+        .task {
+            do {
+                graphicsChoices = .success(try await model.bottleSettings.programGraphicsChoices(for: original, in: bottle))
+            } catch {
+                graphicsChoices = .failure(error)
+            }
+        }
     }
 
     private var argumentsSection: some View {
@@ -239,6 +252,53 @@ struct ProgramEditorView: View {
             } else {
                 hint("Sets ROSETTA_ADVERTISE_AVX=1 for this program so x86_64 games that require AVX can start under Rosetta 2.")
             }
+        }
+    }
+
+    private var graphicsSection: some View {
+        section("Graphics") {
+            switch graphicsChoices {
+            case nil:
+                ProgressView().controlSize(.small)
+            case .failure(let failure):
+                problem(failure.localizedDescription)
+            case .success(let choices):
+                let selectedID = graphics?.backend.rawValue ?? "default"
+                Picker("Graphics backend", selection: Binding(
+                    get: { selectedID },
+                    set: { id in
+                        if id == "default" {
+                            graphics = nil
+                        } else if original.graphics?.backend.rawValue == id {
+                            graphics = original.graphics
+                        } else if let choice = choices.first(where: { $0.id == id }), choice.isAvailable {
+                            graphics = choice.graphics
+                        }
+                    }
+                )) {
+                    // Only usable choices, plus a saved one that no longer is (so it shows why).
+                    ForEach(choices.filter { $0.isAvailable || $0.id == selectedID }) { choice in
+                        Text(Self.graphicsLabel(choice, bottle: bottle)).tag(choice.id)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                if let choice = choices.first(where: { $0.id == selectedID }) {
+                    if let message = choice.problem { problem(message) } else { hint(choice.detail) }
+                }
+                ForEach(choices.filter { !$0.isAvailable && $0.id != selectedID }) { choice in
+                    hint("\(Self.graphicsLabel(choice, bottle: bottle)) is not available: \(choice.problem ?? "")")
+                }
+                hint("Applies when MagicWine starts this program, without changing the bottle’s files. Games that an already running launcher starts use the launcher’s graphics.")
+            }
+        }
+    }
+
+    private static func graphicsLabel(_ choice: ProgramGraphicsChoice, bottle: Bottle) -> String {
+        switch choice.backend {
+        case nil: "Bottle default (\(bottle.graphics.backend.displayName))"
+        case .standard?: "Wine builtin (Standard)"
+        case let backend?: backend.displayName
         }
     }
 

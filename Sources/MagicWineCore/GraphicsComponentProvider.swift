@@ -48,6 +48,12 @@ internal protocol GraphicsComponentProvider: Sendable {
     var prefixMappings: [GraphicsPrefixMapping] { get }
     /// Modules a private runtime view overlays; empty when launch uses the bottle's own loader.
     var viewSubstitutions: [GraphicsViewSubstitution] { get }
+    /// Whether a single program can use this backend in a bottle that selects another one:
+    /// its private runtime view alone selects it because every Windows module it replaces
+    /// already exists in any prefix. Wine loads a builtin DLL without a prefix file only
+    /// during prefix bootstrap (wine-11.0 `find_builtin_without_file`), and native DLLs
+    /// only from files, so backends adding DLLs to the prefix need the bottle's selection.
+    var launchesWithoutPrefixFiles: Bool { get }
     /// Bottle-relative cache folder; `nil` when the backend has no managed cache/log folders.
     var cacheFolder: String? { get }
     /// The planner's graphics layer for a validated component. `loader` is the private
@@ -61,6 +67,7 @@ extension GraphicsComponentProvider {
     var retainedComponentIDs: [String] { [] }
     var isImported: Bool { false }
     var viewSubstitutions: [GraphicsViewSubstitution] { [] }
+    var launchesWithoutPrefixFiles: Bool { false }
     func supports(componentID: String) -> Bool {
         componentID == currentComponentID || retainedComponentIDs.contains(componentID)
     }
@@ -197,6 +204,8 @@ internal struct D3DMetalComponentProvider: GraphicsComponentProvider {
     var currentComponentID: String? { nil }
     var isImported: Bool { true }
     func supports(componentID: String) -> Bool { D3DMetalInstallation.supports(componentID: componentID) }
+    // d3d11, d3d12, and dxgi exist in every Wine prefix; the view supplies the bridges.
+    var launchesWithoutPrefixFiles: Bool { true }
     var prefixMappings: [GraphicsPrefixMapping] {
         Self.bridges.map {
             GraphicsPrefixMapping(source: "wine/x86_64-windows/\($0).dll", destination: "drive_c/windows/system32/\($0).dll")

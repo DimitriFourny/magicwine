@@ -225,6 +225,17 @@ struct MagicWineCLI {
                     case "off": edited.advertiseAVX = false
                     default: throw argumentError(programUsage)
                     }
+                case "--graphics":
+                    let value = try next()
+                    if value == "default" {
+                        edited.graphics = nil
+                    } else {
+                        guard let backend = GraphicsBackend(rawValue: value) else { throw argumentError(programUsage) }
+                        let choices = try await runtime.programGraphicsChoices(for: original, in: bottle)
+                        guard let choice = choices.first(where: { $0.backend == backend }) else { throw argumentError(programUsage) }
+                        if let problem = choice.problem { throw MagicWineError.programGraphicsUnavailable(problem, programID: id) }
+                        edited.graphics = choice.graphics
+                    }
                 default: throw argumentError(programUsage)
                 }
                 index += 1
@@ -232,10 +243,14 @@ struct MagicWineCLI {
             var program = original
             if edited != original {
                 // Metadata only: running programs keep going; the next launch uses it.
-                let updated = try await store.updateProgram(edited, from: original, in: bottle)
+                let updated = try await runtime.updateProgram(edited, from: original, in: bottle)
                 program = updated.programs.first { $0.id == id } ?? edited
             }
             printProgramOptions(program)
+            // Every backend this program can use here, or why not.
+            for choice in try await runtime.programGraphicsChoices(for: program, in: bottle) {
+                print("graphics-choice\t\(choice.id)\t\(choice.problem.map { "unavailable: " + $0 } ?? choice.detail)")
+            }
         case "compat":
             guard let identifier = values.first else { throw argumentError(compatUsage) }
             let bottle = try await findBottle(identifier, store: store)
@@ -365,6 +380,8 @@ struct MagicWineCLI {
         for key in program.environment.keys.sorted() { print("env\t\(key)=\(program.environment[key] ?? "")") }
         if !program.dllOverrides.isEmpty { print("dll\t\(program.dllOverrides.serialized)") }
         if let avx = program.advertiseAVX { print("avx\t\(avx ? "on" : "off")") }
+        print("graphics\t" + (program.graphics.map { [$0.backend.rawValue, $0.componentID].compactMap { $0 }.joined(separator: " ") }
+                              ?? "default"))
     }
 
     /// Called as soon as Wine starts; a long-running program can exit much later.
@@ -393,7 +410,7 @@ struct MagicWineCLI {
 
     private static let graphicsUsage = "graphics <bottle-UUID> standard|dxvk|dxmt|d3dmetal [--accept-experimental] [--hud|--no-hud] [--import <D3DMetal-library-folder>] | graphics <bottle-UUID> <current-backend> --update --accept-experimental"
 
-    private static let programUsage = "program <bottle-UUID> <program-UUID> [--name <name>] [--args \"<arguments>\"] [--workdir <folder>|--clear-workdir] [--env KEY=VALUE]… [--unset-env KEY]… [--dll <name>=n|b|n,b|b,n|disabled]… [--unset-dll <name>]… [--avx inherit|on|off]"
+    private static let programUsage = "program <bottle-UUID> <program-UUID> [--name <name>] [--args \"<arguments>\"] [--workdir <folder>|--clear-workdir] [--env KEY=VALUE]… [--unset-env KEY]… [--dll <name>=n|b|n,b|b,n|disabled]… [--unset-dll <name>]… [--avx inherit|on|off] [--graphics default|standard|dxvk|dxmt|d3dmetal]"
 
     private static let compatUsage = "compat <bottle-UUID> [--avx on|off] [--winedebug quiet|default] [--dxvk-hud fps|detailed]"
 
@@ -451,6 +468,8 @@ struct MagicWineCLI {
         --env K=V / --unset-env K, --dll name=n|b|n,b|b,n|disabled / --unset-dll name (repeatable)
         Arguments and working directory apply to EXE programs only; running programs are not stopped
         --avx inherit|on|off overrides the bottle's Rosetta AVX setting for this program
+        --graphics default|standard|dxvk|dxmt|d3dmetal: this program's own backend, per launch, without
+        changing the bottle's files; graphics-choice lines list what each does here or why it is refused
       compat <bottle-UUID> [--avx on|off] [--winedebug quiet|default] [--dxvk-hud fps|detailed]
         Show or change launch switches: Rosetta AVX advertising (x86_64 Wine, macOS 15+),
         Wine debug output (quiet = WINEDEBUG=fixme-all), and the DXVK HUD preset

@@ -184,12 +184,19 @@ final class BottleSettingsModel {
     // MARK: - Programs
 
     /// Metadata only, like Add/Remove Program: allowed while programs run, and the next
-    /// launch of this program uses the new options. Errors return to the editor sheet.
+    /// launch of this program uses the new options. A changed graphics choice is checked
+    /// against the bottle first. Errors return to the editor sheet.
     func saveProgram(_ program: WindowsProgram, from original: WindowsProgram, in bottle: Bottle) async throws {
         guard !activity.activity(for: bottle).blocksLibraryEdit else {
             throw MagicWineError.busy("This bottle’s operation must finish before the program is saved.", reason: .operationInProgress)
         }
-        library.replace(try await store.updateProgram(program, from: original, in: library.current(bottle)))
+        library.replace(try await wine.updateProgram(program, from: original, in: library.current(bottle)))
+    }
+
+    /// The program editor's graphics picker: Bottle default and every backend, with what each
+    /// does in this bottle or why it cannot be chosen. Reads files only.
+    func programGraphicsChoices(for program: WindowsProgram, in bottle: Bottle) async throws -> [ProgramGraphicsChoice] {
+        try await wine.programGraphicsChoices(for: program, in: library.current(bottle))
     }
 
     /// Favorites are listed first. Metadata only: allowed while programs run.

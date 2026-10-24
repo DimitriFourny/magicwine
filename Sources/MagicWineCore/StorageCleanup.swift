@@ -179,7 +179,7 @@ public enum StorageCleanup {
             }
         }
 
-        let componentIDs = Set(bottles.compactMap(\.graphics.componentID))
+        let componentIDs = Set(bottles.flatMap(\.graphicsInUse).compactMap(\.componentID))
         for name in try entries(paths.componentsDirectory) {
             if [".install-", ".d3dmetal-", cleanupPrefix].contains(where: name.hasPrefix) {
                 if let found = staging(["Components"], name) { items.append(found) }
@@ -191,7 +191,7 @@ public enum StorageCleanup {
             guard !componentIDs.contains(name),
                   try fileType(paths.componentsDirectory.appendingPathComponent(name)) == S_IFDIR else { continue }
             let imported = provider.isImported, isCurrent = provider.currentComponentID == name
-            var reason = "No bottle uses this \(kind) component."
+            var reason = "No bottle or program uses this \(kind) component."
             if isCurrent { reason += " It is the currently bundled version; MagicWine reinstalls it when a bottle selects \(kind) again." }
             if imported { reason += " These are your imported Apple libraries: using D3DMetal again requires importing them again." }
             items.append(item(.component, ["Components"], name, reason: reason, requiresReimport: imported, isCurrent: isCurrent))
@@ -213,28 +213,31 @@ public enum StorageCleanup {
     }
 
     /// Exactly the view identities `GraphicsRuntimeView.prepare` would use for every
-    /// bottle's current Wine and component, plus inputs whose identity is undeterminable.
+    /// bottle's current Wine and component (and its programs' own Metal backends), plus
+    /// inputs whose identity is undeterminable.
     private static func reachableViews(paths: ApplicationPaths,
                                        bottles: [Bottle]) throws -> (Set<String>, Set<ViewInputs>) {
         var reachable = Set<String>(), undetermined = Set<ViewInputs>(), seen = Set<ViewInputs>()
-        for bottle in bottles where bottle.graphics.backend.componentProvider?.viewSubstitutions.isEmpty == false {
-            guard let componentID = bottle.graphics.componentID else { continue }
-            // Same URLs launch passes: the pinned executable and Components/<ID>.
-            let executable = bottle.runtime.executableURL
-            let component = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
-            let inputs = ViewInputs(runtime: executable.deletingLastPathComponent().deletingLastPathComponent()
-                                        .resolvingSymlinksInPath().path,
-                                    component: component.path, backend: bottle.graphics.backend)
-            guard seen.insert(inputs).inserted else { continue }
-            // A missing runtime or component cannot launch, so no view is reachable from it.
-            guard FileManager.default.fileExists(atPath: executable.path), try fileType(component) == S_IFDIR else { continue }
-            do {
-                reachable.insert(try GraphicsRuntimeView.identity(executable: executable, component: component,
-                                                                  backend: bottle.graphics.backend))
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                undetermined.insert(inputs)
+        for bottle in bottles {
+            for graphics in bottle.graphicsInUse where graphics.backend.componentProvider?.viewSubstitutions.isEmpty == false {
+                guard let componentID = graphics.componentID else { continue }
+                // Same URLs launch passes: the pinned executable and Components/<ID>.
+                let executable = bottle.runtime.executableURL
+                let component = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
+                let inputs = ViewInputs(runtime: executable.deletingLastPathComponent().deletingLastPathComponent()
+                                            .resolvingSymlinksInPath().path,
+                                        component: component.path, backend: graphics.backend)
+                guard seen.insert(inputs).inserted else { continue }
+                // A missing runtime or component cannot launch, so no view is reachable from it.
+                guard FileManager.default.fileExists(atPath: executable.path), try fileType(component) == S_IFDIR else { continue }
+                do {
+                    reachable.insert(try GraphicsRuntimeView.identity(executable: executable, component: component,
+                                                                      backend: graphics.backend))
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    undetermined.insert(inputs)
+                }
             }
         }
         return (reachable, undetermined)

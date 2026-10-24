@@ -573,6 +573,9 @@ public actor WineRuntime {
             _ = try saved.launchDirectory()
             return saved
         }
+        // A program's own backend is resolved before any launch preparation side effect.
+        let launchGraphics = try savedProgram?.launchGraphics(in: current.graphics, providers: graphicsProviders)
+            ?? .bottle(current.graphics)
         if current.isInitialized, (try? PrefixBoot.hasPendingRenames(prefix: prefix)) ?? true {
             try await bootIfIdle(current, prefix: prefix)
             try Task.checkCancellation()
@@ -622,12 +625,13 @@ public actor WineRuntime {
                 })
             }
         }
-        let graphics = current.graphics.backend != .standard
-            ? try prepareGraphicsLaunch(for: current, prefix: prefix) : nil
+        let graphics = launchGraphics.configuration.backend != .standard
+            ? try prepareGraphicsLaunch(launchGraphics, for: current, prefix: prefix, program: savedProgram) : nil
         let plan = LaunchPlanner.plan(LaunchRequest(
             inherited: ProcessInfo.processInfo.environment, runtime: runtimeFacts(for: wine),
             executable: wine, arguments: arguments, directory: directory ?? prefix, prefix: prefix,
             msyncEnabled: current.msyncEnabled, integrations: integrations, graphics: graphics,
+            builtinGraphicsDLLs: launchGraphics.builtinDLLs,
             compatibility: current.compatibility, program: savedProgram, diagnostics: diagnostics))
         let id = UUID()
         let name = logName ?? savedProgram.map { LogName(diagnostics ? "diagnostics" : "launch", $0.name) } ?? LogName("exec")
@@ -878,24 +882,42 @@ public actor WineRuntime {
         return (provider, try provider.validate(componentID: componentID, paths: paths))
     }
 
-    /// Validates the pinned component and installed footprint, creates the bottle's
-    /// graphics folders, and prepares a Metal backend's private runtime view.
-    private func prepareGraphicsLaunch(for bottle: Bottle, prefix: URL) throws -> GraphicsLaunchFacts {
-        let (provider, component) = try graphicsComponent(bottle.graphics)
-        try provider.validateRuntime(bottle.runtime.executableURL)
-        let directory = prefix.deletingLastPathComponent()
-        try GraphicsPrefix.validateInstalled(configuration: bottle.graphics, prefix: prefix, bottleDirectory: directory)
-        let folders = try provider.cacheFolder.map { try graphicsDirectories(for: bottle, directory: directory, cache: $0) }
-        let loader = provider.viewSubstitutions.isEmpty ? nil
-            : try GraphicsRuntimeView.prepare(executable: bottle.runtime.executableURL,
-                                              component: component, backend: provider.backend, paths: paths)
-        return try provider.launchFacts(component: component, showHUD: bottle.graphics.showHUD, folders: folders,
-                                        loader: loader,
-                                        server: bottle.runtime.executableURL.deletingLastPathComponent().appendingPathComponent("wineserver"))
+    /// Validates the pinned component and, for the bottle's own selection, its installed
+    /// footprint; creates the backend's graphics folders, and prepares a Metal backend's
+    /// private runtime view. A program's other backend never needs prefix files; its
+    /// failures are reported as that program's graphics choice.
+    private func prepareGraphicsLaunch(_ selection: LaunchGraphics, for bottle: Bottle, prefix: URL,
+                                       program: WindowsProgram?) throws -> GraphicsLaunchFacts {
+        let configuration = selection.configuration
+        do {
+            let (provider, component) = try graphicsComponent(configuration)
+            try provider.validateRuntime(bottle.runtime.executableURL)
+            let directory = prefix.deletingLastPathComponent()
+            if selection.isBottleSelection {
+                try GraphicsPrefix.validateInstalled(configuration: configuration, prefix: prefix, bottleDirectory: directory)
+            } else if let program, let problem = Self.architectureProblem(program, backend: provider.backend) {
+                throw MagicWineError.programGraphicsUnavailable(problem, programID: program.id)
+            }
+            let folders = try provider.cacheFolder.map {
+                try graphicsDirectories(for: bottle, backend: provider.backend, directory: directory, cache: $0)
+            }
+            let loader = provider.viewSubstitutions.isEmpty ? nil
+                : try GraphicsRuntimeView.prepare(executable: bottle.runtime.executableURL,
+                                                  component: component, backend: provider.backend, paths: paths)
+            return try provider.launchFacts(component: component, showHUD: configuration.showHUD, folders: folders,
+                                            loader: loader,
+                                            server: bottle.runtime.executableURL.deletingLastPathComponent().appendingPathComponent("wineserver"))
+        } catch let error as MagicWineError where !selection.isBottleSelection {
+            if case .programGraphicsUnavailable = error { throw error }
+            guard let program else { throw error }
+            throw MagicWineError.programGraphicsUnavailable(
+                "\(program.name) uses \(configuration.backend.displayName) graphics, which cannot start in this bottle: \(error.localizedDescription)",
+                programID: program.id)
+        }
     }
 
-    private func graphicsDirectories(for bottle: Bottle, directory: URL, cache: String) throws -> GraphicsFolders {
-        let backend = bottle.graphics.backend
+    private func graphicsDirectories(for bottle: Bottle, backend: GraphicsBackend, directory: URL,
+                                     cache: String) throws -> GraphicsFolders {
         let cache = directory.appendingPathComponent(cache, isDirectory: true)
         let logs = ProcessLogs.bottleDirectory(bottle.id, paths: paths).appendingPathComponent(backend.rawValue, isDirectory: true)
         for folder in [cache, logs] {
@@ -906,6 +928,132 @@ public actor WineRuntime {
             }
         }
         return GraphicsFolders(cache: cache, logs: logs)
+    }
+
+    // MARK: - Per-program graphics
+
+    /// The program graphics picker for `program` in the bottle's current state: Bottle
+    /// default, then every backend, each with what it does here or why it cannot be chosen.
+    /// Reads components and the Wine runtime but changes nothing.
+    public func programGraphicsChoices(for program: WindowsProgram, in bottle: Bottle) async throws -> [ProgramGraphicsChoice] {
+        let current = try await store.current(bottle)
+        let selected = current.graphics
+        var choices = [ProgramGraphicsChoice(backend: nil, graphics: nil,
+                                             detail: "Uses this bottle’s graphics (\(selected.backend.displayName)).", problem: nil)]
+        for backend in GraphicsBackend.allCases {
+            let candidate = programGraphicsCandidate(backend, for: program, in: current)
+            let problem: String?
+            if let candidate {
+                problem = programGraphicsProblem(candidate, for: program, in: current)
+            } else if graphicsProviders[backend]?.isImported == true {
+                problem = "No imported \(backend.displayName) libraries are installed. Import them for a bottle first; MagicWine does not download them."
+            } else {
+                problem = "This build of MagicWine has no \(backend.displayName) component."
+            }
+            choices.append(ProgramGraphicsChoice(backend: backend, graphics: problem == nil ? candidate : nil,
+                                                 detail: Self.programGraphicsDetail(backend, bottle: selected), problem: problem))
+        }
+        return choices
+    }
+
+    /// Saves a program's name and launch options through `BottleStore.updateProgram` after
+    /// checking a changed graphics choice against the bottle's current state. Metadata only:
+    /// allowed while programs run; the next launch uses it and validates it again.
+    public func updateProgram(_ program: WindowsProgram, from original: WindowsProgram, in bottle: Bottle) async throws -> Bottle {
+        if let graphics = program.graphics, graphics != original.graphics {
+            let current = try await store.current(bottle)
+            if let problem = programGraphicsProblem(graphics, for: program, in: current) {
+                throw MagicWineError.programGraphicsUnavailable(problem, programID: program.id)
+            }
+        }
+        return try await store.updateProgram(program, from: original, in: bottle)
+    }
+
+    /// The value a picker saves for `backend`. A backend that needs the bottle's prefix files
+    /// has no component of its own; otherwise the bottle's component for its own backend, the
+    /// program's current component, else the bundled one or the first valid import. `nil`
+    /// when the backend has no component to offer.
+    private func programGraphicsCandidate(_ backend: GraphicsBackend, for program: WindowsProgram,
+                                          in bottle: Bottle) -> ProgramGraphics? {
+        guard backend != .standard else { return .standard }
+        guard let provider = graphicsProviders[backend] else { return nil }
+        guard provider.launchesWithoutPrefixFiles else { return ProgramGraphics(backend: backend) }
+        if backend == bottle.graphics.backend, let id = bottle.graphics.componentID, provider.supports(componentID: id) {
+            return ProgramGraphics(backend: backend, componentID: id)
+        }
+        var candidates: [String] = []
+        if program.graphics?.backend == backend, let id = program.graphics?.componentID { candidates.append(id) }
+        if let id = provider.currentComponentID {
+            candidates.append(id)
+        } else if let names = try? FileManager.default.contentsOfDirectory(atPath: paths.componentsDirectory.path) {
+            candidates += names.sorted().filter { $0.hasPrefix(provider.componentPrefix) }
+        }
+        let supported = candidates.filter(provider.supports(componentID:))
+        let valid = supported.first { (try? provider.validate(componentID: $0, paths: paths)) != nil }
+        return (valid ?? supported.first).map { ProgramGraphics(backend: backend, componentID: $0) }
+    }
+
+    /// Why `graphics` cannot be used for `program` in `bottle` right now, or `nil`.
+    private func programGraphicsProblem(_ graphics: ProgramGraphics, for program: WindowsProgram, in bottle: Bottle) -> String? {
+        var chosen = program
+        chosen.graphics = graphics
+        do {
+            try chosen.validateLaunchOptions()
+            let selection = try chosen.launchGraphics(in: bottle.graphics, providers: graphicsProviders)
+            if let problem = Self.architectureProblem(program, backend: graphics.backend) { return problem }
+            guard !selection.isBottleSelection, let provider = graphicsProviders[graphics.backend],
+                  let componentID = selection.configuration.componentID else { return nil }
+            try provider.validateRuntime(bottle.runtime.executableURL)
+            let installed = paths.componentsDirectory.appendingPathComponent(componentID, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: installed.path) else {
+                return provider.isImported
+                    ? "These \(graphics.backend.displayName) libraries are no longer installed. Import them for a bottle again."
+                    : "The \(graphics.backend.displayName) component is not installed."
+            }
+            let component = try provider.validate(componentID: componentID, paths: paths)
+            if !provider.viewSubstitutions.isEmpty {
+                // Plans the private runtime view without building it.
+                _ = try GraphicsRuntimeView.identity(executable: bottle.runtime.executableURL,
+                                                     component: component, backend: graphics.backend)
+            }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// D3DMetal has no 32-bit bridge: a 32-bit EXE would silently fall back to Wine's own
+    /// Direct3D. Shortcuts and unreadable files are not inspected.
+    private static func architectureProblem(_ program: WindowsProgram, backend: GraphicsBackend) -> String? {
+        guard backend == .d3dmetal, program.supportsArgumentsAndDirectory else { return nil }
+        let fs = SecureFS(prefix: "")
+        guard let (handle, status) = try? fs.open(URL(fileURLWithPath: program.executablePath), maximum: Int.max,
+                                                  allowsHardLinks: true) else { return nil }
+        defer { try? handle.close() }
+        let header = try? PEInspector.parse(size: Int(status.st_size), path: program.executablePath, fs: fs) { offset, count in
+            try handle.seek(toOffset: UInt64(offset))
+            return try handle.read(upToCount: count) ?? Data()
+        }
+        guard let machine = header?.machine, machine != PEInspector.amd64 else { return nil }
+        return "D3DMetal provides only 64-bit Direct3D 11 and 12, and \(program.name) is a \(machine == PEInspector.i386 ? "32-bit" : "non-x86-64") program. Choose Wine builtin (Standard) or the bottle’s graphics for it."
+    }
+
+    private static func programGraphicsDetail(_ backend: GraphicsBackend, bottle: GraphicsConfiguration) -> String {
+        if backend == bottle.backend {
+            return "Same as this bottle: \(backend.displayName) from its own selection."
+        }
+        let setAside = bottle.backend == .standard ? ""
+            : " This bottle’s \(bottle.backend.displayName) DLLs are set to Wine builtin for this program."
+        switch backend {
+        case .standard:
+            return "Wine’s own Direct3D for this program." + setAside
+        case .dxvk:
+            return "Direct3D 9–11 through Vulkan; works only from DLLs installed in the bottle."
+        case .dxmt:
+            return "Direct3D 10 and 11 on Metal; works only from DLLs installed in the bottle."
+        case .d3dmetal:
+            return "64-bit Direct3D 11 and 12 on Metal through your imported D3DMetal libraries; no 32-bit programs." + setAside
+        }
     }
 
     private func prefixURL(for bottle: Bottle) throws -> URL {

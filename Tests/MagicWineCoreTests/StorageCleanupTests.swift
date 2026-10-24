@@ -150,6 +150,31 @@ struct StorageCleanupTests {
         return (used, unused, [current, old, missing])
     }
 
+    @Test func aProgramsOwnD3DMetalImportAndViewStayInUse() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.runtime(7)
+        let component = fixture.paths.componentsDirectory.appendingPathComponent(imported, isDirectory: true)
+        for name in ["d3d11", "d3d12", "dxgi"] {
+            try fixture.write(Data(name.utf8), to: component.appendingPathComponent("wine/x86_64-windows/\(name).dll"))
+        }
+        try fixture.write(Data("shared".utf8), to: component.appendingPathComponent("external/libd3dshared.dylib"))
+        let view = try GraphicsRuntimeView.prepare(executable: fixture.executable(7), component: component,
+                                                   backend: .d3dmetal, paths: fixture.paths)
+            .deletingLastPathComponent().deletingLastPathComponent()
+        // A Standard bottle whose game uses D3DMetal on its own keeps the import and its view.
+        var bottle = try await fixture.bottle("Launcher", revision: 7)
+        bottle.programs = [WindowsProgram(name: "Game", executablePath: "/drive_c/game.exe",
+                                          graphics: ProgramGraphics(backend: .d3dmetal, componentID: imported))]
+        func graphicsItems() throws -> Set<String> {
+            Set(try StorageCleanup.candidates(paths: fixture.paths, bottles: [bottle], settings: AppSettings())
+                .filter { [.component, .runtimeView].contains($0.category) }.map(\.url.lastPathComponent))
+        }
+        #expect(try graphicsItems().isEmpty)
+        bottle.programs[0].graphics = nil
+        #expect(try graphicsItems() == [imported, view.lastPathComponent])
+    }
+
     @Test func planListsOnlyUnreferencedEntries() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

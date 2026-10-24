@@ -359,6 +359,78 @@ struct LaunchTests {
         _ = await task.value
     }
 
+    @Test func programGraphicsApplyPerLaunchAndRefuseWhatTheBottleCannotSupply() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.remove() }
+        let metadata = fixture.directory.appendingPathComponent("bottle.json")
+        func write(_ graphics: GraphicsConfiguration) throws -> Bottle {
+            var bottle = try JSONDecoder().decode(Bottle.self, from: Data(contentsOf: metadata))
+            bottle.graphics = graphics
+            try JSONEncoder().encode(bottle).write(to: metadata, options: .atomic)
+            return bottle
+        }
+        func refusal(_ error: any Error, for program: WindowsProgram) -> Bool {
+            guard case .programGraphicsUnavailable(_, let id)? = error as? MagicWineError else { return false }
+            return id == program.id
+        }
+        let registered = try await fixture.store.registerProgram(
+            in: fixture.bottle, executableURL: URL(fileURLWithPath: try fixture.program("game.exe").executablePath))
+        let original = try #require(registered.programs.first)
+
+        // A Standard bottle offers its default and Standard: DXVK and DXMT need prefix files,
+        // and this library has no D3DMetal import.
+        let choices = try await fixture.wine.programGraphicsChoices(for: original, in: registered)
+        #expect(choices.map(\.id) == ["default", "standard", "dxvk", "dxmt", "d3dmetal"])
+        #expect(choices.filter(\.isAvailable).map(\.id) == ["default", "standard"])
+        var dxvkChoice = original
+        dxvkChoice.graphics = ProgramGraphics(backend: .dxvk)
+        await #expect { try await fixture.wine.updateProgram(dxvkChoice, from: original, in: registered) } throws: {
+            refusal($0, for: original)
+        }
+        #expect(try await fixture.store.current(fixture.bottle).programs == [original])
+
+        // The bottle uses DXVK, whose component is not even installed here: a Standard program
+        // still launches, with the DXVK DLLs set to builtin and no DXVK variables.
+        let dxvkBottle = try write(GraphicsConfiguration(backend: .dxvk, componentID: DXVKInstallation.componentID, showHUD: true))
+        var standard = original
+        standard.graphics = .standard
+        let saved = try #require(try await fixture.wine.updateProgram(standard, from: original, in: dxvkBottle).programs.first)
+        #expect(saved.graphics == .standard)
+        #expect(try await fixture.wine.launch(saved, in: fixture.bottle).exitCode == 0)
+        let environment = try fixture.launchEnvironment()
+        let overrides = try DLLOverrides(parsing: try #require(environment["WINEDLLOVERRIDES"]))
+        #expect(["d3d9", "d3d10core", "d3d11"].map { overrides[$0] } == [.builtin, .builtin, .builtin])
+        #expect(overrides["dxgi"] == nil)
+        #expect(!environment.keys.contains { $0.hasPrefix("DXVK_") } && environment["WINE_D3D_CONFIG"] == nil)
+
+        // Following the bottle uses its DXVK files, which are missing: nothing starts.
+        try FileManager.default.removeItem(at: fixture.environmentDump)
+        var follows = saved
+        follows.graphics = nil
+        let defaulted = try #require(try await fixture.wine.updateProgram(follows, from: saved, in: dxvkBottle).programs.first)
+        await #expect(throws: MagicWineError.self) { try await fixture.wine.launch(defaulted, in: fixture.bottle) }
+        // DXVK saved while the bottle used it is refused once the bottle switched to Standard.
+        var dxvk = defaulted
+        dxvk.graphics = ProgramGraphics(backend: .dxvk)
+        let pinned = try #require(try await fixture.wine.updateProgram(dxvk, from: defaulted, in: dxvkBottle).programs.first)
+        _ = try write(GraphicsConfiguration())
+        await #expect { try await fixture.wine.launch(pinned, in: fixture.bottle) } throws: { refusal($0, for: pinned) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.environmentDump.path))
+
+        // D3DMetal has no 32-bit bridge: a 32-bit EXE cannot choose it.
+        var header = Data(count: 88)
+        header[0] = 0x4d; header[1] = 0x5a; header[60] = 64
+        header.replaceSubrange(64..<70, with: [0x50, 0x45, 0, 0, 0x4c, 0x01])
+        let old = fixture.prefix.appendingPathComponent("drive_c/old32.exe")
+        try header.write(to: old)
+        let withOld = try await fixture.store.registerProgram(in: fixture.bottle, executableURL: old)
+        let legacy = try #require(withOld.programs.first { $0.executablePath == old.path })
+        var metal = legacy
+        metal.graphics = ProgramGraphics(backend: .d3dmetal, componentID: "d3dmetal-" + String(repeating: "ab", count: 32))
+        await #expect { try await fixture.wine.updateProgram(metal, from: legacy, in: withOld) } throws: { refusal($0, for: legacy) }
+        #expect(try await fixture.store.current(fixture.bottle).programs.first { $0.id == legacy.id }?.graphics == nil)
+    }
+
     @Test func compatibilitySwitchesSaveWhileRunningAndDiagnosticsAreOneOff() async throws {
         let fixture = try await Fixture()
         defer { fixture.remove() }

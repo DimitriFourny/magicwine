@@ -45,6 +45,8 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
     public var dllOverrides: DLLOverrides
     /// Rosetta AVX advertising for this program; `nil` follows the bottle's setting.
     public var advertiseAVX: Bool?
+    /// This program's own graphics backend; `nil` follows the bottle. See `ProgramGraphics`.
+    public var graphics: ProgramGraphics?
     /// When MagicWine last started this program; see `BottleStore.recordLaunch`.
     public internal(set) var lastLaunchedAt: Date?
     /// Accumulated seconds from a program's start to the end of its processes; see
@@ -55,7 +57,7 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
 
     public init(id: UUID = UUID(), name: String, executablePath: String, arguments: [String] = [],
                 workingDirectory: String? = nil, environment: [String: String] = [:],
-                dllOverrides: DLLOverrides = .init(), advertiseAVX: Bool? = nil) {
+                dllOverrides: DLLOverrides = .init(), advertiseAVX: Bool? = nil, graphics: ProgramGraphics? = nil) {
         self.id = id
         self.name = name
         self.executablePath = executablePath
@@ -64,6 +66,7 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
         self.environment = environment
         self.dllOverrides = dllOverrides
         self.advertiseAVX = advertiseAVX
+        self.graphics = graphics
         lastLaunchedAt = nil
         playTime = 0
         isFavorite = false
@@ -80,7 +83,7 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, executablePath, arguments, workingDirectory, environment, dllOverrides, advertiseAVX
+        case id, name, executablePath, arguments, workingDirectory, environment, dllOverrides, advertiseAVX, graphics
         case lastLaunchedAt, playTime, isFavorite
     }
 
@@ -96,6 +99,7 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
         environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
         dllOverrides = try container.decodeIfPresent(DLLOverrides.self, forKey: .dllOverrides) ?? .init()
         advertiseAVX = try container.decodeIfPresent(Bool.self, forKey: .advertiseAVX)
+        graphics = try container.decodeIfPresent(ProgramGraphics.self, forKey: .graphics)
         lastLaunchedAt = try container.decodeIfPresent(Date.self, forKey: .lastLaunchedAt)
         playTime = try container.decodeIfPresent(TimeInterval.self, forKey: .playTime) ?? 0
         guard playTime >= 0 else {
@@ -116,6 +120,7 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
         if !environment.isEmpty { try container.encode(environment, forKey: .environment) }
         if !dllOverrides.isEmpty { try container.encode(dllOverrides, forKey: .dllOverrides) }
         try container.encodeIfPresent(advertiseAVX, forKey: .advertiseAVX)
+        try container.encodeIfPresent(graphics, forKey: .graphics)
         try container.encodeIfPresent(lastLaunchedAt, forKey: .lastLaunchedAt)
         if playTime > 0 { try container.encode(playTime, forKey: .playTime) }
         if isFavorite { try container.encode(true, forKey: .isFavorite) }

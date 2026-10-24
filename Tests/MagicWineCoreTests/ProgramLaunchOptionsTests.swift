@@ -100,4 +100,29 @@ struct ProgramLaunchOptionsTests {
         overrides.remove("d3d11")
         #expect(overrides.isEmpty)
     }
+
+    @Test func programGraphicsPersistsOnlyWhenChosenAndNamesAComponentOnlyForD3DMetal() throws {
+        let id = UUID()
+        let legacy = Data(#"{"id":"\#(id.uuidString)","name":"Game","executablePath":"/drive_c/game.exe"}"#.utf8)
+        #expect(try JSONDecoder().decode(WindowsProgram.self, from: legacy).graphics == nil)
+
+        let d3dmetal = "d3dmetal-" + String(repeating: "0a", count: 32)
+        for graphics in [ProgramGraphics.standard, ProgramGraphics(backend: .dxvk), ProgramGraphics(backend: .dxmt),
+                         ProgramGraphics(backend: .d3dmetal, componentID: d3dmetal)] {
+            let program = WindowsProgram(id: id, name: "Game", executablePath: "/drive_c/game.exe", graphics: graphics)
+            try program.validateLaunchOptions()
+            let data = try JSONEncoder().encode(program)
+            #expect(try JSONDecoder().decode(WindowsProgram.self, from: data) == program)
+            let stored = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect((stored["graphics"] as? [String: Any])?["backend"] as? String == graphics.backend.rawValue)
+        }
+        // Backends that use the bottle's prefix files have no component; D3DMetal needs a supported one.
+        for invalid in [ProgramGraphics(backend: .standard, componentID: d3dmetal),
+                        ProgramGraphics(backend: .dxvk, componentID: DXVKInstallation.componentID),
+                        ProgramGraphics(backend: .dxmt, componentID: DXMTInstallation.componentID),
+                        ProgramGraphics(backend: .d3dmetal), ProgramGraphics(backend: .d3dmetal, componentID: "d3dmetal-x")] {
+            let program = WindowsProgram(name: "Game", executablePath: "/drive_c/game.exe", graphics: invalid)
+            #expect(throws: MagicWineError.self) { try program.validateLaunchOptions() }
+        }
+    }
 }
