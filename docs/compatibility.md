@@ -115,6 +115,8 @@ For an eligible owned prefix, the installer verifies the bundled DLL, source, an
 
 [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift) invokes this during initialized non-server launch preparation under the prefix lock, then adds `wow64cpu=n` only when applicable. It does not persist a registry-wide override. The repair is optional for a launch: if it refuses (custom prefix DLL, damaged backup, missing bundled resources), the program still starts with no `wow64cpu` override, so Wine's builtin module loads, and the user receives a warning when the process starts. Some 32-bit programs can then crash under Rosetta.
 
+The replaced DLL must survive the launch's own Wine session start. A prefix update that ran while Wine's services mapped the stock `wow64cpu.dll` (as initialization's `wineboot -u` on a new prefix does) leaves it staged in `PendingFileRenameOperations`; the next session's `wineboot --init` then moves the stock file back over the repaired one after preparation, and the 32-bit program fails with `err:wow:load_64bit_module failed to load dll c0000135` because `wow64cpu=n` finds no native DLL. Initialization and idle launches therefore apply pending moves before this repair runs; see [Launch preparation](runtime-lifecycle.md#launch-preparation-and-ownership-handoff). Wine's automatic update after a runtime change (stale `.update-timestamp`) leaves the repaired DLL, which is not a Wine builtin, in place and stages no moves.
+
 ## App-level launch corrections
 
 These policies take effect through the rebuilt app/CLI and do not themselves rebuild Wine:
