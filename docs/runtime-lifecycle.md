@@ -143,6 +143,7 @@ Mutation semantics intentionally differ:
 | Explicit Retina/display change | Requires initialization, holds exclusive launch intent, calls stop/wait, then obtains exclusive lifetime ownership before modifying registry and metadata. CLI can therefore stop a live bottle; GUI usually gates the action while its own launches are recorded. An already matching configuration needs no stop. |
 | Automatic display adoption before launch | Waits for idle ownership and server exit; never kills existing Wine solely to adopt display defaults. Failure asks the user to close programs or use Stop. |
 | Graphics configuration | Stops the bottle before changing graphics files under exclusive ownership; see [graphics](graphics.md) for transactions and component rules. |
+| Graphics HUD only | Metadata-only `setGraphicsHUD`: allowed while programs run, never stops processes or touches prefix DLLs, applies to later launches. During its brief metadata write it excludes other setting changes of the same bottle, and a launch starting in that instant is refused with the usual "wait for setup" error. |
 
 Retina on means 192 DPI / 200%; off means 96 DPI / 100%, bottle-wide, including games. `BottleStore.prepareDisplay` retains the previous registry bytes and restores them if saving metadata fails. General `BottleStore.save` rejects attempts to bypass the dedicated runtime/display/graphics/synchronization APIs.
 

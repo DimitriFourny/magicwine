@@ -100,7 +100,7 @@ sequenceDiagram
     Runtime-->>User: Updated selection or explicit failure
 ```
 
-A failure after the stop step can leave applications stopped even when the graphics selection remains unchanged. The native dashboard gates settings while it considers the bottle busy/running; direct CLI/core graphics reconfiguration explicitly stops its processes. Save game state first.
+A failure after the stop step can leave applications stopped even when the graphics selection remains unchanged. The native dashboard gates backend selection while it considers the bottle busy/running; direct CLI/core graphics reconfiguration explicitly stops its processes. Save game state first. Changing only the HUD is not a reconfiguration; see [Launch overrides, HUD, and display](#launch-overrides-hud-and-display).
 
 Three forms of coordination serve different lifetimes:
 
@@ -122,7 +122,7 @@ Lease files are under `Bottles/.graphics-locks/`; locks are cross-process, cance
 
 If a user or installer replaces a managed DLL, switching/restoring preserves displaced content under `graphics/recovered/<UUID>/` instead of discarding it. Missing or inconsistent backups are errors. Do not delete journals or manifests as a repair strategy.
 
-Selecting Standard restores the original footprint without needing the old graphics component to remain installed. Changing only HUD with the same component does not recapture or reinstall prefix DLLs, although orchestration still stops processes. In-place component updates are not supported: restore Standard first. Older unsupported DXVK selections may require a fresh bottle; historical DXMT validation is a separate explicit case.
+Selecting Standard restores the original footprint without needing the old graphics component to remain installed. A HUD-only change never recaptures or reinstalls prefix DLLs and does not stop processes (see below). In-place component updates are not supported: restore Standard first. Older unsupported DXVK selections may require a fresh bottle; historical DXMT validation is a separate explicit case.
 
 **Validation boundary:** launch-time prefix validation checks the active manifest, paths, regular-file layout, and expected DLL sizes; it does not hash every prefix DLL on every launch. Component validation and transaction preservation use stronger hash checks. Do not treat the prefix check as tamper-proofing.
 
@@ -157,7 +157,7 @@ Launch uses the private executable and `WINELOADER`, but `WINESERVER` remains th
 | DXMT | Builtin `d3d10core,d3d11,dxgi,winemetal` from the selected component/view |
 | D3DMetal | Builtin `d3d11,d3d12,dxgi` with the local shared library/framework |
 
-DXVK uses `DXVK_HUD`; Metal backends use `MTL_HUD_ENABLED`. HUD is not the renderer-selection mechanism. **Retina / HiDPI** is a separate bottle-wide Wine setting: enabled uses Retina mode and 192 DPI; disabled uses non-Retina mode and 96 DPI. It can change the resolution a game chooses and therefore GPU load. **MSync** is also independent of the renderer; see [Compatibility patches](compatibility.md).
+DXVK uses `DXVK_HUD`; Metal backends use `MTL_HUD_ENABLED`. HUD is not the renderer-selection mechanism. Because the HUD is only launch environment, `WineRuntime.setGraphicsHUD(_:in:)` changes just `graphics.showHUD` in `bottle.json` (via `BottleStore`, under the bottle lock): it never stops Windows processes, touches prefix DLLs, or re-verifies the component, and it is allowed while programs run. The change applies to programs launched afterwards; running programs keep their current overlay. It refuses Standard, an unsupported (non-current) component, and a caller whose view of the backend/component is stale, and it cannot overlap another graphics/display/synchronization change of the same bottle. The dashboard's **Show Graphics HUD** toggle uses this path and stays enabled while programs run. **Retina / HiDPI** is a separate bottle-wide Wine setting: enabled uses Retina mode and 192 DPI; disabled uses non-Retina mode and 96 DPI. It can change the resolution a game chooses and therefore GPU load. **MSync** is also independent of the renderer; see [Compatibility patches](compatibility.md).
 
 Inherited loader/graphics variables are deliberately sanitized by `WineRuntime.environment`. Setting `DXVK_*`, `DXMT_*`, `D3DM_*`, `MTL_*`, or `DYLD_*` in the launching shell is not a supported way to bypass managed configuration.
 
@@ -167,7 +167,7 @@ Source: `prepareGraphicsLaunch` and `environment` in [WineRuntime.swift](../Sour
 
 ## CLI examples
 
-Run from the checkout after building. Set `ROOT` to your isolated application data root and `BOTTLE` to a UUID printed by `list`. These commands change the selected bottle and may stop its Windows processes.
+Run from the checkout after building. Set `ROOT` to your isolated application data root and `BOTTLE` to a UUID printed by `list`. Backend selections change the selected bottle and may stop its Windows processes; a HUD-only change does not.
 
 ```sh
 CLI="$PWD/dist/magicwine"
@@ -182,6 +182,6 @@ BOTTLE="<bottle-UUID>"
 "$CLI" --root "$ROOT" graphics "$BOTTLE" standard
 ```
 
-Run only the relevant selection command, not the whole sequence as a test. Nonstandard selections, including HUD-only changes, require `--accept-experimental`. Omitting HUD flags preserves the prior HUD setting; Standard clears it and accepts no flags. A different D3DMetal import requires switching to Standard first. `--hud` and `--no-hud` are mutually exclusive; `--import` is D3DMetal-only.
+Run only the relevant selection command, not the whole sequence as a test. Selecting or re-verifying a nonstandard backend requires `--accept-experimental`. Repeating the bottle's **current** backend with `--hud` or `--no-hud` (and no `--import`) only saves the HUD preference for later launches: it needs no `--accept-experimental` and does not stop running programs. Omitting HUD flags preserves the prior HUD setting; Standard clears it and accepts no flags. A different D3DMetal import requires switching to Standard first. `--hud` and `--no-hud` are mutually exclusive; `--import` is D3DMetal-only.
 
 For backend smoke probes, visual evidence, and missing-component recovery guidance, see [Debugging](debugging.md) and [Development](development.md).

@@ -233,4 +233,58 @@ struct LaunchTests {
         try Data(("0024" + rest + padding).utf8).write(to: log)
         #expect(ProcessLogSummary.summary(at: log) == nil)
     }
+
+    @Test func hudChangeWhileProgramRunsNeitherStopsItNorTouchesThePrefix() async throws {
+        let fixture = try await Fixture(initialized: false)
+        defer { fixture.remove() }
+        let finished = Box<Bool>()
+        let task = Task {
+            _ = try? await fixture.wine.run(arguments: ["hold"], in: fixture.bottle)
+            finished.set(true)
+        }
+        defer { task.cancel() }
+        let marker = fixture.prefix.appendingPathComponent("holding")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+
+        // A bottle previously configured for DXVK; the running program holds a lifetime lease.
+        let metadata = fixture.directory.appendingPathComponent("bottle.json")
+        func write(_ graphics: GraphicsConfiguration) throws -> Bottle {
+            var bottle = try JSONDecoder().decode(Bottle.self, from: Data(contentsOf: metadata))
+            bottle.isInitialized = true
+            bottle.graphics = graphics
+            try JSONEncoder().encode(bottle).write(to: metadata, options: .atomic)
+            return bottle
+        }
+        let dxvk = try write(GraphicsConfiguration(backend: .dxvk, componentID: DXVKInstallation.componentID))
+        let prefixBefore = try FileManager.default.subpathsOfDirectory(atPath: fixture.prefix.path).sorted()
+
+        let updated = try await fixture.wine.setGraphicsHUD(true, in: dxvk)
+        #expect(updated.graphics == GraphicsConfiguration(backend: .dxvk, componentID: DXVKInstallation.componentID, showHUD: true))
+        let saved = try JSONDecoder().decode(Bottle.self, from: Data(contentsOf: metadata))
+        #expect(saved.graphics.showHUD)
+        #expect(saved.programs == dxvk.programs && saved.runtime == dxvk.runtime)
+        #expect(try await BottleStore(paths: fixture.paths).current(dxvk).graphics.showHUD)
+        #expect(try await !fixture.wine.setGraphicsHUD(false, in: updated).graphics.showHUD)
+
+        // A stale view of the backend cannot attach a HUD to a selection it never saw.
+        var stale = dxvk
+        stale.graphics = GraphicsConfiguration(backend: .dxmt, componentID: DXMTInstallation.componentID)
+        await #expect(throws: MagicWineError.self) { try await fixture.wine.setGraphicsHUD(true, in: stale) }
+
+        let legacy = try write(GraphicsConfiguration(backend: .dxvk, componentID: "dxvk-unsupported"))
+        await #expect(throws: MagicWineError.self) { try await fixture.wine.setGraphicsHUD(true, in: legacy) }
+        let standard = try write(GraphicsConfiguration())
+        await #expect(throws: MagicWineError.self) { try await fixture.wine.setGraphicsHUD(true, in: standard) }
+        #expect(try JSONDecoder().decode(Bottle.self, from: Data(contentsOf: metadata)).graphics == GraphicsConfiguration())
+
+        #expect(finished.value == nil)
+        #expect(!FileManager.default.fileExists(atPath: fixture.prefix.appendingPathComponent("killed").path))
+        #expect(try FileManager.default.subpathsOfDirectory(atPath: fixture.prefix.path).sorted() == prefixBefore)
+        _ = try await fixture.wine.stop(fixture.bottle)
+        _ = await task.value
+    }
 }

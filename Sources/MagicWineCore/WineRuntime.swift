@@ -397,6 +397,21 @@ public actor WineRuntime {
         return try await store.setGraphics(configuration, in: current, componentRoot: componentRoot)
     }
 
+    /// Changes only the persisted HUD preference of the current non-Standard backend.
+    /// HUD is launch environment, so this never stops processes, touches prefix DLLs,
+    /// or re-verifies components; running programs keep their HUD state and programs
+    /// launched afterwards use the new one. The brief metadata write still excludes
+    /// concurrent graphics, display, synchronization, and runtime changes.
+    public func setGraphicsHUD(_ showHUD: Bool, in bottle: Bottle) async throws -> Bottle {
+        guard !settingsChanging.contains(bottle.id) else {
+            throw MagicWineError.setup("Graphics or display setup is already in progress for this bottle.")
+        }
+        settingsChanging.insert(bottle.id)
+        defer { settingsChanging.remove(bottle.id) }
+        try paths.prepare()
+        return try await store.setGraphicsHUD(showHUD, in: bottle)
+    }
+
     private func execute(arguments: [String], bottle: Bottle, directory: URL?, timeout: TimeInterval?,
                          server: Bool = false, tracked: Bool = true, idleProbe: Bool = false,
                          onStart: (@Sendable (LaunchStart) -> Void)? = nil,

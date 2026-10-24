@@ -147,9 +147,16 @@ struct MagicWineCLI {
                 guard !(flags.contains("--hud") && flags.contains("--no-hud")),
                       backend != .standard || flags.isEmpty else { throw argumentError(graphicsUsage) }
                 let showHUD = flags.contains("--hud") || (!flags.contains("--no-hud") && bottle.graphics.showHUD)
-                let updated = try await runtime.configureGraphics(backend, in: bottle, showHUD: showHUD,
-                                                                   acceptExperimental: flags.contains("--accept-experimental"),
-                                                                   componentSource: componentSource)
+                let updated: Bottle
+                if backend == bottle.graphics.backend, backend != .standard, componentSource == nil,
+                   flags.contains("--hud") || flags.contains("--no-hud") {
+                    // HUD only: metadata for later launches; running programs are not stopped.
+                    updated = try await runtime.setGraphicsHUD(showHUD, in: bottle)
+                } else {
+                    updated = try await runtime.configureGraphics(backend, in: bottle, showHUD: showHUD,
+                                                                  acceptExperimental: flags.contains("--accept-experimental"),
+                                                                  componentSource: componentSource)
+                }
                 print("\(updated.graphics.backend.rawValue)\t\(updated.graphics.componentID ?? "Wine default")\tHUD \(updated.graphics.showHUD ? "on" : "off")")
             case "exec":
                 guard !rest.isEmpty else { throw argumentError("exec <bottle-UUID> <wine-arguments…>") }
@@ -218,6 +225,8 @@ struct MagicWineCLI {
       configure <bottle-UUID>                   Open Wine configuration
       graphics <bottle-UUID> [standard|dxvk|dxmt|d3dmetal]
         Third-party backends require --accept-experimental; optional --hud or --no-hud
+        The current backend with --hud/--no-hud only saves the HUD for later launches:
+        no --accept-experimental needed, running programs are not stopped
         D3DMetal finds local Wine/CrossOver libraries; --import <library-folder> overrides discovery
       retina <bottle-UUID> [on|off]              Read or change Retina / HiDPI (default on)
         On sets 200% scaling (192 DPI); off sets 100% (96 DPI)

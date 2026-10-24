@@ -131,6 +131,29 @@ public actor BottleStore {
         }
     }
 
+    /// HUD is launch environment only: no prefix DLL, component, or running process is
+    /// touched. The caller's backend/component must still be current, so a stale view
+    /// cannot attach a HUD preference to a selection it never saw.
+    internal func setGraphicsHUD(_ showHUD: Bool, in bottle: Bottle) throws -> Bottle {
+        try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
+            var current = try loadUnlocked(bottle)
+            guard current.graphics.backend == bottle.graphics.backend,
+                  current.graphics.componentID == bottle.graphics.componentID else {
+                throw MagicWineError.setup("This bottle's graphics backend changed. Reload it before changing the HUD.")
+            }
+            guard current.isInitialized, current.graphics.backend != .standard else {
+                throw MagicWineError.setup("Standard graphics has no managed HUD. Choose DXVK, DXMT, or D3DMetal first.")
+            }
+            guard current.graphics.usesCurrentComponent else {
+                throw MagicWineError.setup("This bottle uses an unsupported \(current.graphics.backend.displayName) component. Choose Standard to restore its original graphics files, then enable the backend again.")
+            }
+            guard current.graphics.showHUD != showHUD else { return current }
+            current.graphics.showHUD = showHUD
+            try saveUnlocked(current)
+            return current
+        }
+    }
+
     internal func displayNeedsUpdate(_ bottle: Bottle) throws -> Bool {
         try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
             let current = try loadUnlocked(bottle)

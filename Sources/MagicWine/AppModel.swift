@@ -14,6 +14,7 @@ struct BottleActivity {
     var graphicsSetupID: UUID?
     var runningLaunches: Set<UUID> = []
     var notices: [BottleNotice] = []
+    var isChangingHUD = false
     var hasRunningPrograms: Bool { !runningLaunches.isEmpty }
 }
 
@@ -434,6 +435,30 @@ final class AppModel: ObservableObject {
         // Keep the dashboard compact when a launcher is reopened repeatedly.
         state.notices = Array((state.notices + [notice]).suffix(4))
         activities[id] = state
+    }
+
+    /// HUD is launch environment only: running programs keep going and those launched
+    /// afterwards use the new setting. No exclusive operation title is shown.
+    func setGraphicsHUD(_ showHUD: Bool, in bottle: Bottle) {
+        guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }), bottle.isInitialized,
+              bottle.graphics.backend != .standard, bottle.graphics.usesCurrentComponent,
+              bottle.graphics.showHUD != showHUD else { return }
+        var state = activity(for: bottle)
+        guard state.title == nil, !state.isStopping, !state.isChangingHUD else { return }
+        state.isChangingHUD = true
+        state.error = nil
+        activities[bottle.id] = state
+        Task {
+            do {
+                replace(try await wine.setGraphicsHUD(showHUD, in: bottle))
+            } catch {
+                recordError(error, for: bottle.id)
+            }
+            guard bottles.contains(where: { $0.id == bottle.id }) else { return }
+            var latest = activity(for: bottle)
+            latest.isChangingHUD = false
+            activities[bottle.id] = latest
+        }
     }
 
     func configure(_ bottle: Bottle) {

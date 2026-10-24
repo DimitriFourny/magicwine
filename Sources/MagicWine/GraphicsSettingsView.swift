@@ -96,20 +96,24 @@ struct GraphicsSettingsView: View {
                         .foregroundStyle(WineTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                // HUD is launch-time only, so it stays available while programs run.
+                let hudUnavailable = model.isLoading || state.title != nil || state.isStopping || state.isChangingHUD ||
+                    !currentBottle.isInitialized || !currentBottle.graphics.usesCurrentComponent
                 HStack(spacing: 6) {
                     Text("Show Graphics HUD")
                     SettingsInfoButton(title: "Show Graphics HUD",
-                                       message: "Show the selected graphics backend’s performance overlay.\n\nSelected: \(currentBottle.graphics.componentID ?? "unspecified component")\n\nChoose Standard to restore this bottle’s original graphics files.")
+                                       message: "Show the selected graphics backend’s performance overlay in programs launched after you change this. Programs that are already running keep their current overlay; nothing is stopped.\n\nSelected: \(currentBottle.graphics.componentID ?? "unspecified component")\n\nChoose Standard to restore this bottle’s original graphics files.")
                     Spacer(minLength: 12)
                     Toggle("Show Graphics HUD", isOn: Binding(
                         get: { currentBottle.graphics.showHUD },
                         set: { showHUD in
-                            guard !unavailable, currentBottle.graphics.usesCurrentComponent else { return }
-                            model.setGraphics(currentBottle.graphics.backend, in: currentBottle, showHUD: showHUD)
+                            guard !hudUnavailable else { return }
+                            model.setGraphicsHUD(showHUD, in: currentBottle)
                         }
                     ))
                     .labelsHidden()
-                    .disabled(unavailable || !currentBottle.graphics.usesCurrentComponent)
+                    .disabled(hudUnavailable)
+                    .help("Applies to programs launched afterwards; running programs are not stopped.")
                 }
                 .padding(.vertical, 4)
             }
