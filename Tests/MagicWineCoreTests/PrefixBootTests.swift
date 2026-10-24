@@ -5,6 +5,8 @@ import Testing
 /// Wine applies `PendingFileRenameOperations` when the first process of a new server
 /// session runs `wineboot --init`. The fake Wine does the same at every program start, as
 /// a new session would, and leaves `rewritten-at-launch` when that overwrote a prefix DLL.
+/// While a `linger` file exists (`wineserver -k` removes it), `wineserver -w` notes
+/// `waiting` and waits two seconds for a lingering server to exit.
 struct PrefixBootTests {
     private struct Fixture {
         let paths: ApplicationPaths
@@ -42,6 +44,8 @@ struct PrefixBootTests {
                   '"PendingFileRenameOperations"=str(7):"\\??\\C:\\windows\\system32\\dll1.tmp\0!\\??\\C:\\windows\\system32\\wow64cpu.dll\0"' \
                   > "$WINEPREFIX/system.reg" ;;
               hold) touch "$WINEPREFIX/holding"; exec /bin/sleep 30 ;;
+              -k) rm -f "$WINEPREFIX/../linger" ;;
+              -w) if [ -f "$WINEPREFIX/../linger" ]; then touch "$WINEPREFIX/../waiting"; sleep 2; fi ;;
               *.exe) boot && touch "$WINEPREFIX/../rewritten-at-launch"
                      cat "$system32/wow64cpu.dll" > "$WINEPREFIX/../program-saw" ;;
             esac
@@ -100,6 +104,30 @@ struct PrefixBootTests {
         #expect(fixture.boots == 1)
         #expect(fixture.text("rewritten-at-launch") == nil)
         #expect(fixture.text("program-saw") == "updated")
+    }
+
+    @Test func stopWhileWaitingForALingeringServerCancelsTheBoot() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.remove() }
+        let bottle = try await fixture.stageUpdate()
+        try Data().write(to: fixture.directory.appendingPathComponent("linger"))
+        let program = try fixture.program()
+        let launch = Task { try await fixture.wine.launch(program, in: bottle) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while fixture.text("waiting") == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(fixture.text("waiting") != nil)
+
+        // Stop waits for the launch lease; the server exiting meanwhile must not start a boot.
+        try await fixture.wine.stop(bottle)
+        await #expect { try await launch.value } throws: { error in
+            if case MagicWineError.stopped = error { return true }
+            return false
+        }
+        #expect(fixture.boots == 0)
+        #expect(fixture.text("program-saw") == nil)
+        #expect(try PrefixBoot.hasPendingRenames(prefix: fixture.prefix))
     }
 
     @Test func liveSessionIsNeverRebootedForAnOwedDLLMove() async throws {

@@ -15,6 +15,9 @@ public actor WineRuntime {
     private var settingsChanging: Set<UUID> = []
     private var pendingLaunches: [UUID: [UUID: Task<GraphicsOperationLease, Error>]] = [:]
     private var installingGraphics: Set<GraphicsBackend> = []
+    /// Counts each bottle's `interruptOperations` calls. A multi-step operation compares
+    /// it with its starting value to notice a Stop that landed between its tracked processes.
+    private var interruptions: [UUID: UInt64] = [:]
 
     /// `store` is the library's single `BottleStore`; share it with every other owner
     /// of the same `paths` so the store's actor serialization spans them all.
@@ -165,15 +168,23 @@ public actor WineRuntime {
     /// Creates the prefix and marks the bottle initialized. The returned bottle is the
     /// persisted one: callers replace their copy with it instead of saving anything.
     public func initialize(_ bottle: Bottle) async throws -> BottleInitialization {
-        let deadline = Date().addingTimeInterval(180)
+        try await initialize(bottle, timeout: 180)
+    }
+
+    /// `timeout` bounds the whole setup; tests shorten it.
+    internal func initialize(_ bottle: Bottle, timeout: TimeInterval) async throws -> BottleInitialization {
+        let interruption = interruptions[bottle.id, default: 0]
+        let deadline = Date().addingTimeInterval(timeout)
         let result = try await execute(arguments: ["wineboot", "-u"], bottle: bottle,
-                                       directory: nil, timeout: 180, log: LogName("setup"))
+                                       directory: nil, timeout: timeout, log: LogName("setup"))
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0 else {
             await cleanup(bottle)
             throw MagicWineError.timedOut("Bottle setup timed out.", logURL: result.logURL)
         }
-        try await serverCommand("-w", in: bottle, timeout: remaining)
+        // Tracked like every setup wait: Stop ends it (reporting the setup log) and a
+        // timeout kills the prefix's Wine.
+        try await serverCommand("-w", in: bottle, timeout: remaining, tracked: true, stoppedLog: result.logURL)
         let prefix = try prefixURL(for: bottle)
         guard FileManager.default.fileExists(atPath: prefix.appendingPathComponent("system.reg").path),
               FileManager.default.fileExists(atPath: prefix.appendingPathComponent("user.reg").path) else {
@@ -181,7 +192,8 @@ public actor WineRuntime {
         }
         // `wineboot -u` stages the DLLs Wine's own services had mapped; Wine would only apply
         // them when the next session starts, after the first launch prepared its prefix DLLs.
-        try await completePendingBoot(try await store.current(bottle), prefix: prefix, deadline: deadline)
+        try await completePendingBoot(try await store.current(bottle), prefix: prefix, deadline: deadline,
+                                      interruption: interruption)
         return BottleInitialization(bottle: try await store.markInitialized(bottle), result: result)
     }
 
@@ -245,6 +257,7 @@ public actor WineRuntime {
     }
 
     private func interruptOperations(in bottle: Bottle) {
+        interruptions[bottle.id, default: 0] &+= 1
         for pending in pendingLaunches[bottle.id]?.values ?? Dictionary<UUID, Task<GraphicsOperationLease, Error>>().values {
             pending.cancel()
         }
@@ -531,6 +544,7 @@ public actor WineRuntime {
         }
         try paths.prepare()
         let handoffID = UUID()
+        let interruption = interruptions[bottle.id, default: 0]
         let launchTask: Task<GraphicsOperationLease, Error>? = Task {
             try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id, kind: .launch, exclusive: true)
         }
@@ -577,7 +591,7 @@ public actor WineRuntime {
         let launchGraphics = try savedProgram?.launchGraphics(in: current.graphics, providers: graphicsProviders)
             ?? .bottle(current.graphics)
         if current.isInitialized, (try? PrefixBoot.hasPendingRenames(prefix: prefix)) ?? true {
-            try await bootIfIdle(current, prefix: prefix)
+            try await bootIfIdle(current, prefix: prefix, interruption: interruption)
             try Task.checkCancellation()
             if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
         }
@@ -750,8 +764,9 @@ public actor WineRuntime {
     /// replaces prefix DLLs (Rosetta `wow64cpu.dll`, XInput bridge); otherwise the launch's
     /// new session would overwrite them while the launch still loads them as native. Only an
     /// idle bottle is booted: a live session never reboots, so a running program is never
-    /// waited on or stopped for this. The caller holds the exclusive launch lease.
-    private func bootIfIdle(_ bottle: Bottle, prefix: URL) async throws {
+    /// waited on or stopped for this. The caller holds the exclusive launch lease, so a Stop
+    /// requested meanwhile waits for it; `interruption` lets the boot notice that Stop.
+    private func bootIfIdle(_ bottle: Bottle, prefix: URL, interruption: UInt64) async throws {
         let lifetime: GraphicsOperationLease
         do {
             lifetime = try await GraphicsOperationLease.acquire(
@@ -767,7 +782,8 @@ public actor WineRuntime {
             return
         }
         do {
-            try await completePendingBoot(bottle, prefix: prefix, deadline: Date().addingTimeInterval(180))
+            try await completePendingBoot(bottle, prefix: prefix, deadline: Date().addingTimeInterval(180),
+                                          interruption: interruption)
         } catch let error where !Self.isInterruption(error) {
             throw MagicWineError.busy("Wine could not finish this bottle's pending prefix update before the launch. \(error.localizedDescription)",
                                       reason: .programsRunning, logURL: (error as? MagicWineError)?.logURL)
@@ -776,8 +792,11 @@ public actor WineRuntime {
 
     /// With no wineserver for the prefix, one `wineboot --init` session applies every
     /// pending move (the same boot Wine runs at the start of the next session) and waits
-    /// for that server to exit. An unreadable registry is left to Wine as before.
-    private func completePendingBoot(_ bottle: Bottle, prefix: URL, deadline: Date) async throws {
+    /// for that server to exit. An unreadable registry is left to Wine as before. A Stop
+    /// since the caller read `interruption` (Wine is being stopped) cancels the boot.
+    private func completePendingBoot(_ bottle: Bottle, prefix: URL, deadline: Date, interruption: UInt64) async throws {
+        try Task.checkCancellation()
+        if interruptions[bottle.id, default: 0] != interruption { throw try pendingStop(bottle) }
         guard (try? PrefixBoot.hasPendingRenames(prefix: prefix)) == true else { return }
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0 else {
