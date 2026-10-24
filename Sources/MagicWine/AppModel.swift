@@ -383,7 +383,7 @@ final class AppModel: ObservableObject {
     func launch(_ program: WindowsProgram, in bottle: Bottle) {
         let bottle = current(bottle)
         var state = activity(for: bottle)
-        guard bottle.isInitialized, state.title == nil, !state.isStopping else { return }
+        guard bottle.isInitialized, !state.blocksLaunch else { return }
         // A launcher may stay alive in the Windows tray. Its lifetime must not
         // prevent another launch from reopening it or starting a game.
         let launchID = UUID()
@@ -423,10 +423,6 @@ final class AppModel: ObservableObject {
         guard var state = activities[bottle.id] else { return }
         state.notices.removeAll { $0.id == id }
         activities[bottle.id] = state
-    }
-
-    func revealLog(_ url: URL) {
-        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private func recordNotice(_ notice: BottleNotice, for id: UUID) {
@@ -610,7 +606,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func reveal(_ log: URL) {
+    func revealLog(_ log: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([log])
     }
 

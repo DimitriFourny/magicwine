@@ -97,7 +97,7 @@ struct GraphicsSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 // HUD is launch-time only, so it stays available while programs run.
-                let hudUnavailable = model.isLoading || state.title != nil || state.isStopping || state.isChangingHUD ||
+                let hudUnavailable = model.isLoading || state.blocksLibraryEdit || state.isChangingHUD ||
                     !currentBottle.isInitialized || !currentBottle.graphics.usesCurrentComponent
                 HStack(spacing: 6) {
                     Text("Show Graphics HUD")

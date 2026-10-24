@@ -111,7 +111,7 @@ private struct LibraryView: View {
         ), presenting: model.notice) { notice in
             Button("OK", role: .cancel) { }
             if let log = notice.logURL {
-                Button("Reveal Log") { model.reveal(log) }
+                Button("Reveal Log") { model.revealLog(log) }
             }
         } message: { notice in
             Text(notice.message)
