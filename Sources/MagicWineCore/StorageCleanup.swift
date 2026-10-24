@@ -135,14 +135,14 @@ public enum StorageCleanup {
         let executables = bottles.map(\.runtime.executableURL) +
             [settings.customWinePath, settings.preferredRuntimePath].compactMap { $0.map { URL(fileURLWithPath: $0) } }
         let references = Set(executables.flatMap(forms))
-        let current = RuntimeInstallation.destination(paths: paths).lastPathComponent
+        let current = ManagedRuntimeLineage.currentDirectoryName
         for name in try entries(paths.runtimesDirectory) {
             if [".install-", cleanupPrefix].contains(where: name.hasPrefix) {
                 if let found = staging(["Runtimes"], name) { items.append(found) }
                 continue
             }
             let url = paths.runtimesDirectory.appendingPathComponent(name, isDirectory: true)
-            guard isManagedRuntimeName(name), try fileType(url) == S_IFDIR else { continue }
+            guard ManagedRuntimeLineage.isManagedDirectoryName(name), try fileType(url) == S_IFDIR else { continue }
             let directories = forms(url)
             guard !references.contains(where: { reference in directories.contains { reference.hasPrefix($0 + "/") } }) else { continue }
             let isCurrent = name == current
@@ -238,13 +238,6 @@ public enum StorageCleanup {
             }
         }
         return (reachable, undetermined)
-    }
-
-    private static func isManagedRuntimeName(_ name: String) -> Bool {
-        // wine-<version>-<12-hex archive digest>-<driver component>
-        let parts = name.split(separator: "-", omittingEmptySubsequences: false)
-        return parts.count >= 4 && parts[0] == "wine" && !parts[1].isEmpty && !parts.last!.isEmpty &&
-            parts.dropFirst(2).dropLast().contains { $0.count == 12 && $0.allSatisfy { $0.isHexDigit && !$0.isUppercase } }
     }
 
     private static func lockOwner(_ name: String) -> UUID? {

@@ -15,6 +15,8 @@ The current managed runtime combines Gcenx Wine `11.0_1` with bundled `winemac-w
 
 These identifiers describe this implementation, not a rolling latest-release lookup. The patch revision participates in the destination name so older pinned bottles can retain their old runtime.
 
+[`ManagedRuntimeLineage`](../Sources/MagicWineCore/ManagedRuntimeLineage.swift) is the one description of these runtimes, derived from `WineMetalBuildPins.componentID` and the archive pins: the driver family (`winemac-wine11.0-metal`), the current revision (`7`) and the historical revisions below it (`1`–`6`). A Wine executable belongs to the lineage only by its canonical location, with symbolic links resolved (an alias or a linked library reaches the runtime it points to): `Runtimes/wine-<version>-<12-hex digest>-<family>.<revision>/` plus the executable path above, with a plain decimal revision. The current revision alone has MSync; every member gets the Mono TLS correction; only historical revisions can be updated in place. A revision newer than the current one (installed by a newer MagicWine) is a member that is neither current nor upgradable. Any other location, including another archive digest, a malformed revision or a different file of a managed runtime, is treated as custom Wine. Storage cleanup uses the same naming for its current runtime and recognizes managed runtime directories of any archive.
+
 ```mermaid
 flowchart TD
     Consent["Explicit unsigned-runtime consent"] --> Stage["Private managed staging directory and install log"]
@@ -60,7 +62,7 @@ Only the current managed runtime is an automatic default. An explicitly saved ex
 
 Each bottle pins its own executable URL and version. Installing new Wine or changing the GUI preference does not rewrite existing bottles. On launch, a missing pinned Wine or adjacent `wineserver` is an error; `PATH` is not consulted as a replacement.
 
-Explicit upgrade is narrowly supported for old managed Metal revisions `.1` through `.6` with the current upstream archive identity. It is not a migration mechanism for arbitrary custom Wine. Upgrade requires an idle bottle, an installed and validated current managed runtime, graphics-backend compatibility, and successful version inspection before saving the new descriptor. It does not rerun `wineboot`, download Wine, or remove quarantine.
+Explicit upgrade is narrowly supported for the lineage's historical managed Metal revisions (currently `.1` through `.6`) with the current upstream archive identity. It is not a migration mechanism for arbitrary custom Wine. Upgrade requires an idle bottle, an installed and validated current managed runtime, graphics-backend compatibility, and successful version inspection before saving the new descriptor. It does not rerun `wineboot`, download Wine, or remove quarantine.
 
 | Entry point | Behavior |
 | --- | --- |

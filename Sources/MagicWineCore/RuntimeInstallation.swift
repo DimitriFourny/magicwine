@@ -93,8 +93,7 @@ struct RuntimeInstallation {
     }
 
     static func destination(paths: ApplicationPaths) -> URL {
-        let name = "wine-\(version)-\(archiveSHA256.prefix(12))-\(WineMetalDriver.componentID)"
-        return paths.runtimesDirectory.appendingPathComponent(name, isDirectory: true)
+        paths.runtimesDirectory.appendingPathComponent(ManagedRuntimeLineage.currentDirectoryName, isDirectory: true)
     }
 
     static let provenance = [

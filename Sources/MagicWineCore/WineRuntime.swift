@@ -34,20 +34,15 @@ public actor WineRuntime {
             .resolvingSymlinksInPath().standardizedFileURL
     }
 
+    private nonisolated var lineage: ManagedRuntimeLineage { ManagedRuntimeLineage(paths: paths) }
+
     /// Capability belongs to the pinned managed runtime, not its Wine version string.
     public nonisolated func supportsMSync(_ runtime: RuntimeDescriptor) -> Bool {
-        runtime.executableURL.resolvingSymlinksInPath().standardizedFileURL == managedExecutableURL
+        lineage.isCurrent(runtime.executableURL)
     }
 
     public nonisolated func canUpgradeRuntime(_ runtime: RuntimeDescriptor) -> Bool {
-        guard !supportsMSync(runtime) else { return false }
-        let root = paths.runtimesDirectory.resolvingSymlinksInPath().standardizedFileURL
-        let executable = runtime.executableURL.resolvingSymlinksInPath().standardizedFileURL
-        let stem = "wine-\(RuntimeInstallation.version)-\(RuntimeInstallation.archiveSHA256.prefix(12))-winemac-wine11.0-metal."
-        return (1...6).contains { revision in
-            executable == root.appendingPathComponent(stem + String(revision))
-                .appendingPathComponent(RuntimeInstallation.relativeExecutable)
-        }
+        lineage.isUpgradable(runtime.executableURL)
     }
 
     /// Only current managed Wine is an automatic default; external Wine requires an explicit preference.
@@ -804,13 +799,9 @@ public actor WineRuntime {
 
     /// Managed capabilities follow the canonical executable location, never a version label.
     internal nonisolated func runtimeFacts(for executable: URL) -> LaunchRuntimeFacts {
-        let managedMetalRoot = paths.runtimesDirectory.resolvingSymlinksInPath().standardizedFileURL.path +
-            "/wine-\(RuntimeInstallation.version)-\(RuntimeInstallation.archiveSHA256.prefix(12))-winemac-wine11.0-metal."
-        let selectedPath = executable.resolvingSymlinksInPath().standardizedFileURL.path
-        return LaunchRuntimeFacts(
-            managedMSync: supportsMSync(RuntimeDescriptor(executableURL: executable, version: "")),
-            managedMetal: selectedPath.hasPrefix(managedMetalRoot) &&
-                selectedPath.hasSuffix("/" + RuntimeInstallation.relativeExecutable),
+        LaunchRuntimeFacts(
+            managedMSync: lineage.isCurrent(executable),
+            managedMetal: lineage.isManagedMetal(executable),
             rosettaAVX: rosettaAVXAvailability(RuntimeDescriptor(executableURL: executable, version: "")) == .available)
     }
 
