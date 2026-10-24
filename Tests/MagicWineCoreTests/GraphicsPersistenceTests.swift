@@ -97,8 +97,8 @@ struct GraphicsPersistenceTests {
         #expect(throws: MagicWineError.self) {
             try GraphicsPrefix.validateInstalled(configuration: selection, prefix: fixture.prefix, bottleDirectory: fixture.directory)
         }
-        #expect(throws: (any Error).self) {
-            try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        await #expect(throws: (any Error).self) {
+            try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
                 try GraphicsPrefix.change(from: selection, to: .init(), componentRoot: nil,
                                           bottleDirectory: fixture.directory, previousMetadata: selectedMetadata,
                                           nextMetadata: standardMetadata) {
@@ -115,7 +115,7 @@ struct GraphicsPersistenceTests {
         #expect(try Data(contentsOf: fixture.dll(4)) == d3d9)
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: fixture.dll(5).path) == "outside-d3d9.dll")
 
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: selection, to: .init(), componentRoot: nil,
                                                          bottleDirectory: fixture.directory, previousMetadata: selectedMetadata,
                                                          nextMetadata: standardMetadata)
@@ -153,7 +153,7 @@ struct GraphicsPersistenceTests {
         let originals = try writeOriginals(fixture)
         let previous = try Data(contentsOf: fixture.metadata)
         let next = try nextMetadata(fixture, configuration: selection)
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
                                                          bottleDirectory: fixture.directory, previousMetadata: previous, nextMetadata: next)
             // Reproduce the persisted four-entry format, including the historical active backup.
@@ -233,7 +233,7 @@ struct GraphicsPersistenceTests {
         let previous = try Data(contentsOf: fixture.metadata)
         let next = try nextMetadata(fixture, configuration: selection)
         let journalURL = fixture.directory.appendingPathComponent("graphics/transaction/journal.json")
-        let validJournal = try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        let validJournal = try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
                                                          bottleDirectory: fixture.directory, previousMetadata: previous, nextMetadata: next)
             let data = try Data(contentsOf: journalURL)
@@ -483,8 +483,8 @@ struct GraphicsPersistenceTests {
         let originals = try writeOriginals(fixture)
         let old = try Data(contentsOf: fixture.metadata)
         let next = try nextMetadata(fixture, configuration: selection)
-        #expect(throws: (any Error).self) {
-            try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        await #expect(throws: (any Error).self) {
+            try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
                 try GraphicsPrefix.change(from: .init(), to: selection, componentRoot: fixture.component,
                                           bottleDirectory: fixture.directory, previousMetadata: old, nextMetadata: next) {
                     // An actual atomic-write failure, not a mocked successful metadata commit.
@@ -498,8 +498,8 @@ struct GraphicsPersistenceTests {
         let installedMetadata = try Data(contentsOf: fixture.metadata)
         let standardMetadata = try nextMetadata(fixture, configuration: .init())
         let managed = try sources.indices.map { try Data(contentsOf: fixture.dll($0)) }
-        #expect(throws: (any Error).self) {
-            try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        await #expect(throws: (any Error).self) {
+            try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
                 try GraphicsPrefix.change(from: selection, to: .init(), componentRoot: nil,
                                           bottleDirectory: fixture.directory, previousMetadata: installedMetadata,
                                           nextMetadata: standardMetadata) {
@@ -520,7 +520,7 @@ struct GraphicsPersistenceTests {
         let originals = try writeOriginals(fixture)
         let old = try Data(contentsOf: fixture.metadata)
         let next = try nextMetadata(fixture, configuration: selection)
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
                                                          bottleDirectory: fixture.directory, previousMetadata: old, nextMetadata: next)
             try FileManager.default.removeItem(at: transaction.appendingPathComponent("after/5"))
@@ -539,7 +539,7 @@ struct GraphicsPersistenceTests {
         let originals = try writeOriginals(fixture)
         let old = try Data(contentsOf: fixture.metadata)
         let next = try nextMetadata(fixture, configuration: selection)
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
                                                          bottleDirectory: fixture.directory, previousMetadata: old, nextMetadata: next)
             try GraphicsPrefix.apply(transaction: transaction, bottleDirectory: fixture.directory)
@@ -548,7 +548,7 @@ struct GraphicsPersistenceTests {
         let rollback = try await BottleStore(paths: fixture.paths).list()
         #expect(rollback.first?.graphics.backend == .standard)
         for index in originals.indices { #expect(try Data(contentsOf: fixture.dll(index)) == originals[index]) }
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
                                                          bottleDirectory: fixture.directory, previousMetadata: old, nextMetadata: next)
             try GraphicsPrefix.apply(transaction: transaction, bottleDirectory: fixture.directory)
@@ -560,7 +560,7 @@ struct GraphicsPersistenceTests {
         try GraphicsPrefix.validateInstalled(configuration: selection, prefix: fixture.prefix, bottleDirectory: fixture.directory)
         let selectedMetadata = try Data(contentsOf: fixture.metadata)
         let standard = try nextMetadata(fixture, configuration: .init())
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: selection, to: .init(), componentRoot: nil,
                                                          bottleDirectory: fixture.directory, previousMetadata: selectedMetadata,
                                                          nextMetadata: standard)
@@ -616,7 +616,7 @@ struct GraphicsPersistenceTests {
         let originals = try writeOriginals(fixture)
         let previous = try Data(contentsOf: fixture.metadata)
         let next = try nextMetadata(fixture, configuration: selection)
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
                                                          bottleDirectory: fixture.directory, previousMetadata: previous,
                                                          nextMetadata: next)
@@ -766,7 +766,7 @@ struct GraphicsPersistenceTests {
         let before = try allRendererPaths.map { try state(fixture.prefix.appendingPathComponent($0)) }
         let oldMetadata = try Data(contentsOf: fixture.metadata)
         let newMetadata = try nextMetadata(fixture, configuration: next)
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: previous, to: next, componentRoot: newRoot,
                                                          bottleDirectory: fixture.directory, previousMetadata: oldMetadata,
                                                          nextMetadata: newMetadata)
@@ -806,7 +806,7 @@ struct GraphicsPersistenceTests {
         let manifestURL = fixture.directory.appendingPathComponent("graphics/active/manifest.json")
         let historicalManifest = try Data(contentsOf: manifestURL)
         let managed = try (0..<4).map { try Data(contentsOf: fixture.dll($0)) }
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: selection, to: next, componentRoot: root,
                                                          bottleDirectory: fixture.directory, previousMetadata: previousMetadata,
                                                          nextMetadata: nextData)
@@ -958,7 +958,7 @@ struct GraphicsPersistenceTests {
         let previousData = try Data(contentsOf: fixture.metadata)
         let nextData = try nextMetadata(fixture, configuration: next)
         let journalURL = fixture.directory.appendingPathComponent("graphics/transaction/journal.json")
-        let valid = try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        let valid = try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: previous, to: next, componentRoot: newRoot,
                                                          bottleDirectory: fixture.directory, previousMetadata: previousData,
                                                          nextMetadata: nextData)
@@ -1004,7 +1004,7 @@ struct GraphicsPersistenceTests {
         let before = try allRendererPaths.map { try state(fixture.prefix.appendingPathComponent($0)) }
         let oldData = try Data(contentsOf: fixture.metadata)
         let nextData = try nextMetadata(fixture, configuration: next)
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: previous, to: next, componentRoot: newRoot,
                                                          bottleDirectory: fixture.directory, previousMetadata: oldData,
                                                          nextMetadata: nextData)
@@ -1050,7 +1050,7 @@ struct GraphicsPersistenceTests {
         let originals = try writeOriginals(fixture)
         let previous = try Data(contentsOf: fixture.metadata)
         let next = try nextMetadata(fixture, configuration: selection)
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: .init(), to: selection, componentRoot: fixture.component,
                                                          bottleDirectory: fixture.directory, previousMetadata: previous,
                                                          nextMetadata: next)

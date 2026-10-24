@@ -571,29 +571,28 @@ public actor WineRuntime {
         let lifetime = try await GraphicsOperationLease.acquire(paths: paths, bottleID: bottle.id,
                                                                 kind: .lifetime, exclusive: false)
         defer { lifetime.release() }
-        try GraphicsPrefix.withLock(bottleDirectory: prefix.deletingLastPathComponent()) {
-            try BottleDesktop.prepare(prefix: prefix)
-        }
-        var integrations: LaunchIntegrations?
+        var gamepad: Result<[String: String], any Error>?
         if current.isInitialized {
-            let gamepad: Result<[String: String], any Error>
             do { gamepad = .success(try await GamepadService.shared.prepare(paths: paths)) }
             catch { gamepad = .failure(error) }
             // Main-actor discovery suspends this actor. Honor Stop before changing
             // prefix DLLs or spawning a process after that handoff.
             try Task.checkCancellation()
             if launchTask?.isCancelled == true { throw try pendingStop(bottle) }
-            let directory = prefix.deletingLastPathComponent()
-            integrations = try Self.prepareIntegrations(gamepad: gamepad, rosetta: {
-                try GraphicsPrefix.withLock(bottleDirectory: directory) {
+        }
+        let bottleDirectory = prefix.deletingLastPathComponent()
+        // One bottle-lock transaction prepares the Desktop and, for an initialized
+        // bottle, the Rosetta repair and XInput bridge.
+        let integrations = try await GraphicsPrefix.withLock(bottleDirectory: bottleDirectory) {
+            try BottleDesktop.prepare(prefix: prefix)
+            return try gamepad.map { gamepad in
+                try Self.prepareIntegrations(gamepad: gamepad, rosetta: {
                     try RosettaCPUCompatibility.prepare(runtime: current.runtime, prefix: prefix,
-                                                         bottleDirectory: directory)
-                }
-            }, bridge: {
-                try GraphicsPrefix.withLock(bottleDirectory: directory) {
-                    try GamepadBridge.prepare(prefix: prefix, bottleDirectory: directory)
-                }
-            })
+                                                         bottleDirectory: bottleDirectory)
+                }, bridge: {
+                    try GamepadBridge.prepare(prefix: prefix, bottleDirectory: bottleDirectory)
+                })
+            }
         }
         let graphics = current.graphics.backend != .standard
             ? try prepareGraphicsLaunch(for: current, prefix: prefix) : nil
@@ -1057,7 +1056,7 @@ public actor WineRuntime {
                         throw MagicWineError.integrityFailure("\(item.name): not every file was extracted.")
                     }
                     try await withIdleBottleForDependencies(current, log: log) {
-                        try GraphicsPrefix.withLock(bottleDirectory: prefix.deletingLastPathComponent()) {
+                        try await GraphicsPrefix.withLock(bottleDirectory: prefix.deletingLastPathComponent()) {
                             try DependencyInstaller.place(sources, prefix: prefix)
                         }
                     }
@@ -1097,7 +1096,7 @@ public actor WineRuntime {
     }
 
     /// Runs `body` while holding exclusive launch and lifetime leases of an idle bottle.
-    private func withIdleBottleForDependencies(_ bottle: Bottle, log: ProcessLogFile, _ body: () throws -> Void) async throws {
+    private func withIdleBottleForDependencies(_ bottle: Bottle, log: ProcessLogFile, _ body: () async throws -> Void) async throws {
         if active[bottle.id]?.isEmpty != false, pendingLaunches[bottle.id]?.isEmpty != false {
             // Wine's server outlives the last program by a few seconds. Wait for it briefly
             // (untracked, so a timeout never kills anything) instead of refusing at once.
@@ -1113,7 +1112,7 @@ public actor WineRuntime {
             throw MagicWineError.busy("This bottle's Windows programs are running; dependencies install only while it is idle.", reason: .programsRunning)
         }
         defer { lifetime.release(); launch.release() }
-        try body()
+        try await body()
     }
 
     private static func note(_ text: String, in log: ProcessLogFile) {

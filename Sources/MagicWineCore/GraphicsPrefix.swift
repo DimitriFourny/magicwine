@@ -65,17 +65,28 @@ internal enum GraphicsPrefix {
         var resolvedPaths: [String] { paths ?? Array(dllPaths.prefix(before.count)) }
     }
 
-    static func withLock<T>(bottleDirectory: URL, _ body: () throws -> T) throws -> T {
+    /// Runs `body`, a synchronous critical section, while holding the bottle's exclusive
+    /// metadata and prefix lock. Waiting never parks an executor thread and honors
+    /// cancellation; a lock still held by another operation after `timeout` is `busy`.
+    /// `body` runs on the caller's actor.
+    static func withLock<T>(bottleDirectory: URL, timeout: Duration = .seconds(30),
+                            isolation: isolated (any Actor)? = #isolation,
+                            _ body: () throws -> T) async throws -> T {
         let locks = bottleDirectory.deletingLastPathComponent().appendingPathComponent(".graphics-locks", isDirectory: true)
         try ensureDirectory(locks, create: true)
         let url = locks.appendingPathComponent(bottleDirectory.lastPathComponent + ".lock")
         let descriptor = open(url.path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, mode_t(S_IRUSR | S_IWUSR))
         guard descriptor >= 0 else { throw fileError("Cannot open the bottle graphics lock") }
-        defer { close(descriptor) }
-        while flock(descriptor, LOCK_EX) != 0 {
-            if errno != EINTR { throw fileError("Cannot lock the bottle graphics transaction") }
+        // Unlock explicitly: a child forked by another thread can briefly share this
+        // descriptor until it execs, and close alone would keep the lock held meanwhile.
+        defer {
+            _ = flock(descriptor, LOCK_UN)
+            close(descriptor)
         }
-        defer { _ = flock(descriptor, LOCK_UN) }
+        guard try await AdvisoryFileLock.acquire(descriptor, exclusive: true, timeout: timeout) else {
+            throw MagicWineError.busy("Another MagicWine operation is still changing this bottle; nothing was changed by this one.",
+                                      reason: .operationInProgress)
+        }
         return try body()
     }
 

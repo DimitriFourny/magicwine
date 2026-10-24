@@ -207,7 +207,7 @@ struct GraphicsComponentUpdateTests {
         let component = try Self.writeComponent(Self.newID, paths: fixture.paths)
         let previousData = try Data(contentsOf: fixture.metadata)
         let nextData = try fixture.nextMetadata(next)
-        try GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
+        try await GraphicsPrefix.withLock(bottleDirectory: fixture.directory) {
             let transaction = try GraphicsPrefix.prepare(from: previous, to: next, componentRoot: component,
                                                          bottleDirectory: fixture.directory, previousMetadata: previousData,
                                                          nextMetadata: nextData, componentUpdate: true)
