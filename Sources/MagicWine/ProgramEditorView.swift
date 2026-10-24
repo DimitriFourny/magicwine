@@ -164,7 +164,7 @@ struct ProgramEditorView: View {
             case .success(let tokens) where tokens.isEmpty:
                 hint("Separate arguments with spaces. Quote an argument containing spaces with \"…\" or '…'. Backslashes are kept as typed.")
             case .success(let tokens):
-                hint("Passed as \(tokens.count) argument\(tokens.count == 1 ? "" : "s"): " +
+                hint(localized("Passed as \(tokens.count) arguments:") + " " +
                      tokens.map { "‹\($0)›" }.joined(separator: " "))
             case .failure(let failure):
                 problem(failure.localizedDescription)
@@ -287,7 +287,7 @@ struct ProgramEditorView: View {
                     if let message = choice.problem { problem(message) } else { hint(choice.detail) }
                 }
                 ForEach(choices.filter { !$0.isAvailable && $0.id != selectedID }) { choice in
-                    hint("\(Self.graphicsLabel(choice, bottle: bottle)) is not available: \(choice.problem ?? "")")
+                    hint(localized("\(Self.graphicsLabel(choice, bottle: bottle)) is not available: \(choice.problem ?? "")"))
                 }
                 hint("Applies when MagicWine starts this program, without changing the bottle’s files. Games that an already running launcher starts use the launcher’s graphics.")
             }
@@ -296,13 +296,13 @@ struct ProgramEditorView: View {
 
     private static func graphicsLabel(_ choice: ProgramGraphicsChoice, bottle: Bottle) -> String {
         switch choice.backend {
-        case nil: "Bottle default (\(bottle.graphics.backend.displayName))"
-        case .standard?: "Wine builtin (Standard)"
+        case nil: localized("Bottle default (\(bottle.graphics.backend.displayName))")
+        case .standard?: localized("Wine builtin (Standard)")
         case let backend?: backend.displayName
         }
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func section<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.headline)
             content()

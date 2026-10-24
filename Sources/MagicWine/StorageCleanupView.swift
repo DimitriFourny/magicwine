@@ -50,7 +50,7 @@ struct StorageCleanupView: View {
                 Text(error).foregroundStyle(WineTheme.danger).textSelection(.enabled)
             }
             HStack {
-                Button(storage.plan == nil ? "Check Storage" : "Check Again") { storage.refresh() }
+                Button(storage.plan == nil ? localized("Check Storage") : localized("Check Again")) { storage.refresh() }
                     .disabled(storage.activity != nil || model.library.isLoading)
                 Button("Remove…") { confirmation = storage.plan?.items }
                     .disabled(storage.blocksCleanup || storage.plan?.items.isEmpty != false)
@@ -86,7 +86,7 @@ struct StorageCleanupView: View {
 
     private func confirm(_ items: [StorageCleanupItem]) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Remove \(items.count) Unused Items?").font(.title2)
+            Text(localized("Remove \(items.count) Unused Items?")).font(.title2)
             Text("These are deleted permanently, not moved to Trash. MagicWine checks again that nothing uses them and refuses while any bottle is running or being set up. Bottles and their Windows files are not affected.")
                 .font(.callout).foregroundStyle(.secondary)
             ScrollView {

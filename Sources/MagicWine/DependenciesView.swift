@@ -87,7 +87,7 @@ struct DependenciesView: View {
 
     private func row(_ status: DependencyStatus) -> some View {
         let item = status.item
-        let architecture = item.architectures.isEmpty ? "All programs" : item.architectures.map(\.rawValue).joined(separator: " + ")
+        let architecture = item.architectures.isEmpty ? localized("All programs") : item.architectures.map(\.rawValue).joined(separator: " + ")
         return HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.name).font(.system(.callout, weight: .semibold))
@@ -106,12 +106,12 @@ struct DependenciesView: View {
             if status.isInstalled {
                 Label("Installed", systemImage: "checkmark.circle.fill")
                     .font(.callout).foregroundStyle(WineTheme.success)
-                    .help(status.record.map { "Installed by MagicWine on \($0.installedAt.formatted(date: .abbreviated, time: .shortened))" }
-                          ?? "Already present in this bottle")
+                    .help(status.record.map { localized("Installed by MagicWine on \($0.installedAt.formatted(date: .abbreviated, time: .shortened))") }
+                          ?? localized("Already present in this bottle"))
             } else {
-                Button(status.isPartial ? "Repair…" : "Install…") { confirmation = item }
+                Button(status.isPartial ? localized("Repair…") : localized("Install…")) { confirmation = item }
                     .disabled(installUnavailable)
-                    .help(installUnavailable ? "Wait for this bottle’s operation to finish and close its programs first" : "Shows the license before installing")
+                    .help(installUnavailable ? localized("Wait for this bottle’s operation to finish and close its programs first") : localized("Shows the license before installing"))
             }
         }
         .padding(.vertical, 10)

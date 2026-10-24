@@ -84,6 +84,11 @@ cp "$ROOT/LICENSE" "$STAGED_APP/Contents/Resources/LICENSE"
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGED_APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
 cp -R "$BIN_DIR/$RESOURCE_BUNDLE" "$STAGED_APP/Contents/Resources/$RESOURCE_BUNDLE"
 cp -R "$BIN_DIR/$UI_RESOURCE_BUNDLE" "$STAGED_APP/Contents/Resources/$UI_RESOURCE_BUNDLE"
+# SwiftUI resolves Text literals in the main bundle, so each language folder of the UI resource
+# bundle (Localizable.strings/.stringsdict) is also placed in Contents/Resources.
+while IFS= read -r -d '' lproj; do
+    cp -R "$lproj" "$STAGED_APP/Contents/Resources/"
+done < <(find "$BIN_DIR/$UI_RESOURCE_BUNDLE" -type d -name '*.lproj' -prune -print0)
 /usr/bin/plutil -lint "$PLIST"
 
 if [[ -n "$SIGN_IDENTITY" ]]; then

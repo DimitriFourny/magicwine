@@ -52,7 +52,7 @@ final class LibraryModel {
             bottles = try await store.list()
             for bottle in bottles { iconRevisions[bottle.id, default: 0] += 1 }
         } catch {
-            notices.report(error, title: "Could Not Load Bottles")
+            notices.report(error, title: localized("Could Not Load Bottles"))
         }
     }
 

@@ -37,7 +37,7 @@ final class BottleSettingsModel {
         guard bottle.graphics.backend != backend || bottle.graphics.showHUD != showHUD || componentSource != nil else { return }
 
         let setupID = beginGraphicsSetup(for: bottle.id)
-        activity.perform(in: bottle, title: "Stopping Windows processes…") { [self] in
+        activity.perform(in: bottle, title: localized("Stopping Windows processes…")) { [self] in
             let updated = try await wine.configureGraphics(
                 backend, in: bottle, showHUD: showHUD, acceptExperimental: backend != .standard,
                 componentSource: componentSource
@@ -70,7 +70,7 @@ final class BottleSettingsModel {
               bottle.isInitialized, bottle.graphics.hasComponentUpdate else { return }
         guard !activity.activity(for: bottle).blocksPrefixMutation else { return }
         let setupID = beginGraphicsSetup(for: bottle.id)
-        activity.perform(in: bottle, title: "Stopping Windows processes…") { [self] in
+        activity.perform(in: bottle, title: localized("Stopping Windows processes…")) { [self] in
             let updated = try await wine.updateGraphicsComponent(in: bottle, acceptExperimental: true) { [weak self] progress in
                 DispatchQueue.main.async { [weak self] in
                     self?.updateGraphicsProgress(progress, for: bottle.id, setupID: setupID)
@@ -98,13 +98,13 @@ final class BottleSettingsModel {
             state.graphicsProgress = progress
             switch progress {
             case .stopping:
-                state.title = "Stopping Windows processes…"
+                state.title = localized("Stopping Windows processes…")
             case .verifying:
-                state.title = "Verifying graphics component…"
+                state.title = localized("Verifying graphics component…")
             case .installing:
-                state.title = "Installing graphics in this bottle…"
+                state.title = localized("Installing graphics in this bottle…")
             case .restoring:
-                state.title = "Restoring Standard graphics…"
+                state.title = localized("Restoring Standard graphics…")
             }
         }
     }
@@ -138,7 +138,7 @@ final class BottleSettingsModel {
         guard !library.isLoading, let bottle = library.bottles.first(where: { $0.id == bottle.id }),
               runtimes.supportsMSync(bottle) else { return }
         guard !activity.activity(for: bottle).blocksPrefixMutation, bottle.msyncEnabled != enabled else { return }
-        activity.perform(in: bottle, title: "Changing synchronization…") {
+        activity.perform(in: bottle, title: localized("Changing synchronization…")) {
             let updated = try await self.wine.configureSynchronization(msyncEnabled: enabled, in: bottle)
             self.library.replace(updated)
             return nil
@@ -152,7 +152,7 @@ final class BottleSettingsModel {
         let dpi: UInt32 = enabled ? 192 : 96
         guard bottle.display.retinaEnabled != enabled || bottle.display.dpi != dpi else { return }
 
-        activity.perform(in: bottle, title: "Changing display settings…") {
+        activity.perform(in: bottle, title: localized("Changing display settings…")) {
             let updated = try await self.wine.configureDisplay(retinaEnabled: enabled, in: bottle)
             self.library.replace(updated)
             return nil

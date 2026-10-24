@@ -41,12 +41,12 @@ final class RuntimeModel {
         do {
             settings = try await store.settings()
         } catch {
-            notices.report(error, title: "Could Not Read Settings")
+            notices.report(error, title: localized("Could Not Read Settings"))
         }
     }
 
     func discover() async {
-        activity = "Finding Wine…"
+        activity = localized("Finding Wine…")
         var found = await wine.discover()
         if let path = settings.customWinePath {
             do {
@@ -54,7 +54,7 @@ final class RuntimeModel {
                 let custom = try await wine.inspect(executableURL: URL(fileURLWithPath: path), reusingCachedResult: true)
                 if !found.contains(where: { $0.id == custom.id }) { found.append(custom) }
             } catch {
-                self.error = "The saved Wine executable could not be opened. \(error.localizedDescription)"
+                self.error = localized("The saved Wine executable could not be opened. \(error.localizedDescription)")
             }
         }
         runtimes = found
@@ -65,7 +65,7 @@ final class RuntimeModel {
                 try await store.saveSettings(updated)
                 settings = updated
             } catch {
-                self.error = "Could not save the Wine preference. \(error.localizedDescription)"
+                self.error = localized("Could not save the Wine preference. \(error.localizedDescription)")
             }
         }
         activity = nil
@@ -74,7 +74,7 @@ final class RuntimeModel {
     func refresh() {
         guard activity == nil else { return }
         error = nil
-        activity = "Finding Wine…"
+        activity = localized("Finding Wine…")
         Task { await discover() }
     }
 
@@ -97,7 +97,7 @@ final class RuntimeModel {
                   canUpgradeRuntime(current) else { return }
             guard !bottleActivity.activity(for: current).blocksPrefixMutation else { return }
             bottleActivity.update(current.id) { state in
-                state.title = "Updating Wine…"
+                state.title = localized("Updating Wine…")
                 state.error = nil
             }
             bottle = current
@@ -126,7 +126,7 @@ final class RuntimeModel {
                 }
                 add(installed)
                 if let bottle {
-                    activity = "Switching bottle to updated Wine…"
+                    activity = localized("Switching bottle to updated Wine…")
                     let updated = try await wine.upgradeRuntime(in: bottle)
                     library.replace(updated)
                 } else {
@@ -145,24 +145,24 @@ final class RuntimeModel {
         installationProgress = progress
         switch progress {
         case .downloading:
-            activity = "Downloading Wine…"
+            activity = localized("Downloading Wine…")
         case .verifying:
-            activity = "Verifying Wine download…"
+            activity = localized("Verifying Wine download…")
         case .extracting:
-            activity = "Extracting Wine…"
+            activity = localized("Extracting Wine…")
         case .preparing:
-            activity = "Preparing Wine…"
+            activity = localized("Preparing Wine…")
         case .reusing:
-            activity = "Using installed Wine…"
+            activity = localized("Using installed Wine…")
         case .checkingRuntime:
-            activity = "Checking Wine…"
+            activity = localized("Checking Wine…")
         }
     }
 
     /// Inspects the executable the user chose; on success it becomes the custom and preferred Wine.
     func inspectCustomWine(_ url: URL) {
         guard activity == nil else { return }
-        activity = "Checking Wine…"
+        activity = localized("Checking Wine…")
         error = nil
         Task {
             do {
@@ -182,7 +182,7 @@ final class RuntimeModel {
 
     func prefer(id: String) {
         guard activity == nil, let runtime = runtimes.first(where: { $0.id == id }) else { return }
-        activity = "Saving Wine preference…"
+        activity = localized("Saving Wine preference…")
         error = nil
         Task {
             do {

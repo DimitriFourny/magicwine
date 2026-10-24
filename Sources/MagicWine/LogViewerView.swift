@@ -81,7 +81,7 @@ struct LogViewerView: View {
                 .fill(log.isActive ? WineTheme.success : WineTheme.muted)
                 .frame(width: 7, height: 7)
                 .accessibilityHidden(true)
-            Text(log.isActive ? "Running: following new output" : "Ended")
+            Text(log.isActive ? localized("Running: following new output") : localized("Ended"))
             if log.omittedEarlier {
                 Text("· Showing the last \(ByteCountFormatter.string(fromByteCount: Int64(LogViewerModel.displayLimit), countStyle: .binary)); earlier output is in the file")
             }
@@ -105,19 +105,19 @@ struct LogViewerView: View {
 extension ProcessLogLine.Level {
     var title: String {
         switch self {
-        case .error: "Errors"
-        case .warning: "Warnings"
-        case .fixme: "Fixme"
-        case .other: "Other"
+        case .error: localized("Errors")
+        case .warning: localized("Warnings")
+        case .fixme: localized("Fixme")
+        case .other: localized("Other")
         }
     }
 
     var help: String {
         switch self {
-        case .error: "Wine err: lines"
-        case .warning: "Wine warn: lines"
-        case .fixme: "Wine fixme: notes about unimplemented functions"
-        case .other: "Program output and all other lines"
+        case .error: localized("Wine err: lines")
+        case .warning: localized("Wine warn: lines")
+        case .fixme: localized("Wine fixme: notes about unimplemented functions")
+        case .other: localized("Program output and all other lines")
         }
     }
 

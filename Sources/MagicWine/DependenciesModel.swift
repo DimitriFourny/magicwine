@@ -39,7 +39,7 @@ final class DependenciesModel {
         guard !library.isLoading, bottle.isInitialized, !ids.isEmpty,
               !activity.activity(for: bottle).blocksPrefixMutation else { return }
         errors[bottle.id] = nil
-        activity.perform(in: bottle, title: "Preparing Windows dependencies…", canStop: true) { [self] in
+        activity.perform(in: bottle, title: localized("Preparing Windows dependencies…"), canStop: true) { [self] in
             defer {
                 progress[bottle.id] = nil
                 refresh(in: bottle)
@@ -67,10 +67,10 @@ final class DependenciesModel {
         activity.update(id, ifPresent: true) { state in
             switch progress {
             case .started(let log): state.logURL = log
-            case .downloading(let item, _): state.title = "Downloading \(name(item))…"
-            case .verifying(let item): state.title = "Verifying \(name(item))…"
-            case .installing(let item): state.title = "Installing \(name(item))…"
-            case .checking(let item): state.title = "Checking \(name(item))…"
+            case .downloading(let item, _): state.title = localized("Downloading \(name(item))…")
+            case .verifying(let item): state.title = localized("Verifying \(name(item))…")
+            case .installing(let item): state.title = localized("Installing \(name(item))…")
+            case .checking(let item): state.title = localized("Checking \(name(item))…")
             }
         }
         self.progress[id] = progress

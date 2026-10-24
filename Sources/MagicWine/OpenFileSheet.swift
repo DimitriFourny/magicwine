@@ -35,9 +35,9 @@ struct OpenFileSheet: View {
         let state = model.activity.activity(for: bottle)
         switch action {
         case .install where state.blocksPrefixMutation:
-            return "\(bottle.name) is busy or has programs running. Installers need it idle; wait or stop its programs."
+            return localized("\(bottle.name) is busy or has programs running. Installers need it idle; wait or stop its programs.")
         case .addProgram where state.blocksLibraryEdit:
-            return "\(bottle.name) is busy. Wait for its operation to finish."
+            return localized("\(bottle.name) is busy. Wait for its operation to finish.")
         default:
             return nil
         }
@@ -45,8 +45,8 @@ struct OpenFileSheet: View {
 
     private var confirmTitle: String {
         switch action {
-        case .install: "Run Installer"
-        case .addProgram: "Add Program"
+        case .install: localized("Run Installer")
+        case .addProgram: localized("Add Program")
         }
     }
 
@@ -104,9 +104,9 @@ struct OpenFileSheet: View {
     private var actionDescription: String {
         switch action {
         case .install:
-            "Runs the installer in the bottle. It may change the bottle’s Windows files, and MagicWine then looks for the shortcuts it created."
+            localized("Runs the installer in the bottle. It may change the bottle’s Windows files, and MagicWine then looks for the shortcuts it created.")
         case .addProgram:
-            "Adds the file to the bottle’s programs where it is, without moving or copying it. Removing it later does not delete the file."
+            localized("Adds the file to the bottle’s programs where it is, without moving or copying it. Removing it later does not delete the file.")
         }
     }
 }

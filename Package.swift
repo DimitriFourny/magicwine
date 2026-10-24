@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "MagicWine",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "MagicWineCore", targets: ["MagicWineCore"]),
@@ -43,7 +44,10 @@ let package = Package(
             .copy("Resources/wow64cpu-wine11.0-magicwine.1-source.tar.gz"),
             .copy("Resources/LICENSE-WINE-WOW64CPU.txt")
         ]),
-        .executableTarget(name: "MagicWine", dependencies: ["MagicWineCore"], resources: [.process("Assets")]),
+        .executableTarget(name: "MagicWine", dependencies: ["MagicWineCore"], resources: [
+            .process("Assets"),
+            .process("Localization")
+        ]),
         .executableTarget(name: "MagicWineCLI", dependencies: ["MagicWineCore"]),
         .testTarget(name: "MagicWineCoreTests", dependencies: ["MagicWineCore"])
     ]

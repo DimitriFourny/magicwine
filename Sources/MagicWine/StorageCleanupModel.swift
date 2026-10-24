@@ -36,7 +36,7 @@ final class StorageCleanupModel {
     func refresh(includeCurrent: Bool? = nil) {
         guard activity == nil else { return }
         if let includeCurrent { includesCurrent = includeCurrent }
-        activity = "Measuring unused files…"
+        activity = localized("Measuring unused files…")
         error = nil
         Task {
             await loadPlan()
@@ -47,9 +47,9 @@ final class StorageCleanupModel {
     /// Call only after the view's confirmation listing exactly these items.
     func remove(_ items: [StorageCleanupItem]) {
         guard !blocksCleanup, !items.isEmpty else { return }
-        activity = "Removing unused files…"
+        activity = localized("Removing unused files…")
         // Keeps Wine installation and bottle creation from racing the removal.
-        runtimes.reserve("Removing unused files…")
+        runtimes.reserve(localized("Removing unused files…"))
         error = nil
         Task {
             var removedRuntime = false
@@ -57,8 +57,9 @@ final class StorageCleanupModel {
                 let result = try await StorageCleanup.apply(items, store: store)
                 removedRuntime = result.removed.contains { $0.category == .runtime }
                 let size = ByteCountFormatter.string(fromByteCount: result.reclaimedSize, countStyle: .file)
-                notices.post(AppNotice(title: "Unused Files Removed", message: "Removed \(result.removed.count) of \(items.count) items (\(size))."
-                    + (result.skipped.isEmpty ? "" : " \(result.skipped.count) items were kept because they are in use again or already gone.")))
+                let removed = localized("Removed \(result.removed.count) of \(items.count) items (\(size)).")
+                let kept = result.skipped.isEmpty ? "" : " " + localized("\(result.skipped.count) items were kept because they are in use again or already gone.")
+                notices.post(AppNotice(title: localized("Unused Files Removed"), message: removed + kept))
             } catch {
                 self.error = error.localizedDescription
             }

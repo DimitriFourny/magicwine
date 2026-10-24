@@ -4,6 +4,8 @@
 <dict>
     <key>CFBundleName</key><string>MagicWine</string>
     <key>CFBundleDisplayName</key><string>MagicWine</string>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleLocalizations</key><array><string>en</string></array>
     <key>CFBundleIdentifier</key><string>org.magicwine.MagicWine</string>
     <key>CFBundleExecutable</key><string>MagicWine</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>

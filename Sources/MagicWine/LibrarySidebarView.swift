@@ -119,13 +119,13 @@ struct LibrarySidebarView: View {
                 Text(bottle.name).font(WineTheme.Font.body)
                     .lineLimit(1)
                 if activity.isStopping {
-                    rowSubtitle("Stopping Windows processes…")
+                    rowSubtitle(localized("Stopping Windows processes…"))
                 } else if let title = activity.title {
                     rowSubtitle(title)
                 } else if activity.hasRunningPrograms {
-                    rowSubtitle("Running: " + activity.runningProgramNames.joined(separator: ", "))
+                    rowSubtitle(localized("Running: \(activity.runningProgramNames.joined(separator: ", "))"))
                 } else if !bottle.isInitialized {
-                    rowSubtitle("Setup needed")
+                    rowSubtitle(localized("Setup needed"))
                 }
             }
         }
@@ -146,7 +146,7 @@ struct LibrarySidebarView: View {
             .lineLimit(1)
     }
 
-    private func destinationRow(_ title: String, icon: String, target: LibraryDestination,
+    private func destinationRow(_ title: LocalizedStringKey, icon: String, target: LibraryDestination,
                                 active: Bool = false) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon).font(WineTheme.Font.iconRow)
@@ -159,7 +159,7 @@ struct LibrarySidebarView: View {
             }
         }
         .padding(.vertical, 3)
-        .accessibilityValue(active ? "Download activity in progress" : "")
+        .accessibilityValue(active ? localized("Download activity in progress") : "")
         .tag(SidebarItem.destination(target))
     }
 

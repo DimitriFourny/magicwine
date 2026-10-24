@@ -127,7 +127,7 @@ struct GamepadView: View {
                     Circle()
                         .fill(service.devices.isEmpty ? WineTheme.muted : WineTheme.success)
                         .frame(width: 8, height: 8)
-                    Text("\(service.devices.count) controller\(service.devices.count == 1 ? "" : "s") connected").font(WineTheme.Font.callout.weight(.medium))
+                    Text(localized("\(service.devices.count) controllers connected")).font(WineTheme.Font.callout.weight(.medium))
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(service.devices.isEmpty ? WineTheme.elevated : WineTheme.success.opacity(0.13), in: Capsule())
@@ -264,7 +264,7 @@ struct GamepadView: View {
                             .frame(width: 65, alignment: .leading)
                         Picker(control.displayName, selection: mappingBinding(control)) {
                             ForEach(GamepadControl.allCases) { destination in
-                                Text(destination == .none ? "Unmapped" : "XInput \(destination.displayName)")
+                                Text(destination == .none ? localized("Unmapped") : localized("XInput \(destination.displayName)"))
                                     .tag(destination)
                             }
                         }
@@ -287,9 +287,9 @@ struct GamepadView: View {
 
     private var deviceInformation: some View {
         WineCard(title: "Device Information", icon: "info.circle") {
-            informationRow("Controller", value: device?.name ?? "Not connected")
+            informationRow("Controller", value: device?.name ?? localized("Not connected"))
             Divider().overlay(WineTheme.border)
-            informationRow("Connection", value: device.map { $0.isBluetooth ? "Bluetooth" : "Not reported" } ?? "—") {
+            informationRow("Connection", value: device.map { $0.isBluetooth ? localized("Bluetooth") : localized("Not reported") } ?? "—") {
                 if device?.isBluetooth == true {
                     BluetoothSymbol()
                         .stroke(.blue, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
@@ -297,13 +297,13 @@ struct GamepadView: View {
                 }
             }
             informationRow("Player", value: device.map {
-                $0.playerIndex.map { "\($0 + 1) of 4" } ?? "No XInput slot"
+                $0.playerIndex.map { localized("\($0 + 1) of 4") } ?? localized("No XInput slot")
             } ?? "—")
             informationRow("Battery", value: batteryDescription) {
                 Image(systemName: batterySymbol)
                     .foregroundStyle(device?.batteryLevel.map { $0 <= 0.2 ? WineTheme.danger : WineTheme.success } ?? WineTheme.muted)
             }
-            informationRow("Haptics", value: device.map { $0.supportsHaptics ? "Supported" : "Unavailable" } ?? "—")
+            informationRow("Haptics", value: device.map { $0.supportsHaptics ? localized("Supported") : localized("Unavailable") } ?? "—")
             informationRow("Output", value: "XInput")
             Divider().overlay(WineTheme.border)
             Text("The saved profile applies to all bridged controllers. Up to four controllers can provide XInput to Windows games. Keep MagicWine running while you play.")
@@ -318,8 +318,9 @@ struct GamepadView: View {
 
     private var batteryDescription: String {
         guard let device else { return "—" }
-        guard let battery = device.batteryLevel else { return "Not reported" }
-        return "\(Int((battery * 100).rounded()))%\(device.batteryCharging ? " · Charging" : "")"
+        guard let battery = device.batteryLevel else { return localized("Not reported") }
+        let percent = "\(Int((battery * 100).rounded()))%"
+        return device.batteryCharging ? localized("\(percent) · Charging") : percent
     }
 
     private var batterySymbol: String {
@@ -334,7 +335,7 @@ struct GamepadView: View {
         }
     }
 
-    private func informationRow(_ title: String, value: String,
+    private func informationRow(_ title: LocalizedStringKey, value: String,
                                 @ViewBuilder icon: () -> some View = { EmptyView() }) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title).foregroundStyle(WineTheme.muted)
@@ -379,7 +380,7 @@ struct GamepadView: View {
         .disabled(!loaded)
     }
 
-    private func calibrationSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+    private func calibrationSlider(_ title: LocalizedStringKey, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
@@ -406,7 +407,7 @@ struct GamepadView: View {
     }
 
     private var profiles: some View {
-        WineCard(title: "Profiles", icon: "square.3.layers.3d", trailing: dirty ? "Unsaved changes" : loaded ? "Saved" : "Not loaded") {
+        WineCard(title: "Profiles", icon: "square.3.layers.3d", trailing: dirty ? localized("Unsaved changes") : loaded ? localized("Saved") : localized("Not loaded")) {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
                     transferActions
@@ -487,7 +488,7 @@ struct GamepadView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(item.name) profile")
-        .accessibilityValue(selected ? "Selected" : "Not selected")
+        .accessibilityValue(selected ? localized("Selected") : localized("Not selected"))
     }
 
     private func profileBinding<Value>(_ keyPath: WritableKeyPath<GamepadProfile, Value>) -> Binding<Value> {
@@ -637,7 +638,7 @@ private struct GamepadLiveInputCard: View {
 
     var body: some View {
         let input = device.map { profile.applying(to: GamepadService.shared.inputs[$0.id] ?? GamepadInput()) } ?? GamepadInput()
-        WineCard(title: "Live Input Test", icon: "waveform.path.ecg", trailing: device == nil ? "Disconnected" : "Draft preview") {
+        WineCard(title: "Live Input Test", icon: "waveform.path.ecg", trailing: device == nil ? localized("Disconnected") : localized("Draft preview")) {
             if device == nil {
                 Text("No live input. Connect a controller to test your draft mappings and calibration.")
                     .font(.callout).foregroundStyle(WineTheme.muted)
@@ -664,10 +665,10 @@ private struct GamepadLiveInputCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(control.displayName)
-                    .accessibilityValue(device == nil ? "Disconnected" : active ? "Pressed" : "Released")
+                    .accessibilityValue(device == nil ? localized("Disconnected") : active ? localized("Pressed") : localized("Released"))
                 }
             }
-            Text("Mapped output · \(profile.name)\(dirty ? " · Unsaved" : "")")
+            Text(dirty ? localized("Mapped output · \(profile.name) · Unsaved") : localized("Mapped output · \(profile.name)"))
                 .font(.caption).foregroundStyle(WineTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -687,6 +688,6 @@ private struct GamepadLiveInputCard: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title) trigger")
-        .accessibilityValue(device == nil ? "Disconnected" : "\(Int((value * 100).rounded())) percent")
+        .accessibilityValue(device == nil ? localized("Disconnected") : localized("\(Int((value * 100).rounded())) percent"))
     }
 }

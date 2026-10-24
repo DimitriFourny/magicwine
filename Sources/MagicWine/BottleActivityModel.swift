@@ -143,7 +143,7 @@ final class BottleActivityModel {
 
     /// `completion` runs after setup ended, with whether it succeeded.
     func initialize(_ bottle: Bottle, completion: (@MainActor (_ succeeded: Bool) -> Void)? = nil) {
-        perform(in: bottle, title: "Setting up Windows environment…", canStop: true, operation: {
+        perform(in: bottle, title: localized("Setting up Windows environment…"), canStop: true, operation: {
             let initialization = try await self.wine.initialize(bottle)
             self.library.replace(initialization.bottle)
             return initialization.result
@@ -153,14 +153,14 @@ final class BottleActivityModel {
     func install(_ url: URL, in bottle: Bottle) {
         let bottle = library.current(bottle)
         guard bottle.isInitialized else {
-            notices.post(AppNotice(title: "Set Up This Bottle First", message: "Use Retry Setup for \(bottle.name), then open the installer again."))
+            notices.post(AppNotice(title: localized("Set Up This Bottle First"), message: localized("Use Retry Setup for \(bottle.name), then open the installer again.")))
             return
         }
         guard !activity(for: bottle).blocksPrefixMutation else {
-            notices.post(AppNotice(title: "Bottle Is Busy", message: "Wait for the operation in \(bottle.name) to finish, or stop the bottle, before opening another installer."))
+            notices.post(AppNotice(title: localized("Bottle Is Busy"), message: localized("Wait for the operation in \(bottle.name) to finish, or stop the bottle, before opening another installer.")))
             return
         }
-        perform(in: bottle, title: "Installing \(url.lastPathComponent)…", canStop: true) {
+        perform(in: bottle, title: localized("Installing \(url.lastPathComponent)…"), canStop: true) {
             let result = try await self.wine.install(url, in: bottle)
             self.recordLog(result.logURL, for: bottle.id)
             let updated = try await self.store.discoverPrograms(in: self.library.current(bottle))
@@ -178,14 +178,14 @@ final class BottleActivityModel {
     func addPrograms(_ urls: [URL], to bottle: Bottle) {
         let bottle = library.current(bottle)
         guard bottle.isInitialized else {
-            notices.post(AppNotice(title: "Set Up This Bottle First", message: "Use Retry Setup for \(bottle.name), then add the program again."))
+            notices.post(AppNotice(title: localized("Set Up This Bottle First"), message: localized("Use Retry Setup for \(bottle.name), then add the program again.")))
             return
         }
         guard !activity(for: bottle).blocksLibraryEdit else {
-            notices.post(AppNotice(title: "Bottle Is Busy", message: "Wait for the operation in \(bottle.name) to finish, or stop the bottle, before adding programs."))
+            notices.post(AppNotice(title: localized("Bottle Is Busy"), message: localized("Wait for the operation in \(bottle.name) to finish, or stop the bottle, before adding programs.")))
             return
         }
-        perform(in: bottle, title: urls.count == 1 ? "Adding program…" : "Adding programs…", allowsRunningPrograms: true) {
+        perform(in: bottle, title: urls.count == 1 ? localized("Adding program…") : localized("Adding programs…"), allowsRunningPrograms: true) {
             for url in urls {
                 let updated = try await self.store.registerProgram(in: self.library.current(bottle), executableURL: url)
                 self.library.replace(updated)
@@ -195,7 +195,7 @@ final class BottleActivityModel {
     }
 
     func refreshPrograms(in bottle: Bottle) {
-        perform(in: bottle, title: "Finding Windows shortcuts…", allowsRunningPrograms: true) {
+        perform(in: bottle, title: localized("Finding Windows shortcuts…"), allowsRunningPrograms: true) {
             let updated = try await self.store.discoverPrograms(in: self.library.current(bottle))
             self.library.replace(updated)
             return nil
@@ -203,7 +203,7 @@ final class BottleActivityModel {
     }
 
     func removeProgram(_ program: WindowsProgram, in bottle: Bottle) {
-        perform(in: bottle, title: "Removing shortcut…", allowsRunningPrograms: true) {
+        perform(in: bottle, title: localized("Removing shortcut…"), allowsRunningPrograms: true) {
             let updated = try await self.store.removeProgram(id: program.id, in: self.library.current(bottle))
             self.library.replace(updated)
             return nil
@@ -211,7 +211,7 @@ final class BottleActivityModel {
     }
 
     func configure(_ bottle: Bottle) {
-        perform(in: bottle, title: "Wine configuration is open…", canStop: true) {
+        perform(in: bottle, title: localized("Wine configuration is open…"), canStop: true) {
             try await self.wine.configure(bottle)
         }
     }
@@ -236,7 +236,7 @@ final class BottleActivityModel {
                         // Steam or a game can run for hours; warn as soon as it starts.
                         guard !start.warnings.isEmpty else { return }
                         self.recordNotice(BottleNotice(
-                            title: "\(program.name) started with reduced compatibility",
+                            title: localized("\(program.name) started with reduced compatibility"),
                             message: start.warnings.joined(separator: "\n\n"), logURL: start.logURL), for: bottle.id)
                     }
                 }
@@ -244,15 +244,15 @@ final class BottleActivityModel {
                 if diagnostics {
                     let summary = result.exitCode == 0 ? "" : "\n\n" + (ProcessLogSummary.summary(at: result.logURL) ?? "")
                     recordNotice(BottleNotice(
-                        title: "Diagnostic launch of \(program.name) ended (exit code \(result.exitCode))",
-                        message: "The log lists DLL load decisions (+loaddll), exceptions (+seh), and process starts (+process) in addition to Wine errors. Review it for personal paths before sharing." + summary,
+                        title: localized("Diagnostic launch of \(program.name) ended (exit code \(Int(result.exitCode)))"),
+                        message: localized("The log lists DLL load decisions (+loaddll), exceptions (+seh), and process starts (+process) in addition to Wine errors. Review it for personal paths before sharing.") + summary,
                         logURL: result.logURL), for: bottle.id)
                     logToShow = result.logURL
                 } else if result.exitCode != 0 {
                     // A normal quit with a nonzero code is status, not an operation failure.
                     let summary = ProcessLogSummary.summary(at: result.logURL)
-                        ?? "Wine reported no errors at the end of the log. Many games and launchers use nonzero codes for normal exits."
-                    recordNotice(BottleNotice(title: "\(program.name) exited with code \(result.exitCode)",
+                        ?? localized("Wine reported no errors at the end of the log. Many games and launchers use nonzero codes for normal exits.")
+                    recordNotice(BottleNotice(title: localized("\(program.name) exited with code \(Int(result.exitCode))"),
                                               message: summary, logURL: result.logURL), for: bottle.id)
                 }
             } catch {
@@ -322,7 +322,7 @@ final class BottleActivityModel {
     }
 
     func trash(_ bottle: Bottle) {
-        perform(in: bottle, title: "Stopping and moving bottle to Trash…") {
+        perform(in: bottle, title: localized("Stopping and moving bottle to Trash…")) {
             _ = try await self.wine.stop(bottle)
             try await self.store.delete(bottle)
             self.library.remove(bottle.id)

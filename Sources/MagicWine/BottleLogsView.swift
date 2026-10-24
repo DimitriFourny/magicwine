@@ -13,13 +13,13 @@ struct BottleLogsView: View {
     @State private var selected: URL?
 
     private var bottleName: String {
-        model.library.bottles.first { $0.id == bottleID }?.name ?? "Deleted bottle"
+        model.library.bottles.first { $0.id == bottleID }?.name ?? localized("Deleted bottle")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Text("\(entries.count) logs, newest first")
+                Text(localized("\(entries.count) logs, newest first"))
                     .font(.callout)
                     .foregroundStyle(WineTheme.muted)
                 Spacer(minLength: 8)

@@ -100,7 +100,7 @@ struct BottleCommands: View {
             .keyboardShortcut("r")
             .disabled(!initialized || state.blocksLibraryEdit)
         Divider()
-        Button(program.map { "Launch \($0.name)" } ?? "Launch Program") {
+        Button(program.map { localized("Launch \($0.name)") } ?? localized("Launch Program")) {
             if let bottle, let program { model.activity.launch(program, in: bottle) }
         }
         .keyboardShortcut(.return, modifiers: .command)

@@ -32,7 +32,7 @@ struct GamepadDiagram: View {
 
     private var pressedDescription: String {
         let names = GamepadControl.inputs.filter { input.value(for: $0) > 0.05 }.map(\.displayName)
-        return names.isEmpty ? "No buttons pressed" : "Active: " + names.joined(separator: ", ")
+        return names.isEmpty ? localized("No buttons pressed") : localized("Active: \(names.joined(separator: ", "))")
     }
 
     private func drawController(in context: GraphicsContext) {

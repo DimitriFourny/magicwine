@@ -205,7 +205,7 @@ struct BottleDashboardView: View {
 
         if showsStop {
             Button { model.activity.stop(currentBottle) } label: {
-                Label(activity.isStopping ? "Stopping…" : "Stop", systemImage: "stop.fill")
+                Label(activity.isStopping ? localized("Stopping…") : localized("Stop"), systemImage: "stop.fill")
             }
             .buttonStyle(WineButtonStyle())
             .disabled(activity.isStopping || activity.graphicsSetupID != nil)
@@ -218,7 +218,7 @@ struct BottleDashboardView: View {
         if activity.graphicsProgress == nil, activity.title != nil || activity.isStopping {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text(activity.isStopping ? "Stopping Windows processes…" : (activity.title ?? "Working…"))
+                Text(activity.isStopping ? localized("Stopping Windows processes…") : (activity.title ?? localized("Working…")))
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -251,7 +251,7 @@ struct BottleDashboardView: View {
         }
 
         ForEach(activity.notices) { notice in
-            WineCard(title: notice.title, icon: "info.circle") {
+            WineCard(title: LocalizedStringKey(notice.title), icon: "info.circle") {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(notice.message)
                         .font(.callout)
@@ -336,7 +336,7 @@ struct BottleDashboardView: View {
         }
     }
 
-    private func informationRow(_ title: String, value: String, monospaced: Bool = false) -> some View {
+    private func informationRow(_ title: LocalizedStringKey, value: String, monospaced: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Text(title)
                 .foregroundStyle(WineTheme.muted)
@@ -362,7 +362,7 @@ struct BottleDashboardView: View {
     }
 
     private var installedPrograms: some View {
-        WineCard(title: "Installed Programs", icon: "square.grid.2x2", trailing: "\(currentBottle.programs.count) items") {
+        WineCard(title: "Installed Programs", icon: "square.grid.2x2", trailing: localized("\(currentBottle.programs.count) items")) {
             let programs = visiblePrograms
             if currentBottle.programs.count > 1 {
                 Picker("Sort programs", selection: $programSort) {
@@ -439,8 +439,8 @@ struct BottleDashboardView: View {
             }
             .buttonStyle(.borderless)
             .disabled(activity.blocksLibraryEdit)
-            .accessibilityLabel(program.isFavorite ? "Remove \(program.name) from Favorites" : "Add \(program.name) to Favorites")
-            .help(program.isFavorite ? "Remove from Favorites" : "Add to Favorites; favorites are listed first")
+            .accessibilityLabel(program.isFavorite ? localized("Remove \(program.name) from Favorites") : localized("Add \(program.name) to Favorites"))
+            .help(program.isFavorite ? localized("Remove from Favorites") : localized("Add to Favorites; favorites are listed first"))
             Button { model.activity.launch(program, in: currentBottle) } label: {
                 Text("Launch").font(WineTheme.Font.label)
                     .frame(minWidth: 64, minHeight: 28)
@@ -492,16 +492,16 @@ struct BottleDashboardView: View {
     }
 
     private func favoriteButton(_ program: WindowsProgram) -> some View {
-        Button(program.isFavorite ? "Remove from Favorites" : "Add to Favorites") {
+        Button(program.isFavorite ? localized("Remove from Favorites") : localized("Add to Favorites")) {
             model.bottleSettings.setFavorite(!program.isFavorite, for: program, in: currentBottle)
         }
     }
 
     private static func history(of program: WindowsProgram) -> String {
-        guard let last = program.lastLaunchedAt else { return "Never launched from MagicWine" }
-        let played = program.playTime < 60 ? "under a minute"
+        guard let last = program.lastLaunchedAt else { return localized("Never launched from MagicWine") }
+        let played = program.playTime < 60 ? localized("under a minute")
             : Duration.seconds(program.playTime).formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
-        return "Last launched \(last.formatted(.relative(presentation: .named))) · \(played) played"
+        return localized("Last launched \(last.formatted(.relative(presentation: .named))) · \(played) played")
     }
 
     private func displayPath(_ path: String) -> String {
@@ -566,7 +566,7 @@ struct BottleDashboardView: View {
         }
     }
 
-    private func toolButton(_ title: String, icon: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
+    private func toolButton(_ title: LocalizedStringKey, icon: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
         Button(role: destructive ? .destructive : nil, action: action) {
             Label(title, systemImage: icon).font(WineTheme.Font.callout)
                 .foregroundStyle(destructive ? WineTheme.danger : WineTheme.text)
@@ -602,8 +602,8 @@ enum ProgramSort: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .name: "Name"
-        case .recent: "Recent"
+        case .name: localized("Name")
+        case .recent: localized("Recent")
         }
     }
 

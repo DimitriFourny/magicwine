@@ -283,7 +283,7 @@ private struct LibraryView: View {
                     RuntimeSetupView(model: model)
                 }
                 if !model.runtimes.runtimes.isEmpty {
-                    WineCard(title: "Available Runtimes", icon: "wineglass", trailing: "\(model.runtimes.runtimes.count) installed") {
+                    WineCard(title: "Available Runtimes", icon: "wineglass", trailing: localized("\(model.runtimes.runtimes.count) installed")) {
                         ForEach(model.runtimes.runtimes) { runtime in
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(runtime.version).font(.headline)
@@ -420,7 +420,9 @@ private struct NewBottleView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("New Bottle").font(.title2)
             if let pending {
-                Text("When setup finishes, \(pending.file.url.lastPathComponent) will \(pending.action == .install ? "run its installer in" : "be added to") this bottle.")
+                Text(pending.action == .install
+                     ? localized("When setup finishes, \(pending.file.url.lastPathComponent) will run its installer in this bottle.")
+                     : localized("When setup finishes, \(pending.file.url.lastPathComponent) will be added to this bottle."))
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -571,7 +573,7 @@ struct WineInstallationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button(bottle == nil ? "Install / Update Wine…" : "Update Wine…") {
+            Button(bottle == nil ? localized("Install / Update Wine…") : localized("Update Wine…")) {
                 showsTrustConfirmation = true
             }
             .buttonStyle(.borderedProminent)
@@ -592,18 +594,18 @@ struct WineInstallationView: View {
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             }
         }
-        .confirmationDialog(bottle.map { "Update Wine for \($0.name)?" } ?? "Trust Wine?",
+        .confirmationDialog(bottle.map { localized("Update Wine for \($0.name)?") } ?? localized("Trust Wine?"),
                             isPresented: $showsTrustConfirmation, titleVisibility: .visible) {
-            Button(bottle == nil ? "Trust and Install Wine" : "Trust and Update Wine") {
+            Button(bottle == nil ? localized("Trust and Install Wine") : localized("Trust and Update Wine")) {
                 model.runtimes.installWine(upgrading: bottle)
             }
             .disabled(unavailable)
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This Wine build is unsigned and not notarized by Apple. MagicWine checks the Gcenx download’s checksum, installs its bundled source-built DXMT driver bridge, and removes only this managed Wine bundle’s quarantine to let it run. DXMT is included and needs no additional download. This is not a malware check; system-wide security settings are unchanged."
-                 + (bottle == nil
-                    ? "\n\nExisting bottles keep their current Wine. Use Update Wine in a bottle’s dashboard to switch it."
-                    : "\n\nDownloads Wine if needed, then switches only this bottle to the current managed runtime with MSync support. Its files, settings, and previous Wine installation are kept. If switching fails, the bottle keeps its current Wine."))
+            Text(localized("This Wine build is unsigned and not notarized by Apple. MagicWine checks the Gcenx download’s checksum, installs its bundled source-built DXMT driver bridge, and removes only this managed Wine bundle’s quarantine to let it run. DXMT is included and needs no additional download. This is not a malware check; system-wide security settings are unchanged.")
+                 + "\n\n" + (bottle == nil
+                    ? localized("Existing bottles keep their current Wine. Use Update Wine in a bottle’s dashboard to switch it.")
+                    : localized("Downloads Wine if needed, then switches only this bottle to the current managed runtime with MSync support. Its files, settings, and previous Wine installation are kept. If switching fails, the bottle keeps its current Wine.")))
         }
     }
 }

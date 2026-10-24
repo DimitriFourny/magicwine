@@ -80,7 +80,7 @@ final class AppModel {
         guard !library.isLoading else { return }
         // Do not replace metadata while an operation is saving the same bottle.
         guard !activity.activities.values.contains(where: \.blocksLibraryEdit) else {
-            notices.post(AppNotice(title: "A Bottle Is Busy", message: "Wait for bottle operations to finish before reloading the library. Other bottles are still available."))
+            notices.post(AppNotice(title: localized("A Bottle Is Busy"), message: localized("Wait for bottle operations to finish before reloading the library. Other bottles are still available.")))
             return
         }
         library.isLoading = true
@@ -94,7 +94,7 @@ final class AppModel {
     /// EXE, MSI, LNK, or URL file. The window asks which bottle and action to use.
     func openedFile(_ url: URL, preferringProgram: Bool) -> OpenedFile? {
         if let file = OpenedFile(url: url, preferringProgram: preferringProgram) { return file }
-        notices.post(AppNotice(title: "Unsupported File", message: "Open a Windows EXE or MSI installer, or an EXE, LNK, or URL shortcut to add as a program."))
+        notices.post(AppNotice(title: localized("Unsupported File"), message: localized("Open a Windows EXE or MSI installer, or an EXE, LNK, or URL shortcut to add as a program.")))
         return nil
     }
 
@@ -111,10 +111,10 @@ final class AppModel {
         let installers = urls.filter { OpenedFile.installerExtensions.contains($0.pathExtension.lowercased()) }
         guard installers.count == 1, let installer = installers.first else {
             notices.post(AppNotice(
-                title: installers.isEmpty ? "Unsupported File" : "One Installer at a Time",
+                title: installers.isEmpty ? localized("Unsupported File") : localized("One Installer at a Time"),
                 message: installers.isEmpty
-                    ? "Drop a Windows EXE or MSI installer here to install it in \(bottle.name). To add an existing program, drop it on the Installed Programs list."
-                    : "Drop one installer at a time, and wait for it to finish."))
+                    ? localized("Drop a Windows EXE or MSI installer here to install it in \(bottle.name). To add an existing program, drop it on the Installed Programs list.")
+                    : localized("Drop one installer at a time, and wait for it to finish.")))
             return
         }
         activity.install(installer, in: bottle)
@@ -124,7 +124,7 @@ final class AppModel {
     func addPrograms(dropped urls: [URL], to bottle: Bottle) {
         let programs = urls.filter { OpenedFile.programExtensions.contains($0.pathExtension.lowercased()) }
         guard !programs.isEmpty else {
-            notices.post(AppNotice(title: "Unsupported File", message: "Drop an EXE, LNK shortcut, or URL Internet Shortcut here to add it to \(bottle.name). To run an installer, drop an EXE or MSI on the bottle instead."))
+            notices.post(AppNotice(title: localized("Unsupported File"), message: localized("Drop an EXE, LNK shortcut, or URL Internet Shortcut here to add it to \(bottle.name). To run an installer, drop an EXE or MSI on the bottle instead.")))
             return
         }
         activity.addPrograms(programs, to: bottle)
@@ -138,7 +138,7 @@ final class AppModel {
         activity.initialize(bottle) { [self] succeeded in
             guard let pending else { return }
             guard succeeded, let ready = library.bottles.first(where: { $0.id == bottle.id }) else {
-                notices.post(AppNotice(title: "File Not Opened", message: "\(bottle.name) could not be set up, so \(pending.file.url.lastPathComponent) was not opened. Retry setup in the bottle, then open the file again."))
+                notices.post(AppNotice(title: localized("File Not Opened"), message: localized("\(bottle.name) could not be set up, so \(pending.file.url.lastPathComponent) was not opened. Retry setup in the bottle, then open the file again.")))
                 return
             }
             open(pending.file, as: pending.action, in: ready)

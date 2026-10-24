@@ -71,8 +71,7 @@ enum WineArtwork {
     static let bottle = load("bottle-art")
     static let cellar = load("cellar-art")
     static let logo = load("wine-logo")
-    private static let bundle = Bundle.main.url(forResource: "MagicWine_MagicWine", withExtension: "bundle")
-        .flatMap { Bundle(url: $0) } ?? .module
+    private static let bundle = Bundle.wine
 
     private static func load(_ name: String) -> NSImage {
         guard let image = bundle.image(forResource: name) else {
@@ -115,12 +114,12 @@ struct WineButtonStyle: ButtonStyle {
 }
 
 struct WineCard<Content: View>: View {
-    let title: String
+    let title: LocalizedStringKey
     let icon: String
     let trailing: String?
     @ViewBuilder let content: () -> Content
 
-    init(title: String, icon: String, trailing: String? = nil,
+    init(title: LocalizedStringKey, icon: String, trailing: String? = nil,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.icon = icon
@@ -166,11 +165,11 @@ struct WineStatus: View {
 
     private var state: BottleActivity { model.activity.activity(for: bottle) }
     private var title: String {
-        if state.isStopping { return "Stopping…" }
-        if state.title != nil { return "Busy" }
-        if state.error != nil { return "Needs attention" }
-        if state.hasRunningPrograms { return "Running" }
-        return bottle.isInitialized ? "Ready" : "Setup needed"
+        if state.isStopping { return localized("Stopping…") }
+        if state.title != nil { return localized("Busy") }
+        if state.error != nil { return localized("Needs attention") }
+        if state.hasRunningPrograms { return localized("Running") }
+        return bottle.isInitialized ? localized("Ready") : localized("Setup needed")
     }
     private var color: Color {
         if state.isStopping || state.title != nil { return WineTheme.warning }

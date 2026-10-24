@@ -22,19 +22,19 @@ enum FileImportRequest {
     fileprivate var message: String {
         switch self {
         case .installer:
-            "Choose an EXE or MSI installer. Its Windows installer will open in this bottle."
+            localized("Choose an EXE or MSI installer. Its Windows installer will open in this bottle.")
         case .program:
-            "Choose an EXE, LNK shortcut, or URL Internet Shortcut. Removing it from MagicWine does not delete the file."
+            localized("Choose an EXE, LNK shortcut, or URL Internet Shortcut. Removing it from MagicWine does not delete the file.")
         case .d3dMetalFolder:
-            "No D3DMetal libraries were found beside this bottle’s Wine or in an installed CrossOver. Choose your legally obtained library folder. MagicWine does not download these libraries or accept their terms for you."
+            localized("No D3DMetal libraries were found beside this bottle’s Wine or in an installed CrossOver. Choose your legally obtained library folder. MagicWine does not download these libraries or accept their terms for you.")
         case .wineExecutable:
-            "Select the native wine or wineloader executable inside a Wine installation, not its application bundle or a wrapper that changes WINEPREFIX. Metal backends require a compatible Metal driver."
+            localized("Select the native wine or wineloader executable inside a Wine installation, not its application bundle or a wrapper that changes WINEPREFIX. Metal backends require a compatible Metal driver.")
         }
     }
 
     fileprivate var confirmationLabel: String {
-        if case .d3dMetalFolder = self { return "Import" }
-        return "Choose"
+        if case .d3dMetalFolder = self { return localized("Import") }
+        return localized("Choose")
     }
 }
 

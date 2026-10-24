@@ -77,6 +77,7 @@ dist/
         │   └── magicwine-cli
         └── Resources/
             ├── AppIcon.icns
+            ├── en.lproj/                         # Localizable.strings and .stringsdict, copied from the UI bundle
             ├── LICENSE
             ├── THIRD_PARTY_NOTICES.md
             ├── MagicWine_MagicWineCore.bundle/   # pinned component payloads and notices

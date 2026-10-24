@@ -1,0 +1,201 @@
+/* English (development language) strings for text built in code with `localized(_:)`.
+   The key is the English text itself, with %@ for strings and %lld for integers; the value
+   repeats it. To add a language, copy this file and Localizable.stringsdict into <language>.lproj
+   and translate the values (and the plural forms). Counted phrases live in Localizable.stringsdict.
+   Text written as SwiftUI literals (Text("…"), Button("…")) uses the same key rule and falls
+   back to the literal when it has no entry, so only strings built in code are listed here. */
+
+/* AppModel */
+"A Bottle Is Busy" = "A Bottle Is Busy";
+"Wait for bottle operations to finish before reloading the library. Other bottles are still available." = "Wait for bottle operations to finish before reloading the library. Other bottles are still available.";
+"Unsupported File" = "Unsupported File";
+"Open a Windows EXE or MSI installer, or an EXE, LNK, or URL shortcut to add as a program." = "Open a Windows EXE or MSI installer, or an EXE, LNK, or URL shortcut to add as a program.";
+"One Installer at a Time" = "One Installer at a Time";
+"Drop a Windows EXE or MSI installer here to install it in %@. To add an existing program, drop it on the Installed Programs list." = "Drop a Windows EXE or MSI installer here to install it in %@. To add an existing program, drop it on the Installed Programs list.";
+"Drop one installer at a time, and wait for it to finish." = "Drop one installer at a time, and wait for it to finish.";
+"Drop an EXE, LNK shortcut, or URL Internet Shortcut here to add it to %@. To run an installer, drop an EXE or MSI on the bottle instead." = "Drop an EXE, LNK shortcut, or URL Internet Shortcut here to add it to %@. To run an installer, drop an EXE or MSI on the bottle instead.";
+"File Not Opened" = "File Not Opened";
+"%@ could not be set up, so %@ was not opened. Retry setup in the bottle, then open the file again." = "%@ could not be set up, so %@ was not opened. Retry setup in the bottle, then open the file again.";
+
+/* BottleActivityModel */
+"Setting up Windows environment…" = "Setting up Windows environment…";
+"Set Up This Bottle First" = "Set Up This Bottle First";
+"Use Retry Setup for %@, then open the installer again." = "Use Retry Setup for %@, then open the installer again.";
+"Bottle Is Busy" = "Bottle Is Busy";
+"Wait for the operation in %@ to finish, or stop the bottle, before opening another installer." = "Wait for the operation in %@ to finish, or stop the bottle, before opening another installer.";
+"Installing %@…" = "Installing %@…";
+"Use Retry Setup for %@, then add the program again." = "Use Retry Setup for %@, then add the program again.";
+"Wait for the operation in %@ to finish, or stop the bottle, before adding programs." = "Wait for the operation in %@ to finish, or stop the bottle, before adding programs.";
+"Adding program…" = "Adding program…";
+"Adding programs…" = "Adding programs…";
+"Finding Windows shortcuts…" = "Finding Windows shortcuts…";
+"Removing shortcut…" = "Removing shortcut…";
+"Wine configuration is open…" = "Wine configuration is open…";
+"%@ started with reduced compatibility" = "%@ started with reduced compatibility";
+"Diagnostic launch of %@ ended (exit code %lld)" = "Diagnostic launch of %@ ended (exit code %lld)";
+"The log lists DLL load decisions (+loaddll), exceptions (+seh), and process starts (+process) in addition to Wine errors. Review it for personal paths before sharing." = "The log lists DLL load decisions (+loaddll), exceptions (+seh), and process starts (+process) in addition to Wine errors. Review it for personal paths before sharing.";
+"Wine reported no errors at the end of the log. Many games and launchers use nonzero codes for normal exits." = "Wine reported no errors at the end of the log. Many games and launchers use nonzero codes for normal exits.";
+"%@ exited with code %lld" = "%@ exited with code %lld";
+"Stopping and moving bottle to Trash…" = "Stopping and moving bottle to Trash…";
+
+/* BottleDashboardView */
+"Stopping…" = "Stopping…";
+"Stop" = "Stop";
+"Stopping Windows processes…" = "Stopping Windows processes…";
+"Working…" = "Working…";
+"Remove %@ from Favorites" = "Remove %@ from Favorites";
+"Add %@ to Favorites" = "Add %@ to Favorites";
+"Remove from Favorites" = "Remove from Favorites";
+"Add to Favorites; favorites are listed first" = "Add to Favorites; favorites are listed first";
+"Add to Favorites" = "Add to Favorites";
+"Never launched from MagicWine" = "Never launched from MagicWine";
+"under a minute" = "under a minute";
+"Last launched %@ · %@ played" = "Last launched %@ · %@ played";
+"Name" = "Name";
+"Recent" = "Recent";
+
+/* BottleLogsView */
+"Deleted bottle" = "Deleted bottle";
+
+/* BottleSettingsModel */
+"Verifying graphics component…" = "Verifying graphics component…";
+"Installing graphics in this bottle…" = "Installing graphics in this bottle…";
+"Restoring Standard graphics…" = "Restoring Standard graphics…";
+"Changing synchronization…" = "Changing synchronization…";
+"Changing display settings…" = "Changing display settings…";
+
+/* DependenciesModel */
+"Preparing Windows dependencies…" = "Preparing Windows dependencies…";
+"Downloading %@…" = "Downloading %@…";
+"Verifying %@…" = "Verifying %@…";
+"Checking %@…" = "Checking %@…";
+
+/* DependenciesView */
+"All programs" = "All programs";
+"Installed by MagicWine on %@" = "Installed by MagicWine on %@";
+"Already present in this bottle" = "Already present in this bottle";
+"Repair…" = "Repair…";
+"Install…" = "Install…";
+"Wait for this bottle’s operation to finish and close its programs first" = "Wait for this bottle’s operation to finish and close its programs first";
+"Shows the license before installing" = "Shows the license before installing";
+
+/* FileAccess */
+"Choose an EXE or MSI installer. Its Windows installer will open in this bottle." = "Choose an EXE or MSI installer. Its Windows installer will open in this bottle.";
+"Choose an EXE, LNK shortcut, or URL Internet Shortcut. Removing it from MagicWine does not delete the file." = "Choose an EXE, LNK shortcut, or URL Internet Shortcut. Removing it from MagicWine does not delete the file.";
+"No D3DMetal libraries were found beside this bottle’s Wine or in an installed CrossOver. Choose your legally obtained library folder. MagicWine does not download these libraries or accept their terms for you." = "No D3DMetal libraries were found beside this bottle’s Wine or in an installed CrossOver. Choose your legally obtained library folder. MagicWine does not download these libraries or accept their terms for you.";
+"Select the native wine or wineloader executable inside a Wine installation, not its application bundle or a wrapper that changes WINEPREFIX. Metal backends require a compatible Metal driver." = "Select the native wine or wineloader executable inside a Wine installation, not its application bundle or a wrapper that changes WINEPREFIX. Metal backends require a compatible Metal driver.";
+"Import" = "Import";
+"Choose" = "Choose";
+
+/* GamepadDrawing */
+"No buttons pressed" = "No buttons pressed";
+"Active: %@" = "Active: %@";
+
+/* GamepadView */
+"Unmapped" = "Unmapped";
+"XInput %@" = "XInput %@";
+"Not connected" = "Not connected";
+"Bluetooth" = "Bluetooth";
+"Not reported" = "Not reported";
+"%lld of 4" = "%lld of 4";
+"No XInput slot" = "No XInput slot";
+"Supported" = "Supported";
+"Unavailable" = "Unavailable";
+"%@ · Charging" = "%@ · Charging";
+"Unsaved changes" = "Unsaved changes";
+"Saved" = "Saved";
+"Not loaded" = "Not loaded";
+"Selected" = "Selected";
+"Not selected" = "Not selected";
+"Disconnected" = "Disconnected";
+"Draft preview" = "Draft preview";
+"Pressed" = "Pressed";
+"Released" = "Released";
+"Mapped output · %@ · Unsaved" = "Mapped output · %@ · Unsaved";
+"Mapped output · %@" = "Mapped output · %@";
+"%lld percent" = "%lld percent";
+
+/* LibraryCommands */
+"Launch %@" = "Launch %@";
+"Launch Program" = "Launch Program";
+
+/* LibraryModel */
+"Could Not Load Bottles" = "Could Not Load Bottles";
+
+/* LibrarySidebarView */
+"Running: %@" = "Running: %@";
+"Setup needed" = "Setup needed";
+"Download activity in progress" = "Download activity in progress";
+
+/* LogViewerView */
+"Running: following new output" = "Running: following new output";
+"Ended" = "Ended";
+"Errors" = "Errors";
+"Warnings" = "Warnings";
+"Fixme" = "Fixme";
+"Other" = "Other";
+"Wine err: lines" = "Wine err: lines";
+"Wine warn: lines" = "Wine warn: lines";
+"Wine fixme: notes about unimplemented functions" = "Wine fixme: notes about unimplemented functions";
+"Program output and all other lines" = "Program output and all other lines";
+
+/* MagicWineApp */
+"%lld installed" = "%lld installed";
+"When setup finishes, %@ will run its installer in this bottle." = "When setup finishes, %@ will run its installer in this bottle.";
+"When setup finishes, %@ will be added to this bottle." = "When setup finishes, %@ will be added to this bottle.";
+"Install / Update Wine…" = "Install / Update Wine…";
+"Update Wine…" = "Update Wine…";
+"Update Wine for %@?" = "Update Wine for %@?";
+"Trust Wine?" = "Trust Wine?";
+"Trust and Install Wine" = "Trust and Install Wine";
+"Trust and Update Wine" = "Trust and Update Wine";
+"This Wine build is unsigned and not notarized by Apple. MagicWine checks the Gcenx download’s checksum, installs its bundled source-built DXMT driver bridge, and removes only this managed Wine bundle’s quarantine to let it run. DXMT is included and needs no additional download. This is not a malware check; system-wide security settings are unchanged." = "This Wine build is unsigned and not notarized by Apple. MagicWine checks the Gcenx download’s checksum, installs its bundled source-built DXMT driver bridge, and removes only this managed Wine bundle’s quarantine to let it run. DXMT is included and needs no additional download. This is not a malware check; system-wide security settings are unchanged.";
+"Existing bottles keep their current Wine. Use Update Wine in a bottle’s dashboard to switch it." = "Existing bottles keep their current Wine. Use Update Wine in a bottle’s dashboard to switch it.";
+"Downloads Wine if needed, then switches only this bottle to the current managed runtime with MSync support. Its files, settings, and previous Wine installation are kept. If switching fails, the bottle keeps its current Wine." = "Downloads Wine if needed, then switches only this bottle to the current managed runtime with MSync support. Its files, settings, and previous Wine installation are kept. If switching fails, the bottle keeps its current Wine.";
+
+/* OpenFileSheet */
+"%@ is busy or has programs running. Installers need it idle; wait or stop its programs." = "%@ is busy or has programs running. Installers need it idle; wait or stop its programs.";
+"%@ is busy. Wait for its operation to finish." = "%@ is busy. Wait for its operation to finish.";
+"Run Installer" = "Run Installer";
+"Add Program" = "Add Program";
+"Runs the installer in the bottle. It may change the bottle’s Windows files, and MagicWine then looks for the shortcuts it created." = "Runs the installer in the bottle. It may change the bottle’s Windows files, and MagicWine then looks for the shortcuts it created.";
+"Adds the file to the bottle’s programs where it is, without moving or copying it. Removing it later does not delete the file." = "Adds the file to the bottle’s programs where it is, without moving or copying it. Removing it later does not delete the file.";
+
+/* RuntimeModel */
+"Could Not Read Settings" = "Could Not Read Settings";
+"Finding Wine…" = "Finding Wine…";
+"The saved Wine executable could not be opened. %@" = "The saved Wine executable could not be opened. %@";
+"Could not save the Wine preference. %@" = "Could not save the Wine preference. %@";
+"Updating Wine…" = "Updating Wine…";
+"Switching bottle to updated Wine…" = "Switching bottle to updated Wine…";
+"Downloading Wine…" = "Downloading Wine…";
+"Verifying Wine download…" = "Verifying Wine download…";
+"Extracting Wine…" = "Extracting Wine…";
+"Preparing Wine…" = "Preparing Wine…";
+"Using installed Wine…" = "Using installed Wine…";
+"Checking Wine…" = "Checking Wine…";
+"Saving Wine preference…" = "Saving Wine preference…";
+
+/* StorageCleanupModel */
+"Measuring unused files…" = "Measuring unused files…";
+"Removing unused files…" = "Removing unused files…";
+"Unused Files Removed" = "Unused Files Removed";
+
+/* StorageCleanupView */
+"Check Storage" = "Check Storage";
+"Check Again" = "Check Again";
+
+/* WineTheme */
+"Busy" = "Busy";
+"Needs attention" = "Needs attention";
+"Running" = "Running";
+"Ready" = "Ready";
+
+/* ErrorPresentation */
+"Operation Failed" = "Operation Failed";
+"Saved by a Newer MagicWine" = "Saved by a Newer MagicWine";
+
+/* ProgramEditorView */
+"Bottle default (%@)" = "Bottle default (%@)";
+"Wine builtin (Standard)" = "Wine builtin (Standard)";
+"%@ is not available: %@" = "%@ is not available: %@";
