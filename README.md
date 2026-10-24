@@ -10,7 +10,7 @@ A native SwiftUI app for experimenting with Windows games on macOS using Wine. I
 
 ## Build and run
 
-Requires macOS 14 or newer and Swift 6 developer tools (Xcode or Apple's Command Line Tools). Intel Wine requires Rosetta on Apple Silicon.
+Requires macOS 14 or newer, Swift 6 developer tools (Xcode or Apple's Command Line Tools), and [Git LFS](https://git-lfs.com) for the bundled compatibility archives (`brew install git-lfs && git lfs install` before cloning, or `git lfs pull` in an existing clone). Intel Wine requires Rosetta on Apple Silicon.
 
 ```sh
 ./scripts/build-app.sh
