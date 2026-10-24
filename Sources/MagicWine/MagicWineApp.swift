@@ -4,7 +4,7 @@ import MagicWineCore
 @main
 struct MagicWineApp: App {
     @NSApplicationDelegateAdaptor(ApplicationDelegate.self) private var applicationDelegate
-    @StateObject private var model = AppModel(paths: ApplicationPaths(
+    @State private var model = AppModel(paths: ApplicationPaths(
         root: ProcessInfo.processInfo.environment["MAGICWINE_DATA_ROOT"]
             .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
     ))
@@ -12,6 +12,7 @@ struct MagicWineApp: App {
     var body: some Scene {
         WindowGroup {
             LibraryView(model: model)
+                .fileImportHost(model)
                 .frame(minWidth: 1000, minHeight: 720)
                 .preferredColorScheme(.dark)
                 .task { await model.start() }
@@ -23,21 +24,10 @@ struct MagicWineApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Bottle…") { model.showsNewBottle = true }
                     .keyboardShortcut("n")
-                    .disabled(model.isLoading)
+                    .disabled(model.library.isLoading)
             }
             CommandMenu("Bottle") {
-                Button("Install EXE/MSI…") {
-                    if let bottle = model.selectedBottle { model.chooseInstaller(in: bottle) }
-                }
-                .disabled(!canUseSelectedBottle)
-                Button("Stop Windows Processes") {
-                    if let bottle = model.selectedBottle { model.stop(bottle) }
-                }
-                .disabled(!canStopSelectedBottle)
-                Divider()
-                ShowBottleLogsCommand(bottle: model.selectedBottle)
-                Button("Reload Bottles") { model.refreshBottles() }
-                    .disabled(model.isLoading)
+                BottleCommands(model: model)
             }
         }
 
@@ -47,6 +37,7 @@ struct MagicWineApp: App {
                 .padding(24)
                 .background(WineTheme.background)
                 .preferredColorScheme(.dark)
+                .fileImportHost(model)
         }
 
         WindowGroup("Log", id: LogViewerView.windowID, for: URL.self) { $url in
@@ -65,37 +56,63 @@ struct MagicWineApp: App {
         }
         .defaultSize(width: 760, height: 480)
     }
+}
 
-    private var canUseSelectedBottle: Bool {
-        guard let bottle = model.selectedBottle else { return false }
-        let state = model.activity(for: bottle)
-        return bottle.isInitialized && !state.blocksPrefixMutation
-    }
+private struct FileImportFocusKey: FocusedValueKey {
+    typealias Value = FileImportAction
+}
 
-    private var canStopSelectedBottle: Bool {
-        guard let bottle = model.selectedBottle else { return false }
-        let state = model.activity(for: bottle)
-        return !state.isStopping && (state.canStop || (state.title == nil && bottle.isInitialized))
+extension FocusedValues {
+    /// The focused main window's file dialog, for menu commands.
+    var fileImport: FileImportAction? {
+        get { self[FileImportFocusKey.self] }
+        set { self[FileImportFocusKey.self] = newValue }
     }
 }
 
-/// Menu commands cannot read `openWindow` from the app; a view can.
-private struct ShowBottleLogsCommand: View {
-    let bottle: Bottle?
+/// Menu commands cannot read `openWindow` or the window's file dialog from the app; a view can.
+private struct BottleCommands: View {
+    let model: AppModel
+    @FocusedValue(\.fileImport) private var fileImport
     @Environment(\.openWindow) private var openWindow
 
+    private var bottle: Bottle? { model.library.selectedBottle }
+
+    private var canUseSelectedBottle: Bool {
+        guard let bottle else { return false }
+        return bottle.isInitialized && !model.activity.activity(for: bottle).blocksPrefixMutation
+    }
+
+    private var canStopSelectedBottle: Bool {
+        guard let bottle else { return false }
+        let state = model.activity.activity(for: bottle)
+        return !state.isStopping && (state.canStop || (state.title == nil && bottle.isInitialized))
+    }
+
     var body: some View {
+        Button("Install EXE/MSI…") {
+            if let bottle { fileImport?(.installer(bottle)) }
+        }
+        .disabled(!canUseSelectedBottle || fileImport == nil)
+        Button("Stop Windows Processes") {
+            if let bottle { model.activity.stop(bottle) }
+        }
+        .disabled(!canStopSelectedBottle)
+        Divider()
         Button("Show Bottle Logs…") { if let bottle { openWindow(id: BottleLogsView.windowID, value: bottle.id) } }
             .disabled(bottle == nil)
+        Button("Reload Bottles") { model.refreshBottles() }
+            .disabled(model.library.isLoading)
     }
 }
 
 private struct LibraryView: View {
-    @ObservedObject var model: AppModel
+    @Bindable var model: AppModel
     @State private var trashTarget: Bottle?
     @State private var destination: LibraryDestination = .bottles
     @State private var search = ""
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.fileImport) private var fileImport
 
     var body: some View {
         HStack(spacing: 0) {
@@ -107,7 +124,7 @@ private struct LibraryView: View {
                 Group {
                     switch destination {
                     case .bottles:
-                        if let bottle = model.selectedBottle {
+                        if let bottle = model.library.selectedBottle {
                             BottleDashboardView(model: model, bottle: bottle, trash: { trashTarget = bottle })
                                 .id(bottle.id)
                         } else {
@@ -130,18 +147,19 @@ private struct LibraryView: View {
         .background(WineTheme.background)
         .tint(WineTheme.accent)
         .buttonStyle(WineButtonStyle())
-        .onChange(of: model.logToShow) { _, url in
+        .focusedSceneValue(\.fileImport, fileImport)
+        .onChange(of: model.activity.logToShow) { _, url in
             guard let url else { return }
             openWindow(id: LogViewerView.windowID, value: url)
-            model.logToShow = nil
+            model.activity.logToShow = nil
         }
         .sheet(isPresented: $model.showsNewBottle) {
             NewBottleView(model: model)
         }
-        .alert(model.notice?.title ?? "", isPresented: Binding(
-            get: { model.notice != nil },
-            set: { if !$0 { model.notice = nil } }
-        ), presenting: model.notice) { notice in
+        .alert(model.notices.current?.title ?? "", isPresented: Binding(
+            get: { model.notices.current != nil },
+            set: { if !$0 { model.notices.current = nil } }
+        ), presenting: model.notices.current) { notice in
             Button("OK", role: .cancel) { }
             if let log = notice.logURL {
                 Button("Show Log") { openWindow(id: LogViewerView.windowID, value: log) }
@@ -155,7 +173,7 @@ private struct LibraryView: View {
         ), titleVisibility: .visible) {
             if let bottle = trashTarget {
                 Button("Move \(bottle.name) to Trash", role: .destructive) {
-                    model.trash(bottle)
+                    model.activity.trash(bottle)
                     trashTarget = nil
                 }
             }
@@ -174,21 +192,21 @@ private struct LibraryView: View {
                 WineCard(title: "Wine Runtime", icon: "arrow.down.to.line") {
                     RuntimeSetupView(model: model)
                 }
-                if !model.runtimes.isEmpty {
-                    WineCard(title: "Available Runtimes", icon: "wineglass", trailing: "\(model.runtimes.count) installed") {
-                        ForEach(model.runtimes) { runtime in
+                if !model.runtimes.runtimes.isEmpty {
+                    WineCard(title: "Available Runtimes", icon: "wineglass", trailing: "\(model.runtimes.runtimes.count) installed") {
+                        ForEach(model.runtimes.runtimes) { runtime in
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(runtime.version).font(.headline)
                                 Text(runtime.executableURL.path)
                                     .font(.caption).foregroundStyle(WineTheme.muted)
                                     .textSelection(.enabled)
                             }
-                            if runtime.id != model.runtimes.last?.id { Divider() }
+                            if runtime.id != model.runtimes.runtimes.last?.id { Divider() }
                         }
                     }
                 }
                 WineCard(title: "Storage", icon: "internaldrive",
-                         trailing: model.storagePlan.map { ByteCountFormatter.string(fromByteCount: $0.totalSize, countStyle: .file) + " unused" }) {
+                         trailing: model.storage.plan.map { ByteCountFormatter.string(fromByteCount: $0.totalSize, countStyle: .file) + " unused" }) {
                     StorageCleanupView(model: model)
                 }
             }
@@ -228,7 +246,7 @@ private struct LibraryView: View {
                     Text("Removing a launcher does not delete its executable. Trash Bottle moves the bottle’s Windows environment to macOS Trash after stopping its processes.")
                     Text("Current library: \(model.paths.root.path)")
                         .font(.caption).foregroundStyle(WineTheme.muted).textSelection(.enabled)
-                    Button("Reveal Logs") { model.revealLogs() }
+                    Button("Reveal Logs") { Finder.revealLibraryLogs(paths: model.paths) }
                 }
             }
             .padding(24).frame(maxWidth: 850, alignment: .leading)
@@ -237,7 +255,7 @@ private struct LibraryView: View {
 }
 
 private struct WelcomeView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
 
     var body: some View {
         ScrollView {
@@ -256,9 +274,9 @@ private struct WelcomeView: View {
                 }
                 Text("A bottle keeps a Windows environment, its programs, and its Wine version together.")
                     .foregroundStyle(WineTheme.muted)
-                if model.isLoading {
+                if model.library.isLoading {
                     ProgressView("Loading your library…")
-                } else if model.preferredRuntime == nil {
+                } else if model.runtimes.preferredRuntime == nil {
                     WineCard(title: "Set Up Wine", icon: "wineglass") {
                         Text("Install Wine, then create your first bottle.")
                             .foregroundStyle(WineTheme.muted)
@@ -279,13 +297,13 @@ private struct WelcomeView: View {
 }
 
 private struct NewBottleView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var runtimeID = ""
 
     private var runtime: RuntimeDescriptor? {
-        model.runtimes.first { $0.id == runtimeID } ?? model.preferredRuntime
+        model.runtimes.runtimes.first { $0.id == runtimeID } ?? model.runtimes.preferredRuntime
     }
     private var validName: Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -299,54 +317,55 @@ private struct NewBottleView: View {
                 Text("Install Wine before creating a bottle.")
                 RuntimeSetupView(model: model)
             }
-            if !model.runtimes.isEmpty {
+            if !model.runtimes.runtimes.isEmpty {
                 TextField("Bottle name", text: $name).textFieldStyle(.roundedBorder)
                     .onSubmit { create() }
-                    .disabled(model.isCreating)
+                    .disabled(model.library.isCreating)
                 DisclosureGroup("Advanced") {
                     VStack(alignment: .leading, spacing: 8) {
                         Picker("Wine runtime", selection: $runtimeID) {
                             Text("Use preferred Wine").tag("")
-                            ForEach(model.runtimes) { runtime in
+                            ForEach(model.runtimes.runtimes) { runtime in
                                 Text("\(runtime.version) — \(runtime.executableURL.deletingLastPathComponent().path)")
                                     .tag(runtime.id)
                             }
                         }
-                        .disabled(model.isCreating || model.runtimeActivity != nil)
+                        .disabled(model.library.isCreating || model.runtimes.activity != nil)
                         if let runtime {
                             Text(runtime.executableURL.path).font(.caption).textSelection(.enabled)
                         }
                     }
                     .padding(.top, 8)
                 }
-                if model.isCreating { ProgressView("Creating bottle…") }
+                if model.library.isCreating { ProgressView("Creating bottle…") }
             }
-            if let error = model.creationError {
+            if let error = model.library.creationError {
                 Text(error).foregroundStyle(.red).textSelection(.enabled)
-                Button("Reveal Logs") { model.revealLogs() }
+                Button("Reveal Logs") { Finder.revealLibraryLogs(paths: model.paths) }
             }
             HStack {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                    .disabled(model.isCreating)
+                    .disabled(model.library.isCreating)
                 Spacer()
                 Button("Create Bottle", action: create)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!validName || runtime == nil || model.isCreating || model.runtimeActivity != nil)
+                    .disabled(!validName || runtime == nil || model.library.isCreating || model.runtimes.activity != nil)
             }
         }
         .padding(24).frame(width: 550)
-        .interactiveDismissDisabled(model.isCreating)
+        .interactiveDismissDisabled(model.library.isCreating)
     }
 
     private func create() {
-        guard validName, !model.isCreating, model.runtimeActivity == nil, let runtime else { return }
+        guard validName, !model.library.isCreating, model.runtimes.activity == nil, let runtime else { return }
         model.createBottle(name: name, runtime: runtime)
     }
 }
 
 private struct WineSettingsView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
+    @Environment(\.fileImport) private var fileImport
 
     var body: some View {
         ScrollView {
@@ -355,31 +374,31 @@ private struct WineSettingsView: View {
                 RuntimeSetupView(model: model)
                 DisclosureGroup("Advanced") {
                     VStack(alignment: .leading, spacing: 12) {
-                        if !model.runtimes.isEmpty {
+                        if !model.runtimes.runtimes.isEmpty {
                             Picker("Preferred Wine", selection: Binding(
-                                get: { model.preferredRuntime?.id ?? "" },
-                                set: { model.preferRuntime(id: $0) }
+                                get: { model.runtimes.preferredRuntime?.id ?? "" },
+                                set: { model.runtimes.prefer(id: $0) }
                             )) {
-                                if model.preferredRuntime == nil {
+                                if model.runtimes.preferredRuntime == nil {
                                     Text("No preferred Wine — install or choose one").tag("")
                                 }
-                                ForEach(model.runtimes) { runtime in
+                                ForEach(model.runtimes.runtimes) { runtime in
                                     Text("\(runtime.version) — \(runtime.executableURL.path)").tag(runtime.id)
                                 }
                             }
-                            .disabled(model.runtimeActivity != nil)
+                            .disabled(model.runtimes.activity != nil)
                         }
-                        Button("Choose Wine Executable…") { model.chooseWineExecutable() }
-                            .disabled(model.runtimeActivity != nil)
+                        Button("Choose Wine Executable…") { fileImport?(.wineExecutable) }
+                            .disabled(model.runtimes.activity != nil || fileImport == nil)
                         Text("Use a custom runtime for compatibility needs, including D3DMetal. New bottles use your preferred Wine unless you override it.")
                             .font(.callout).foregroundStyle(.secondary)
-                        if let path = model.settings.customWinePath {
+                        if let path = model.runtimes.settings.customWinePath {
                             Text("Saved custom executable: \(path)").font(.caption).textSelection(.enabled)
                         }
                         HStack {
-                            Button("Find Installed Wine") { model.refreshRuntimes() }
-                                .disabled(model.runtimeActivity != nil)
-                            Button("Reveal Logs") { model.revealLogs() }
+                            Button("Find Installed Wine") { model.runtimes.refresh() }
+                                .disabled(model.runtimes.activity != nil)
+                            Button("Reveal Logs") { Finder.revealLibraryLogs(paths: model.paths) }
                         }
                     }
                     .padding(.top, 8)
@@ -390,7 +409,7 @@ private struct WineSettingsView: View {
 }
 
 private struct RuntimeSetupView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -425,15 +444,14 @@ private struct RuntimeSetupView: View {
 }
 
 struct WineInstallationView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     var bottle: Bottle? = nil
     @State private var showsTrustConfirmation = false
 
     private var unavailable: Bool {
-        if model.isLoading || model.runtimeActivity != nil { return true }
+        if model.library.isLoading || model.runtimes.activity != nil { return true }
         guard let bottle else { return false }
-        let state = model.activity(for: bottle)
-        return state.blocksPrefixMutation
+        return model.activity.activity(for: bottle).blocksPrefixMutation
     }
 
     var body: some View {
@@ -443,17 +461,17 @@ struct WineInstallationView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(unavailable)
-            if case let .downloading(progress) = model.installationProgress {
+            if case let .downloading(progress) = model.runtimes.installationProgress {
                 WineDownloadProgressView(progress: progress)
-            } else if let activity = model.runtimeActivity {
+            } else if let activity = model.runtimes.activity {
                 ProgressView(activity)
                     .controlSize(.small)
             }
-            if let error = model.runtimeError {
+            if let error = model.runtimes.error {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Wine Setup Failed", systemImage: "exclamationmark.triangle").font(.headline)
                     Text(error).textSelection(.enabled)
-                    Button("Reveal Logs") { model.revealLogs() }
+                    Button("Reveal Logs") { Finder.revealLibraryLogs(paths: model.paths) }
                 }
                 .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
@@ -462,7 +480,7 @@ struct WineInstallationView: View {
         .confirmationDialog(bottle.map { "Update Wine for \($0.name)?" } ?? "Trust Wine?",
                             isPresented: $showsTrustConfirmation, titleVisibility: .visible) {
             Button(bottle == nil ? "Trust and Install Wine" : "Trust and Update Wine") {
-                model.installWine(upgrading: bottle)
+                model.runtimes.installWine(upgrading: bottle)
             }
             .disabled(unavailable)
             Button("Cancel", role: .cancel) { }

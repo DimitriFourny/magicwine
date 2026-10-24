@@ -20,7 +20,7 @@ flowchart TB
     GC --> UI["Physical input and draft preview"]
 ```
 
-The native service is an in-process, main-actor singleton, not a background daemon. It keeps its observers and input timer alive for the hosting process, including while the UI is not frontmost. Each application data root used by that process gets its own bridge session. Separate app/CLI processes do not share a single global state file.
+The native service is an in-process, main-actor singleton, not a background daemon. It keeps its observers and bridge sessions alive for the hosting process, including while the UI is not frontmost. Each application data root used by that process gets its own bridge session. Separate app/CLI processes do not share a single global state file.
 
 Source: [GamepadService.swift](../Sources/MagicWineCore/GamepadService.swift).
 
@@ -30,7 +30,7 @@ Only non-snapshot controllers with an `extendedGamepad` layout participate. macO
 
 There are four XInput slots. Existing connected controllers retain their slot when another disconnects; unassigned controllers fill available slots. Extra devices may appear in the native UI without receiving an XInput player index. Slot assignment is not a persistent hardware identity across application restarts.
 
-The service schedules input polling at 8 ms, publishes changed UI input at up to 60 Hz, and refreshes device/profile metadata separately. These are scheduling targets, not latency guarantees. The bridge heartbeat continues even when button values do not change.
+While at least one controller is connected, the service schedules input polling at 8 ms, publishes changed UI input at up to 60 Hz (an `@Observable` property read only by the live-input views), and refreshes device/profile metadata separately. These are scheduling targets, not latency guarantees. The bridge heartbeat continues even when button values do not change. The timer depends on connected controllers only, not on bridge sessions: with no controller connected it does not run, even while games launched with a session are still running. When the last controller disconnects, every session is published with all slots disconnected and polling stops; Windows readers then see an expiring heartbeat, which, like a disconnected slot, synthesizes no controller. Starting a session with no controller publishes that disconnected state once without starting the timer. The next connection resumes polling and picks up profiles saved meanwhile.
 
 Battery information comes from GameController when available. A background `system_profiler SPBluetoothDataType -json -timeout 5` query supplements Bluetooth metadata. Name matching is deliberately conservative: duplicate device names cannot safely identify a particular controller's battery. Missing charge data remains unknown rather than a fabricated percentage.
 

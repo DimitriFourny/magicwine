@@ -3,14 +3,16 @@ import MagicWineCore
 
 /// Unused runtimes, components, private runtime views and leftovers, grouped by category.
 struct StorageCleanupView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     @State private var confirmation: [StorageCleanupItem]?
+
+    private var storage: StorageCleanupModel { model.storage }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Wine runtimes, graphics components and private graphics views that no bottle uses anymore. Bottles and their Windows files are never removed here.")
                 .font(.callout).foregroundStyle(.secondary)
-            if let plan = model.storagePlan {
+            if let plan = storage.plan {
                 if plan.items.isEmpty {
                     Text("Nothing to remove.").foregroundStyle(WineTheme.muted)
                 }
@@ -37,29 +39,29 @@ struct StorageCleanupView: View {
                 }
             }
             Toggle("Include current Wine and bundled components", isOn: Binding(
-                get: { model.storageIncludesCurrent },
-                set: { model.refreshStoragePlan(includeCurrent: $0) }
+                get: { storage.includesCurrent },
+                set: { storage.refresh(includeCurrent: $0) }
             ))
-            .disabled(model.storageActivity != nil)
-            if let activity = model.storageActivity {
+            .disabled(storage.activity != nil)
+            if let activity = storage.activity {
                 ProgressView(activity).controlSize(.small)
             }
-            if let error = model.storageError {
+            if let error = storage.error {
                 Text(error).foregroundStyle(.red).textSelection(.enabled)
             }
             HStack {
-                Button(model.storagePlan == nil ? "Check Storage" : "Check Again") { model.refreshStoragePlan() }
-                    .disabled(model.storageActivity != nil || model.isLoading)
-                Button("Remove…") { confirmation = model.storagePlan?.items }
-                    .disabled(model.blocksStorageCleanup || model.storagePlan?.items.isEmpty != false)
+                Button(storage.plan == nil ? "Check Storage" : "Check Again") { storage.refresh() }
+                    .disabled(storage.activity != nil || model.library.isLoading)
+                Button("Remove…") { confirmation = storage.plan?.items }
+                    .disabled(storage.blocksCleanup || storage.plan?.items.isEmpty != false)
             }
-            if model.blocksStorageCleanup, model.storageActivity == nil, model.storagePlan?.items.isEmpty == false {
+            if storage.blocksCleanup, storage.activity == nil, storage.plan?.items.isEmpty == false {
                 Text("Finish bottle and Wine operations and stop running programs before removing files.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .onAppear {
-            if model.storagePlan == nil, model.storageActivity == nil, !model.isLoading { model.refreshStoragePlan() }
+            if storage.plan == nil, storage.activity == nil, !model.library.isLoading { storage.refresh() }
         }
         .sheet(isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } })) {
             if let items = confirmation { confirm(items) }
@@ -110,9 +112,9 @@ struct StorageCleanupView: View {
                 Spacer()
                 Button("Remove \(Self.size(items))", role: .destructive) {
                     confirmation = nil
-                    model.removeStorage(items)
+                    storage.remove(items)
                 }
-                .disabled(model.blocksStorageCleanup)
+                .disabled(storage.blocksCleanup)
             }
         }
         .padding(24).frame(width: 620)

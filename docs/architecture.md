@@ -16,7 +16,7 @@ MagicWine is a native macOS bottle manager and research integration layer around
 
 ```mermaid
 flowchart TB
-    UI["MagicWine: SwiftUI and AppKit"] --> Model["AppModel: MainActor presentation state"]
+    UI["MagicWine: SwiftUI and AppKit"] --> Model["AppModel and feature models: MainActor Observation state"]
     CLI["magicwine-cli: async entrypoint"] --> Runtime["WineRuntime actor"]
     CLI --> Store["BottleStore actor"]
     Model --> Runtime
@@ -35,11 +35,26 @@ flowchart TB
     Controller --> Windows
 ```
 
-[`AppModel`](../Sources/MagicWine/AppModel.swift) is `@MainActor`: published state, dialogs and UI updates belong there. Its tasks await core actors rather than synchronously waiting for child processes. Progress callbacks are explicitly delivered to the main queue and checked against an operation UUID so a late callback cannot update a newer installation/setup. [`Main.swift`](../Sources/MagicWineCLI/Main.swift) instead builds its own `ApplicationPaths`, one `BottleStore`, and a `WineRuntime` constructed with that store, and awaits the same core operations. Each process creates exactly one `BottleStore` per library and passes it to `WineRuntime.init(paths:store:)`, so actor serialization spans every owner of the library's bottle metadata.
+The app's models are `@MainActor` [Observation](https://developer.apple.com/documentation/observation) classes (see [UI model structure](#ui-model-structure)): presentation state and UI updates belong there. Their tasks await core actors rather than synchronously waiting for child processes. Progress callbacks are explicitly delivered to the main queue and checked against an operation UUID so a late callback cannot update a newer installation/setup. [`Main.swift`](../Sources/MagicWineCLI/Main.swift) instead builds its own `ApplicationPaths`, one `BottleStore`, and a `WineRuntime` constructed with that store, and awaits the same core operations. Each process creates exactly one `BottleStore` per library and passes it to `WineRuntime.init(paths:store:)`, so actor serialization spans every owner of the library's bottle metadata.
 
 `WineRuntime` is an actor, but actor isolation alone is not an operation-wide mutex: methods suspend and other requests can enter. It therefore also tracks active processes, pending launches, settings mutations, and installation guards. `BottleStore` serializes calls within a process, but the app and CLI are separate processes (and tests may open further instances), so bottle metadata transitions also take the filesystem bottle lock. [`GraphicsOperationLease`](../Sources/MagicWineCore/GraphicsOperationLease.swift) uses nonblocking `flock` with cancellation-aware async waits, while prefix mutations use the bottle lock in `GraphicsPrefix`.
 
 [`ProcessOperation`](../Sources/MagicWineCore/ProcessOperation.swift) confines Foundation `Process` behind an `NSLock`, starts it on a global queue, and returns through a checked continuation. It does not block an actor waiting for termination. File work is not universally detached: core actors perform some synchronous validation and persistence. Large archive hashing is explicitly moved to a cancellable utility task. Controller discovery has its own main-actor requirements; see [controllers](controllers.md).
+
+## UI model structure
+
+[`AppModel`](../Sources/MagicWine/AppModel.swift) is the composition root: it creates the library's `BottleStore` and `WineRuntime`, hands them to focused models, and runs only the flows that span several of them (startup, Reload Bottles, opening an EXE/MSI from Finder, bottle creation followed by setup). Each model owns one kind of state; none duplicates another's logic, and views observe only the properties they read.
+
+| Model | Owns |
+| --- | --- |
+| `NoticeModel` | The app-wide alert (`AppNotice`) and `report(_:title:)` |
+| [`LibraryModel`](../Sources/MagicWine/LibraryModel.swift) | Loaded bottles, loading state, selection, bottle creation, per-bottle icon revisions; `replace` is the single place a saved bottle from the core enters the UI |
+| [`RuntimeModel`](../Sources/MagicWine/RuntimeModel.swift) | Wine runtimes, app settings, preferred/custom Wine, Wine installation and per-bottle Wine update |
+| [`BottleActivityModel`](../Sources/MagicWine/BottleActivityModel.swift) | Per-bottle `BottleActivity`, `perform` (exclusive operations and their busy predicates), setup, installers, program list edits, launches and live logs, Stop, Trash, per-bottle errors and notices |
+| [`BottleSettingsModel`](../Sources/MagicWine/BottleSettingsModel.swift) | Graphics backend/component updates, Retina, MSync, HUD, compatibility switches, per-program launch options |
+| [`StorageCleanupModel`](../Sources/MagicWine/StorageCleanupModel.swift), [`DependenciesModel`](../Sources/MagicWine/DependenciesModel.swift) | Storage plan and removal; dependency status and installation |
+
+Models never present AppKit panels or touch Finder. Views ask for files through the window's single `fileImporter` ([`FileAccess.swift`](../Sources/MagicWine/FileAccess.swift): installer, program, D3DMetal folder, Wine executable), and pass the chosen URL to the model; Finder reveals are view helpers there too. [`GamepadService`](../Sources/MagicWineCore/GamepadService.swift) is observable as well, and only the gamepad subviews that draw live input read its 60 Hz `inputs`. Program icons reload only when their own bottle's record changes and keep the previous image until the new one is decoded.
 
 ## Persistent library
 

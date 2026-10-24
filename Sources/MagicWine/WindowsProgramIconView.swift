@@ -4,7 +4,8 @@ import MagicWineCore
 struct WindowsProgramIconView: View {
     let executablePath: String
     let prefix: URL
-    let revision: UUID
+    /// The bottle's `LibraryModel.iconRevision`; other bottles' changes do not reload this icon.
+    let revision: Int
     @State private var image: CGImage?
 
     private static let loader = WindowsProgramIconLoader()
@@ -12,7 +13,7 @@ struct WindowsProgramIconView: View {
     private struct Request: Equatable {
         let executablePath: String
         let prefix: URL
-        let revision: UUID
+        let revision: Int
     }
 
     var body: some View {
@@ -32,7 +33,8 @@ struct WindowsProgramIconView: View {
         .background(WineTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
         .accessibilityHidden(true)
         .task(id: Request(executablePath: executablePath, prefix: prefix, revision: revision)) {
-            image = nil
+            // The loader's cache is keyed by each icon source's size and modification date, so
+            // an unchanged file returns at once. Keep the shown image until the result arrives.
             let loaded = await Self.loader.image(for: URL(fileURLWithPath: executablePath), prefix: prefix)
             guard !Task.isCancelled else { return }
             image = loaded

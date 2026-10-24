@@ -3,25 +3,26 @@ import SwiftUI
 import MagicWineCore
 
 struct BottleDashboardView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     let bottle: Bottle
     let trash: () -> Void
     @State private var editingProgram: WindowsProgram?
     @State private var diagnosticProgram: WindowsProgram?
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.fileImport) private var fileImport
     @State private var showsDependencies = false
 
     private var currentBottle: Bottle {
-        model.bottles.first { $0.id == bottle.id } ?? bottle
+        model.library.current(bottle)
     }
 
-    private var activity: BottleActivity { model.activity(for: currentBottle) }
+    private var activity: BottleActivity { model.activity.activity(for: currentBottle) }
     private var prefixLocked: Bool { activity.blocksPrefixMutation }
     private var prefixOperationUnavailable: Bool { prefixLocked || !currentBottle.isInitialized }
     private var libraryEditUnavailable: Bool { activity.blocksLibraryEdit || !currentBottle.isInitialized }
     private var launchUnavailable: Bool { activity.blocksLaunch || !currentBottle.isInitialized }
     private var bottleURL: URL {
-        model.paths.bottlesDirectory.appendingPathComponent(currentBottle.id.uuidString, isDirectory: true)
+        model.library.bottleURL(for: currentBottle)
     }
     private var showsStop: Bool {
         activity.canStop || activity.hasRunningPrograms || activity.isStopping
@@ -67,7 +68,7 @@ struct BottleDashboardView: View {
             get: { diagnosticProgram != nil },
             set: { if !$0 { diagnosticProgram = nil } }
         ), presenting: diagnosticProgram) { program in
-            Button("Launch with Diagnostics") { model.launch(program, in: currentBottle, diagnostics: true) }
+            Button("Launch with Diagnostics") { model.activity.launch(program, in: currentBottle, diagnostics: true) }
                 .disabled(launchUnavailable)
             Button("Cancel", role: .cancel) { }
         } message: { _ in
@@ -161,21 +162,21 @@ struct BottleDashboardView: View {
 
     @ViewBuilder
     private var installerActions: some View {
-        Button { model.chooseInstaller(in: currentBottle) } label: {
+        Button { fileImport?(.installer(currentBottle)) } label: {
             Label("Install EXE/MSI", systemImage: "plus")
         }
         .buttonStyle(WineButtonStyle(prominent: true))
         .disabled(prefixOperationUnavailable)
         .help("Run a Windows EXE or MSI installer in this bottle")
 
-        Button { model.chooseProgram(in: currentBottle) } label: {
+        Button { fileImport?(.program(currentBottle)) } label: {
             Label("Add Program", systemImage: "app.badge")
         }
         .buttonStyle(WineButtonStyle())
         .disabled(libraryEditUnavailable)
         .help("Register an existing EXE, LNK, or URL shortcut without moving its file")
 
-        Button { model.refreshPrograms(in: currentBottle) } label: {
+        Button { model.activity.refreshPrograms(in: currentBottle) } label: {
             Label("Refresh", systemImage: "arrow.clockwise")
         }
         .buttonStyle(WineButtonStyle())
@@ -192,7 +193,7 @@ struct BottleDashboardView: View {
         .help("Show runtime and graphics settings")
 
         if showsStop {
-            Button { model.stop(currentBottle) } label: {
+            Button { model.activity.stop(currentBottle) } label: {
                 Label(activity.isStopping ? "Stopping…" : "Stop", systemImage: "stop.fill")
             }
             .buttonStyle(WineButtonStyle())
@@ -220,7 +221,7 @@ struct BottleDashboardView: View {
                     .font(.callout)
                     .foregroundStyle(WineTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
-                let live = model.liveLogs(for: currentBottle)
+                let live = model.activity.liveLogs(for: currentBottle)
                 if !live.isEmpty {
                     HStack(spacing: 8) {
                         ForEach(live) { log in
@@ -248,7 +249,7 @@ struct BottleDashboardView: View {
                         .textSelection(.enabled)
                     HStack(spacing: 9) {
                         Button("Show Log") { showLog(notice.logURL) }
-                        Button("Dismiss") { model.dismissNotice(notice.id, for: currentBottle) }
+                        Button("Dismiss") { model.activity.dismissNotice(notice.id, for: currentBottle) }
                     }
                     .buttonStyle(WineButtonStyle())
                 }
@@ -262,7 +263,7 @@ struct BottleDashboardView: View {
                         .font(.callout)
                         .foregroundStyle(WineTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Retry Setup") { model.initialize(currentBottle) }
+                    Button("Retry Setup") { model.activity.initialize(currentBottle) }
                         .buttonStyle(WineButtonStyle(prominent: true))
                         .disabled(prefixLocked)
                 }
@@ -370,7 +371,7 @@ struct BottleDashboardView: View {
             WindowsProgramIconView(
                 executablePath: program.executablePath,
                 prefix: bottleURL.appendingPathComponent("prefix", isDirectory: true),
-                revision: model.programIconRevision
+                revision: model.library.iconRevision(for: currentBottle.id)
             )
             VStack(alignment: .leading, spacing: 4) {
                 Text(program.name)
@@ -386,7 +387,7 @@ struct BottleDashboardView: View {
                     .help(program.executablePath)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button { model.launch(program, in: currentBottle) } label: {
+            Button { model.activity.launch(program, in: currentBottle) } label: {
                 Text("Launch")
                     .font(.system(size: 14, weight: .semibold))
                     .frame(minWidth: 64, minHeight: 28)
@@ -400,7 +401,7 @@ struct BottleDashboardView: View {
                     .disabled(launchUnavailable)
                 runningLogButton(program)
                 Button("Remove from MagicWine", role: .destructive) {
-                    model.removeProgram(program, in: currentBottle)
+                    model.activity.removeProgram(program, in: currentBottle)
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -414,7 +415,7 @@ struct BottleDashboardView: View {
         }
         .padding(.vertical, 10)
         .contextMenu {
-            Button("Launch") { model.launch(program, in: currentBottle) }
+            Button("Launch") { model.activity.launch(program, in: currentBottle) }
                 .disabled(launchUnavailable)
             Button("Launch with Diagnostics…") { diagnosticProgram = program }
                 .disabled(launchUnavailable)
@@ -422,7 +423,7 @@ struct BottleDashboardView: View {
                 .disabled(activity.blocksLibraryEdit)
             runningLogButton(program)
             Button("Remove from MagicWine", role: .destructive) {
-                model.removeProgram(program, in: currentBottle)
+                model.activity.removeProgram(program, in: currentBottle)
             }
             .disabled(activity.blocksLibraryEdit)
         }
@@ -448,7 +449,7 @@ struct BottleDashboardView: View {
                 }
                 rowSeparator
                 GraphicsSettingsView(model: model, bottle: currentBottle)
-                Button { model.configure(currentBottle) } label: {
+                Button { model.activity.configure(currentBottle) } label: {
                     Label("Configure Runtime", systemImage: "gearshape")
                         .frame(maxWidth: .infinity)
                 }
@@ -474,7 +475,7 @@ struct BottleDashboardView: View {
     private var tools: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                toolButton("Reveal C: Drive", icon: "internaldrive") { model.revealDrive(currentBottle) }
+                toolButton("Reveal C: Drive", icon: "internaldrive") { Finder.reveal(model.library.driveURL(for: currentBottle)) }
                     .disabled(!currentBottle.isInitialized)
                     .help("Reveal this bottle’s Windows drive in Finder")
                 toolButton("Logs…", icon: "doc.text") { showLogs() }
@@ -503,7 +504,7 @@ struct BottleDashboardView: View {
     /// The newest running launch of `program`, if any.
     @ViewBuilder
     private func runningLogButton(_ program: WindowsProgram) -> some View {
-        if let log = model.liveLogs(for: currentBottle).last(where: { $0.programID == program.id }) {
+        if let log = model.activity.liveLogs(for: currentBottle).last(where: { $0.programID == program.id }) {
             Button("Show Running Log") { showLog(log.url) }
         }
     }

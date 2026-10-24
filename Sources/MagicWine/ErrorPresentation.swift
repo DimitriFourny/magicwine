@@ -37,13 +37,13 @@ extension AppNotice {
 /// A failed bottle operation: what happened, what may fix it, its log, and buttons for
 /// the recovery actions this app can perform for the bottle as it is now.
 struct OperationErrorCard: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     let bottle: Bottle
     let error: PresentedError
     @Environment(\.openWindow) private var openWindow
     @State private var confirmsComponentUpdate = false
 
-    private var activity: BottleActivity { model.activity(for: bottle) }
+    private var activity: BottleActivity { model.activity.activity(for: bottle) }
     private var actions: [RecoveryAction] { error.actions.filter { $0.isAvailable(for: bottle) } }
 
     var body: some View {
@@ -69,17 +69,17 @@ struct OperationErrorCard: View {
                     ForEach(actions, id: \.self) { action in
                         actionButton(action)
                     }
-                    Button("Dismiss") { model.dismissError(for: bottle) }
+                    Button("Dismiss") { model.activity.dismissError(for: bottle) }
                 }
                 .buttonStyle(WineButtonStyle())
                 // The existing Update Wine entry point, with its unsigned-runtime confirmation.
-                if actions.contains(.updateWine), model.canUpgradeRuntime(bottle) {
+                if actions.contains(.updateWine), model.runtimes.canUpgradeRuntime(bottle) {
                     WineInstallationView(model: model, bottle: bottle)
                 }
             }
         }
         .alert("Update \(bottle.graphics.backend.displayName) component?", isPresented: $confirmsComponentUpdate) {
-            Button("Update") { model.updateGraphicsComponent(in: bottle) }
+            Button("Update") { model.bottleSettings.updateGraphicsComponent(in: bottle) }
                 .disabled(activity.blocksPrefixMutation)
             Button("Cancel", role: .cancel) { }
         } message: {
@@ -92,23 +92,23 @@ struct OperationErrorCard: View {
     private func actionButton(_ action: RecoveryAction) -> some View {
         switch action {
         case .stopBottle:
-            Button("Stop") { model.stop(bottle) }
+            Button("Stop") { model.activity.stop(bottle) }
                 .disabled(activity.isStopping || activity.graphicsSetupID != nil)
         case .retrySetup:
-            Button("Retry Setup") { model.initialize(bottle) }
+            Button("Retry Setup") { model.activity.initialize(bottle) }
                 .disabled(activity.blocksPrefixMutation)
         case .restoreStandardGraphics:
-            Button("Restore Standard Graphics") { model.setGraphics(.standard, in: bottle) }
-                .disabled(model.isLoading || activity.blocksPrefixMutation)
+            Button("Restore Standard Graphics") { model.bottleSettings.setGraphics(.standard, in: bottle) }
+                .disabled(model.library.isLoading || activity.blocksPrefixMutation)
         case .updateGraphicsComponent:
             Button("Update Component…") { confirmsComponentUpdate = true }
-                .disabled(model.isLoading || activity.blocksPrefixMutation)
+                .disabled(model.library.isLoading || activity.blocksPrefixMutation)
         case .chooseWine:
             Button("New Bottle with Other Wine…") { model.showsNewBottle = true }
-                .disabled(model.isLoading)
+                .disabled(model.library.isLoading)
         case .reload:
             Button("Reload") { model.refreshBottles() }
-                .disabled(model.isLoading || activity.blocksLibraryEdit)
+                .disabled(model.library.isLoading || activity.blocksLibraryEdit)
         case .showLog, .updateWine, .installRosetta, .giveConsent, .retry:
             EmptyView()
         }

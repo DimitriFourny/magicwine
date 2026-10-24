@@ -2,7 +2,7 @@ import SwiftUI
 import MagicWineCore
 
 struct GraphicsSettingsView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     let bottle: Bottle
     private struct Selection {
         let backend: GraphicsBackend
@@ -11,18 +11,21 @@ struct GraphicsSettingsView: View {
 
     @State private var pendingSelection: Selection?
     @State private var pendingUpdate: Bottle?
+    @Environment(\.fileImport) private var fileImport
+
+    private var settings: BottleSettingsModel { model.bottleSettings }
 
     private var currentBottle: Bottle {
-        model.bottles.first { $0.id == bottle.id } ?? bottle
+        model.library.current(bottle)
     }
 
-    private var state: BottleActivity { model.activity(for: currentBottle) }
+    private var state: BottleActivity { model.activity.activity(for: currentBottle) }
     private var unavailable: Bool {
-        model.isLoading || state.blocksPrefixMutation || !currentBottle.isInitialized
+        model.library.isLoading || state.blocksPrefixMutation || !currentBottle.isInitialized
     }
 
     private var synchronizationUnavailable: Bool {
-        model.isLoading || state.blocksPrefixMutation
+        model.library.isLoading || state.blocksPrefixMutation
     }
 
     static func backendNotice(_ backend: GraphicsBackend) -> String {
@@ -34,7 +37,7 @@ struct GraphicsSettingsView: View {
         }
     }
 
-    /// The consent shown before `AppModel.updateGraphicsComponent(in:)`.
+    /// The consent shown before `BottleSettingsModel.updateGraphicsComponent(in:)`.
     static func componentUpdateMessage(for bottle: Bottle) -> String {
         backendNotice(bottle.graphics.backend) + "\n\nUpdating stops this bottle’s Windows processes, then replaces its \(bottle.graphics.backend.displayName) files in one recoverable step. Choose Standard at any time to restore its original graphics files."
     }
@@ -61,7 +64,7 @@ struct GraphicsSettingsView: View {
                             if backend != .standard {
                                 pendingSelection = Selection(backend: backend, bottle: currentBottle)
                             } else {
-                                model.setGraphics(.standard, in: currentBottle)
+                                settings.setGraphics(.standard, in: currentBottle)
                             }
                         } label: {
                             if backend == currentBottle.graphics.backend {
@@ -114,7 +117,7 @@ struct GraphicsSettingsView: View {
                     .disabled(unavailable)
                 }
                 // HUD is launch-time only, so it stays available while programs run.
-                let hudUnavailable = model.isLoading || state.blocksLibraryEdit || state.isChangingHUD ||
+                let hudUnavailable = model.library.isLoading || state.blocksLibraryEdit || state.isChangingHUD ||
                     !currentBottle.isInitialized || !currentBottle.graphics.usesSupportedComponent
                 HStack(spacing: 6) {
                     Text("Show Graphics HUD")
@@ -125,7 +128,7 @@ struct GraphicsSettingsView: View {
                         get: { currentBottle.graphics.showHUD },
                         set: { showHUD in
                             guard !hudUnavailable else { return }
-                            model.setGraphicsHUD(showHUD, in: currentBottle)
+                            settings.setGraphicsHUD(showHUD, in: currentBottle)
                         }
                     ))
                     .labelsHidden()
@@ -144,7 +147,7 @@ struct GraphicsSettingsView: View {
                     get: { currentBottle.display.retinaEnabled },
                     set: { enabled in
                         guard !unavailable else { return }
-                        model.setRetinaEnabled(enabled, in: currentBottle)
+                        settings.setRetinaEnabled(enabled, in: currentBottle)
                     }
                 ))
                 .labelsHidden()
@@ -158,18 +161,18 @@ struct GraphicsSettingsView: View {
                                    message: "MSync uses macOS synchronization to reduce Wine server overhead. It works with every graphics backend. Turn it off to use Wine server synchronization. Close Windows programs or use Stop before changing it.")
                 Spacer(minLength: 12)
                 Toggle("MSync", isOn: Binding(
-                    get: { model.supportsMSync(currentBottle) && currentBottle.msyncEnabled },
+                    get: { model.runtimes.supportsMSync(currentBottle) && currentBottle.msyncEnabled },
                     set: { enabled in
-                        guard !synchronizationUnavailable, model.supportsMSync(currentBottle) else { return }
-                        model.setMSyncEnabled(enabled, in: currentBottle)
+                        guard !synchronizationUnavailable, model.runtimes.supportsMSync(currentBottle) else { return }
+                        settings.setMSyncEnabled(enabled, in: currentBottle)
                     }
                 ))
                 .labelsHidden()
-                .disabled(synchronizationUnavailable || !model.supportsMSync(currentBottle))
+                .disabled(synchronizationUnavailable || !model.runtimes.supportsMSync(currentBottle))
             }
             .padding(.vertical, 4)
-            if !model.supportsMSync(currentBottle) {
-                if model.canUpgradeRuntime(currentBottle) {
+            if !model.runtimes.supportsMSync(currentBottle) {
+                if model.runtimes.canUpgradeRuntime(currentBottle) {
                     Text("Update this bottle’s Wine to enable MSync. Downloads Wine if needed, then switches only this bottle; its files and settings are kept. Close Windows programs or use Stop first.")
                         .font(.callout)
                         .foregroundStyle(WineTheme.muted)
@@ -227,10 +230,10 @@ struct GraphicsSettingsView: View {
                ), presenting: pendingSelection) { selection in
             Button("Enable \(selection.backend.displayName)") {
                 if selection.backend == .d3dmetal {
-                    model.importD3DMetal(in: selection.bottle)
+                    settings.importD3DMetal(in: selection.bottle) { fileImport?(.d3dMetalFolder($0)) }
                 } else {
-                    model.setGraphics(selection.backend, in: selection.bottle,
-                                      showHUD: selection.bottle.graphics.showHUD)
+                    settings.setGraphics(selection.backend, in: selection.bottle,
+                                         showHUD: selection.bottle.graphics.showHUD)
                 }
             }
             .disabled(unavailable)
@@ -244,7 +247,7 @@ struct GraphicsSettingsView: View {
                    set: { if !$0 { pendingUpdate = nil } }
                ), presenting: pendingUpdate) { bottle in
             Button("Update") {
-                model.updateGraphicsComponent(in: bottle)
+                settings.updateGraphicsComponent(in: bottle)
             }
             .disabled(unavailable)
             Button("Cancel", role: .cancel) { }
@@ -257,9 +260,9 @@ struct GraphicsSettingsView: View {
     @ViewBuilder
     private var compatibilitySwitches: some View {
         let options = currentBottle.compatibility
-        let switchesUnavailable = model.isLoading || state.blocksLibraryEdit ||
-            model.changingCompatibility.contains(currentBottle.id)
-        let avx = model.rosettaAVXAvailability(currentBottle)
+        let switchesUnavailable = model.library.isLoading || state.blocksLibraryEdit ||
+            settings.changingCompatibility.contains(currentBottle.id)
+        let avx = settings.rosettaAVXAvailability(currentBottle)
         HStack(spacing: 6) {
             Text("Advertise AVX to Rosetta")
             SettingsInfoButton(title: "Advertise AVX to Rosetta",
@@ -270,7 +273,7 @@ struct GraphicsSettingsView: View {
                 set: { enabled in
                     var updated = options
                     updated.advertiseAVX = enabled
-                    model.setCompatibility(updated, in: currentBottle)
+                    settings.setCompatibility(updated, in: currentBottle)
                 }
             ))
             .labelsHidden()
@@ -293,7 +296,7 @@ struct GraphicsSettingsView: View {
                 set: { level in
                     var updated = options
                     updated.wineDebug = level
-                    model.setCompatibility(updated, in: currentBottle)
+                    settings.setCompatibility(updated, in: currentBottle)
                 }
             )) {
                 ForEach(CompatibilityOptions.WineDebug.allCases, id: \.self) { Text($0.displayName).tag($0) }
@@ -312,7 +315,7 @@ struct GraphicsSettingsView: View {
                 set: { preset in
                     var updated = options
                     updated.dxvkHUD = preset
-                    model.setCompatibility(updated, in: currentBottle)
+                    settings.setCompatibility(updated, in: currentBottle)
                 }
             )) {
                 ForEach(CompatibilityOptions.DXVKHUD.allCases, id: \.self) { Text($0.displayName).tag($0) }

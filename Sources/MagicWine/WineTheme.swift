@@ -109,10 +109,10 @@ struct WineCard<Content: View>: View {
 }
 
 struct WineStatus: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     let bottle: Bottle
 
-    private var state: BottleActivity { model.activity(for: bottle) }
+    private var state: BottleActivity { model.activity.activity(for: bottle) }
     private var title: String {
         if state.isStopping { return "Stopping…" }
         if state.title != nil { return "Busy" }

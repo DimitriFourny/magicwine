@@ -6,14 +6,14 @@ import MagicWineCore
 struct BottleLogsView: View {
     static let windowID = "bottle-logs"
 
-    @ObservedObject var model: AppModel
+    let model: AppModel
     let bottleID: UUID
     @Environment(\.openWindow) private var openWindow
     @State private var entries: [ProcessLogEntry] = []
     @State private var selected: URL?
 
     private var bottleName: String {
-        model.bottles.first { $0.id == bottleID }?.name ?? "Deleted bottle"
+        model.library.bottles.first { $0.id == bottleID }?.name ?? "Deleted bottle"
     }
 
     var body: some View {
@@ -26,7 +26,7 @@ struct BottleLogsView: View {
                 Button("Refresh") { reload() }
                 Button("Show Log") { if let selected { openWindow(id: LogViewerView.windowID, value: selected) } }
                     .disabled(selected == nil)
-                Button("Reveal Folder") { model.revealLogsFolder(for: bottleID) }
+                Button("Reveal Folder") { Finder.revealLogs(forBottle: bottleID, paths: model.paths) }
             }
             .buttonStyle(WineButtonStyle())
             .padding(12)
@@ -58,7 +58,7 @@ struct BottleLogsView: View {
             .contextMenu(forSelectionType: URL.self) { urls in
                 if let url = urls.first {
                     Button("Show Log") { openWindow(id: LogViewerView.windowID, value: url) }
-                    Button("Reveal in Finder") { model.revealLog(url) }
+                    Button("Reveal in Finder") { Finder.reveal(url) }
                 }
             } primaryAction: { urls in
                 if let url = urls.first { openWindow(id: LogViewerView.windowID, value: url) }

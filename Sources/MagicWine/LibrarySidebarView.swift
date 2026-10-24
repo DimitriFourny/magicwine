@@ -10,7 +10,7 @@ enum LibraryDestination: Equatable {
 }
 
 struct LibrarySidebarView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     @Binding var destination: LibraryDestination
     @Binding var search: String
     let trash: (Bottle) -> Void
@@ -20,8 +20,8 @@ struct LibrarySidebarView: View {
     @Environment(\.openWindow) private var openWindow
 
     private var filteredBottles: [Bottle] {
-        guard !search.isEmpty else { return model.bottles }
-        return model.bottles.filter { $0.name.localizedStandardContains(search) }
+        guard !search.isEmpty else { return model.library.bottles }
+        return model.library.bottles.filter { $0.name.localizedStandardContains(search) }
     }
 
     private static let appVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
@@ -46,14 +46,14 @@ struct LibrarySidebarView: View {
                         .foregroundStyle(WineTheme.muted)
                     Spacer()
                     Button {
-                        guard !model.isLoading else { return }
+                        guard !model.library.isLoading else { return }
                         model.showsNewBottle = true
                     } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 14, weight: .medium))
                     }
                     .buttonStyle(WineButtonStyle())
-                    .disabled(model.isLoading)
+                    .disabled(model.library.isLoading)
                     .help("Create a bottle")
                     .accessibilityLabel("Create a bottle")
                 }
@@ -62,7 +62,7 @@ struct LibrarySidebarView: View {
 
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        if model.bottles.isEmpty {
+                        if model.library.bottles.isEmpty {
                             emptyLibrary
                         } else if bottles.isEmpty {
                             emptySearch
@@ -85,7 +85,7 @@ struct LibrarySidebarView: View {
                 VStack(spacing: 4) {
                     navigationRow("Gamepads", icon: "gamecontroller", target: .gamepads)
                     navigationRow("Downloads", icon: "arrow.down.to.line", target: .downloads,
-                                  active: model.runtimeActivity != nil)
+                                  active: model.runtimes.activity != nil)
                     navigationRow("Settings", icon: "gearshape", target: .settings)
                     navigationRow("Documentation", icon: "book", target: .documentation)
                 }
@@ -158,11 +158,11 @@ struct LibrarySidebarView: View {
     }
 
     private func bottleRow(_ bottle: Bottle) -> some View {
-        let activity = model.activity(for: bottle)
+        let activity = model.activity.activity(for: bottle)
         let busy = activity.blocksPrefixMutation
-        let selected = destination == .bottles && model.selectedBottleID == bottle.id
+        let selected = destination == .bottles && model.library.selectedBottleID == bottle.id
         return Button {
-            model.selectedBottleID = bottle.id
+            model.library.selectedBottleID = bottle.id
             destination = .bottles
         } label: {
             HStack(spacing: 14) {
@@ -206,7 +206,7 @@ struct LibrarySidebarView: View {
         .contextMenu {
             Button("Show Logs…") { openWindow(id: BottleLogsView.windowID, value: bottle.id) }
             Button("Move Bottle to Trash…", role: .destructive) {
-                let current = model.activity(for: bottle)
+                let current = model.activity.activity(for: bottle)
                 guard !current.blocksPrefixMutation else { return }
                 trash(bottle)
             }
@@ -258,7 +258,7 @@ struct LibrarySidebarView: View {
 
     private var emptyLibrary: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if model.isLoading {
+            if model.library.isLoading {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Loading bottles…")

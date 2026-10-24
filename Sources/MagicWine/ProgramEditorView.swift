@@ -5,7 +5,7 @@ import MagicWineCore
 /// Edits a saved program's name and launch options. Metadata only: allowed while
 /// programs run; the next launch of this program uses the saved options.
 struct ProgramEditorView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     let bottle: Bottle
     let original: WindowsProgram
     @Environment(\.dismiss) private var dismiss
@@ -134,7 +134,7 @@ struct ProgramEditorView: View {
                 if isSaving { ProgressView().controlSize(.small) }
                 Button("Save", action: save)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(isSaving || (try? edited.get()) == nil || model.activity(for: bottle).blocksLibraryEdit)
+                    .disabled(isSaving || (try? edited.get()) == nil || model.activity.activity(for: bottle).blocksLibraryEdit)
             }
         }
         .padding(24)
@@ -234,7 +234,7 @@ struct ProgramEditorView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            if case .unavailable(let reason) = model.rosettaAVXAvailability(bottle) {
+            if case .unavailable(let reason) = model.bottleSettings.rosettaAVXAvailability(bottle) {
                 hint(reason)
             } else {
                 hint("Sets ROSETTA_ADVERTISE_AVX=1 for this program so x86_64 games that require AVX can start under Rosetta 2.")
@@ -297,7 +297,7 @@ struct ProgramEditorView: View {
         error = nil
         Task {
             do {
-                try await model.saveProgram(program, from: original, in: bottle)
+                try await model.bottleSettings.saveProgram(program, from: original, in: bottle)
                 dismiss()
             } catch {
                 self.error = error.localizedDescription

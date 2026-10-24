@@ -6,7 +6,9 @@ import MagicWineCore
 @MainActor
 struct GamepadView: View {
     let paths: ApplicationPaths
-    @ObservedObject private var service = GamepadService.shared
+    /// Read only for devices and errors here; live input is read by `GamepadLiveDiagram`
+    /// and `GamepadLiveInputCard`, so the 60 Hz input updates re-render only those.
+    private let service = GamepadService.shared
     @State private var configuration = GamepadConfiguration()
     @State private var savedConfiguration: GamepadConfiguration?
     @State private var loaded = false
@@ -24,14 +26,6 @@ struct GamepadView: View {
     private var dirty: Bool { loaded && configuration != savedConfiguration }
     private var device: GamepadDevice? {
         service.devices.first { $0.id == selectedDeviceID }
-    }
-    private var rawInput: GamepadInput {
-        guard let device else { return GamepadInput() }
-        return service.inputs[device.id] ?? GamepadInput()
-    }
-    private var previewInput: GamepadInput {
-        guard device != nil else { return GamepadInput() }
-        return profile.applying(to: rawInput)
     }
 
     var body: some View {
@@ -212,7 +206,7 @@ struct GamepadView: View {
                 .pickerStyle(.menu)
                 .accessibilityLabel("Controller to inspect")
             }
-            GamepadDiagram(input: rawInput, connected: device != nil)
+            GamepadLiveDiagram(deviceID: device?.id)
                 .aspectRatio(1.8, contentMode: .fit)
                 .frame(maxWidth: 620)
                 .frame(maxWidth: .infinity)
@@ -405,66 +399,14 @@ struct GamepadView: View {
     }
 
     private var liveInput: some View {
-        let input = previewInput
-        return WineCard(title: "Live Input Test", icon: "waveform.path.ecg", trailing: device == nil ? "Disconnected" : "Draft preview") {
-            if device == nil {
-                Text("No live input. Connect a controller to test your draft mappings and calibration.")
-                    .font(.callout).foregroundStyle(WineTheme.muted)
+        GamepadLiveInputCard(device: device, profile: profile, dirty: dirty)
+            .id("gamepad-live-input")
+            .focusable()
+            .focused($liveInputFocused)
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(liveInputFocused ? WineTheme.accent : .clear, lineWidth: 2)
             }
-            HStack(spacing: 18) {
-                GamepadStickPlot(title: "Left Stick", x: input.leftX, y: input.leftY,
-                                 deadZone: profile.leftDeadZone, connected: device != nil)
-                GamepadStickPlot(title: "Right Stick", x: input.rightX, y: input.rightY,
-                                 deadZone: profile.rightDeadZone, connected: device != nil)
-            }
-            .frame(maxWidth: 380)
-            .frame(maxWidth: .infinity)
-            triggerMeter("LT", value: input.leftTrigger)
-            triggerMeter("RT", value: input.rightTrigger)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 75), spacing: 8)], spacing: 8) {
-                ForEach(GamepadControl.inputs.filter { $0 != .leftTrigger && $0 != .rightTrigger }) { control in
-                    let active = device != nil && input.value(for: control) > 0
-                    HStack(spacing: 6) {
-                        Circle().fill(active ? WineTheme.accent : WineTheme.elevated)
-                            .frame(width: 8, height: 8)
-                            .overlay { Circle().strokeBorder(WineTheme.muted.opacity(0.4)) }
-                        Text(control.displayName).font(.system(size: 10, weight: .medium))
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(control.displayName)
-                    .accessibilityValue(device == nil ? "Disconnected" : active ? "Pressed" : "Released")
-                }
-            }
-            Text("Mapped output · \(profile.name)\(dirty ? " · Unsaved" : "")")
-                .font(.caption).foregroundStyle(WineTheme.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .id("gamepad-live-input")
-        .focusable()
-        .focused($liveInputFocused)
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(liveInputFocused ? WineTheme.accent : .clear, lineWidth: 2)
-        }
-    }
-
-    private func triggerMeter(_ title: String, value: Double) -> some View {
-        HStack(spacing: 10) {
-            Text(title).font(.system(size: 11, weight: .medium)).frame(width: 22)
-            GeometryReader { geometry in
-                Capsule().fill(WineTheme.elevated)
-                Capsule().fill(WineTheme.accent)
-                    .frame(width: geometry.size.width * min(1, max(0, value)))
-            }
-            .frame(height: 9)
-            Text(device == nil ? "—" : "\(Int((value * 100).rounded()))%")
-                .font(.system(size: 11)).monospacedDigit()
-                .frame(width: 36, alignment: .trailing)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title) trigger")
-        .accessibilityValue(device == nil ? "Disconnected" : "\(Int((value * 100).rounded())) percent")
     }
 
     private var profiles: some View {
@@ -678,5 +620,78 @@ struct GamepadView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+/// The controller diagram with the selected controller's physical input.
+private struct GamepadLiveDiagram: View {
+    let deviceID: UUID?
+
+    var body: some View {
+        let input = deviceID.flatMap { GamepadService.shared.inputs[$0] } ?? GamepadInput()
+        GamepadDiagram(input: input, connected: deviceID != nil)
+    }
+}
+
+/// The draft profile applied to the selected controller's live input.
+private struct GamepadLiveInputCard: View {
+    let device: GamepadDevice?
+    let profile: GamepadProfile
+    let dirty: Bool
+
+    var body: some View {
+        let input = device.map { profile.applying(to: GamepadService.shared.inputs[$0.id] ?? GamepadInput()) } ?? GamepadInput()
+        WineCard(title: "Live Input Test", icon: "waveform.path.ecg", trailing: device == nil ? "Disconnected" : "Draft preview") {
+            if device == nil {
+                Text("No live input. Connect a controller to test your draft mappings and calibration.")
+                    .font(.callout).foregroundStyle(WineTheme.muted)
+            }
+            HStack(spacing: 18) {
+                GamepadStickPlot(title: "Left Stick", x: input.leftX, y: input.leftY,
+                                 deadZone: profile.leftDeadZone, connected: device != nil)
+                GamepadStickPlot(title: "Right Stick", x: input.rightX, y: input.rightY,
+                                 deadZone: profile.rightDeadZone, connected: device != nil)
+            }
+            .frame(maxWidth: 380)
+            .frame(maxWidth: .infinity)
+            triggerMeter("LT", value: input.leftTrigger)
+            triggerMeter("RT", value: input.rightTrigger)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 75), spacing: 8)], spacing: 8) {
+                ForEach(GamepadControl.inputs.filter { $0 != .leftTrigger && $0 != .rightTrigger }) { control in
+                    let active = device != nil && input.value(for: control) > 0
+                    HStack(spacing: 6) {
+                        Circle().fill(active ? WineTheme.accent : WineTheme.elevated)
+                            .frame(width: 8, height: 8)
+                            .overlay { Circle().strokeBorder(WineTheme.muted.opacity(0.4)) }
+                        Text(control.displayName).font(.system(size: 10, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(control.displayName)
+                    .accessibilityValue(device == nil ? "Disconnected" : active ? "Pressed" : "Released")
+                }
+            }
+            Text("Mapped output · \(profile.name)\(dirty ? " · Unsaved" : "")")
+                .font(.caption).foregroundStyle(WineTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func triggerMeter(_ title: String, value: Double) -> some View {
+        HStack(spacing: 10) {
+            Text(title).font(.system(size: 11, weight: .medium)).frame(width: 22)
+            GeometryReader { geometry in
+                Capsule().fill(WineTheme.elevated)
+                Capsule().fill(WineTheme.accent)
+                    .frame(width: geometry.size.width * min(1, max(0, value)))
+            }
+            .frame(height: 9)
+            Text(device == nil ? "—" : "\(Int((value * 100).rounded()))%")
+                .font(.system(size: 11)).monospacedDigit()
+                .frame(width: 36, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title) trigger")
+        .accessibilityValue(device == nil ? "Disconnected" : "\(Int((value * 100).rounded())) percent")
     }
 }

@@ -4,14 +4,14 @@ import SwiftUI
 
 /// Curated Windows runtimes for one bottle, with status from their post-install checks.
 struct DependenciesView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     let bottle: Bottle
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
     @State private var confirmation: DependencyItem?
 
-    private var currentBottle: Bottle { model.bottles.first { $0.id == bottle.id } ?? bottle }
-    private var activity: BottleActivity { model.activity(for: currentBottle) }
+    private var currentBottle: Bottle { model.library.current(bottle) }
+    private var activity: BottleActivity { model.activity.activity(for: currentBottle) }
     private var installUnavailable: Bool { activity.blocksPrefixMutation || !currentBottle.isInitialized }
 
     var body: some View {
@@ -21,7 +21,7 @@ struct DependenciesView: View {
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             feedback
-            if let statuses = model.dependencyStatuses[bottle.id] {
+            if let statuses = model.dependencies.statuses[bottle.id] {
                 ScrollView {
                     VStack(spacing: 0) {
                         ForEach(statuses) { status in
@@ -42,12 +42,12 @@ struct DependenciesView: View {
             }
         }
         .padding(24).frame(width: 660)
-        .onAppear { model.refreshDependencies(in: currentBottle) }
+        .onAppear { model.dependencies.refresh(in: currentBottle) }
         .alert("Install \(confirmation?.name ?? "")?", isPresented: Binding(
             get: { confirmation != nil },
             set: { if !$0 { confirmation = nil } }
         ), presenting: confirmation) { item in
-            Button("Accept License and Install") { model.installDependencies([item.id], in: currentBottle) }
+            Button("Accept License and Install") { model.dependencies.install([item.id], in: currentBottle) }
                 .disabled(installUnavailable)
             Button("View License") { NSWorkspace.shared.open(item.license.url) }
             Button("Cancel", role: .cancel) { }
@@ -58,9 +58,9 @@ struct DependenciesView: View {
 
     @ViewBuilder
     private var feedback: some View {
-        if case .downloading(_, let progress)? = model.dependencyProgress[bottle.id] {
+        if case .downloading(_, let progress)? = model.dependencies.progress[bottle.id] {
             WineDownloadProgressView(progress: progress, title: activity.title ?? "Downloading…")
-        } else if model.dependencyProgress[bottle.id] != nil, let title = activity.title {
+        } else if model.dependencies.progress[bottle.id] != nil, let title = activity.title {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
                 Text(title).font(.callout)
@@ -70,7 +70,7 @@ struct DependenciesView: View {
                 }
             }
         }
-        if let error = model.dependencyErrors[bottle.id] {
+        if let error = model.dependencies.errors[bottle.id] {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Installation failed", systemImage: "exclamationmark.triangle").font(.headline)
                 Text(error).font(.callout).textSelection(.enabled)

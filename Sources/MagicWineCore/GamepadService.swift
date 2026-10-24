@@ -1,14 +1,17 @@
-import Combine
 import CoreHaptics
 import Foundation
 @preconcurrency import GameController
+import Observation
 
+/// Only `devices`, `inputs`, and `error` are observable: views that read `inputs` re-render
+/// at up to 60 Hz, views that only read `devices` change on connection and metadata updates.
+@Observable
 @MainActor
-public final class GamepadService: ObservableObject {
+public final class GamepadService {
     public static let shared = GamepadService()
-    @Published public private(set) var devices: [GamepadDevice] = []
-    @Published public private(set) var inputs: [UUID: GamepadInput] = [:]
-    @Published public private(set) var error: String?
+    public private(set) var devices: [GamepadDevice] = []
+    public private(set) var inputs: [UUID: GamepadInput] = [:]
+    public private(set) var error: String?
 
     @MainActor
     private final class Controller {
@@ -46,25 +49,26 @@ public final class GamepadService: ObservableObject {
         }
     }
 
-    private var controllers: [Controller] = []
-    private var sessions: [URL: Session] = [:]
-    private var observers: [NSObjectProtocol] = []
-    private var timer: DispatchSourceTimer?
-    private var activity: NSObjectProtocol?
-    private var slotDevices: [GamepadDevice?] = Array(repeating: nil, count: 4)
-    private var nextMetadataUpdate = 0.0
-    private var bluetoothReadings: [UUID: GamepadBluetoothBattery.Reading] = [:]
-    private var bluetoothBatterySchedule = GamepadBluetoothBattery.RefreshSchedule()
-    private var bluetoothBatteryUpdatePending = false
-    private var nextUIPublish = 0.0
-    private var inputsChanged = false
+    @ObservationIgnored private var controllers: [Controller] = []
+    @ObservationIgnored private var sessions: [URL: Session] = [:]
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    @ObservationIgnored private var timer: DispatchSourceTimer?
+    @ObservationIgnored private var activity: NSObjectProtocol?
+    @ObservationIgnored private var slotDevices: [GamepadDevice?] = Array(repeating: nil, count: 4)
+    @ObservationIgnored private var nextMetadataUpdate = 0.0
+    @ObservationIgnored private var bluetoothReadings: [UUID: GamepadBluetoothBattery.Reading] = [:]
+    @ObservationIgnored private var bluetoothBatterySchedule = GamepadBluetoothBattery.RefreshSchedule()
+    @ObservationIgnored private var bluetoothBatteryUpdatePending = false
+    @ObservationIgnored private var nextUIPublish = 0.0
+    @ObservationIgnored private var inputsChanged = false
 
     private init() {}
 
-    /// The singleton intentionally retains its observers, timer, and mapped sessions
-    /// for the lifetime of the hosting process, including when its UI is not frontmost.
+    /// The singleton intentionally retains its observers and mapped sessions for the
+    /// lifetime of the hosting process, including when its UI is not frontmost. The input
+    /// timer runs only while a controller is connected; see `updateTimer`.
     public func start() {
-        guard timer == nil else { return }
+        guard observers.isEmpty else { return }
         GCController.shouldMonitorBackgroundEvents = true
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -82,6 +86,21 @@ public final class GamepadService: ObservableObject {
         })
         synchronizeControllers()
         GCController.startWirelessControllerDiscovery(completionHandler: nil)
+    }
+
+    /// Polls at 8 ms while a controller is connected. Without one there is no input to read,
+    /// rumble to apply, or battery to refresh: every session has just been published with all
+    /// slots disconnected, and Windows readers treat the then-expiring heartbeat the same way.
+    /// A connection resumes polling; its first tick picks up profiles saved meanwhile.
+    private func updateTimer() {
+        if controllers.isEmpty {
+            timer?.cancel()
+            timer = nil
+            return
+        }
+        guard timer == nil else { return }
+        nextMetadataUpdate = 0
+        nextUIPublish = 0
         let source = DispatchSource.makeTimerSource(queue: .main)
         source.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .milliseconds(1))
         source.setEventHandler { [weak self] in
@@ -166,6 +185,7 @@ public final class GamepadService: ObservableObject {
             session.bridge.publish(inputs: session.processed, devices: slotDevices)
         }
         publishInputs()
+        updateTimer()
     }
 
     private func refreshMetadata() {
