@@ -105,10 +105,16 @@ private struct LibraryView: View {
         .sheet(isPresented: $model.showsNewBottle) {
             NewBottleView(model: model)
         }
-        .alert(item: $model.notice) { notice in
-            Alert(title: Text(notice.title), message: Text(notice.message),
-                  primaryButton: .default(Text("OK")),
-                  secondaryButton: .default(Text("Reveal Logs"), action: { model.revealLogs() }))
+        .alert(model.notice?.title ?? "", isPresented: Binding(
+            get: { model.notice != nil },
+            set: { if !$0 { model.notice = nil } }
+        ), presenting: model.notice) { notice in
+            Button("OK", role: .cancel) { }
+            if let log = notice.logURL {
+                Button("Reveal Log") { model.reveal(log) }
+            }
+        } message: { notice in
+            Text(notice.message)
         }
         .confirmationDialog("Move Bottle to Trash?", isPresented: Binding(
             get: { trashTarget != nil },

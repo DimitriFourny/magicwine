@@ -33,6 +33,8 @@ struct AppNotice: Identifiable {
     let id = UUID()
     let title: String
     let message: String
+    /// Log of the failed Wine operation, when there is one worth revealing.
+    var logURL: URL?
 }
 
 @MainActor
@@ -416,14 +418,9 @@ final class AppModel: ObservableObject {
         let state = activity(for: bottle)
         guard !state.blocksPrefixMutation, bottle.msyncEnabled != enabled else { return }
         perform(in: bottle, title: "Changing synchronization…") {
-            do {
-                let updated = try await self.wine.configureSynchronization(msyncEnabled: enabled, in: bottle)
-                self.replace(updated)
-                return nil
-            } catch {
-                self.report(error, title: "Could Not Change Synchronization")
-                throw error
-            }
+            let updated = try await self.wine.configureSynchronization(msyncEnabled: enabled, in: bottle)
+            self.replace(updated)
+            return nil
         }
     }
 
@@ -436,14 +433,9 @@ final class AppModel: ObservableObject {
         guard bottle.display.retinaEnabled != enabled || bottle.display.dpi != dpi else { return }
 
         perform(in: bottle, title: "Changing display settings…") {
-            do {
-                let updated = try await self.wine.configureDisplay(retinaEnabled: enabled, in: bottle)
-                self.replace(updated)
-                return nil
-            } catch {
-                self.report(error, title: "Could Not Change Display Settings")
-                throw error
-            }
+            let updated = try await self.wine.configureDisplay(retinaEnabled: enabled, in: bottle)
+            self.replace(updated)
+            return nil
         }
     }
 
@@ -463,22 +455,17 @@ final class AppModel: ObservableObject {
         state.graphicsProgress = .stopping
         activities[bottle.id] = state
         perform(in: bottle, title: "Stopping Windows processes…") { [self] in
-            do {
-                let updated = try await self.wine.configureGraphics(
-                    backend, in: bottle, showHUD: showHUD, acceptExperimental: backend != .standard,
-                    componentSource: componentSource
-                ) { [weak self] progress in
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self, self.activities[bottle.id]?.graphicsSetupID == setupID else { return }
-                        self.updateGraphicsProgress(progress, for: bottle.id)
-                    }
+            let updated = try await self.wine.configureGraphics(
+                backend, in: bottle, showHUD: showHUD, acceptExperimental: backend != .standard,
+                componentSource: componentSource
+            ) { [weak self] progress in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.activities[bottle.id]?.graphicsSetupID == setupID else { return }
+                    self.updateGraphicsProgress(progress, for: bottle.id)
                 }
-                self.replace(updated)
-                return nil
-            } catch {
-                self.report(error, title: "Could Not Change Graphics")
-                throw error
             }
+            self.replace(updated)
+            return nil
         }
     }
 
@@ -564,6 +551,10 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func reveal(_ log: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([log])
+    }
+
     func dismissError(for bottle: Bottle) {
         var state = activity(for: bottle)
         state.error = nil
@@ -628,7 +619,12 @@ final class AppModel: ObservableObject {
     }
 
     private func report(_ error: Error, title: String) {
-        notice = AppNotice(title: title, message: error.localizedDescription)
+        var logURL: URL?
+        switch error as? MagicWineError {
+        case .processFailed(_, let url), .stopped(let url): logURL = url
+        default: break
+        }
+        notice = AppNotice(title: title, message: error.localizedDescription, logURL: logURL)
     }
 
     private func chooseFile(title: String, message: String, extensions: [String]?,

@@ -4,6 +4,7 @@
 
 - Stop the gamepad bridge recipe from overwriting the pinned historical GPL XInput v1 payload with MIT license text: it now builds a new component identity (default `magicwine-xinput-v2`, `magicwine-xinput-v1` refused), writes a component-specific license name into gitignored `.local/gamepad-bridge-output/<component>/`, refuses existing output, and prints hashes plus adoption steps. Verified with `bash -n`, the v1/invalid/existing-output refusals, and a real MinGW build whose staged v2 hashes differ from, and left byte-identical, the checked-in v1 DLLs and GPL license.
 - Let Refresh, Add Program, Remove from MagicWine, and Reload Bottles run while Windows programs (for example Steam in the tray) are running, so new games can be picked up without stopping the client. Consolidate the repeated busy checks into `BottleActivity.blocksPrefixMutation`, `blocksLibraryEdit`, and `blocksLaunch`; graphics, MSync, Retina, installers, Wine update, winecfg, and Trash stay blocked while programs run. Library edits only touch bottle metadata under the bottle lock.
+- Report each bottle-operation failure once: MSync, Retina, and graphics failures now show only the inline Operation Failed card instead of an alert plus the card. Notices carry an optional log and the alert, migrated off the deprecated `Alert` API, offers Reveal Log (that file) only when one exists, so "Unsupported File" and "Choose a Bottle First" no longer open the log folder.
 
 ## Unreleased — 2026-10-14
 
