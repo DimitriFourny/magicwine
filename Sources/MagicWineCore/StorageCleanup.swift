@@ -82,7 +82,12 @@ public enum StorageCleanup {
         let store = BottleStore(paths: paths)
         try paths.prepare()
         let cleanupLock = try acquireCleanupLock(paths: paths)
-        defer { close(cleanupLock) }
+        // Unlock explicitly: a child forked by another thread can briefly share this
+        // descriptor until it execs, and close alone would keep the lock held meanwhile.
+        defer {
+            _ = flock(cleanupLock, LOCK_UN)
+            close(cleanupLock)
+        }
         let (bottles, leases) = try await idleBottles(store: store, paths: paths)
         defer { leases.forEach { $0.release() } }
         let fresh = try candidates(paths: paths, bottles: bottles, settings: try await store.settings())
