@@ -41,7 +41,7 @@ struct BottleSynchronizationTests {
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
             }
             store = BottleStore(paths: paths)
-            wine = WineRuntime(paths: paths)
+            wine = WineRuntime(paths: paths, store: store)
             bottle = try await store.create(name: "Synchronization", runtime: RuntimeDescriptor(executableURL: executable, version: "wine-11.0"))
         }
 

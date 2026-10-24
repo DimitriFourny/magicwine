@@ -47,7 +47,7 @@ struct LaunchTests {
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
             }
             store = BottleStore(paths: paths)
-            wine = WineRuntime(paths: paths)
+            wine = WineRuntime(paths: paths, store: store)
             var bottle = try await store.create(name: "Launch", runtime: RuntimeDescriptor(executableURL: executable, version: "wine-11.0"))
             let prefix = store.prefixURL(for: bottle)
             for folder in ["system32", "syswow64"] {
@@ -55,8 +55,7 @@ struct LaunchTests {
                                                         withIntermediateDirectories: true)
             }
             if initialized {
-                bottle.isInitialized = true
-                try await store.save(bottle)
+                bottle = try await store.markInitialized(bottle)
             }
             self.bottle = bottle
         }

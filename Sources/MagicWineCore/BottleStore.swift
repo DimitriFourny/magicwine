@@ -71,6 +71,9 @@ public actor BottleStore {
             guard bottle.runtime == current.runtime else {
                 throw MagicWineError.setup("The pinned runtime must be changed through WineRuntime.upgradeRuntime.")
             }
+            guard bottle.isInitialized == current.isInitialized else {
+                throw MagicWineError.setup("A bottle is marked initialized only by WineRuntime.initialize.")
+            }
             guard bottle.compatibility == current.compatibility else {
                 throw MagicWineError.setup("Compatibility settings must be changed through BottleStore.setCompatibility.")
             }
@@ -95,6 +98,19 @@ public actor BottleStore {
     internal func current(_ bottle: Bottle) throws -> Bottle {
         try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
             try loadUnlocked(bottle)
+        }
+    }
+
+    /// The only transition to `isInitialized`: WineRuntime has just created the prefix
+    /// registry. Applied to the saved bottle under its lock, so settings, programs and
+    /// pinned runtime another editor saved meanwhile are kept. Idempotent.
+    internal func markInitialized(_ bottle: Bottle) throws -> Bottle {
+        try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
+            var current = try loadUnlocked(bottle)
+            guard !current.isInitialized else { return current }
+            current.isInitialized = true
+            try saveUnlocked(current)
+            return current
         }
     }
 

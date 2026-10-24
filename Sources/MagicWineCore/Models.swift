@@ -170,6 +170,17 @@ public struct OperationResult: Sendable {
     }
 }
 
+/// A completed bottle setup: the persisted bottle (now `isInitialized`) and Wine's log.
+public struct BottleInitialization: Sendable {
+    public let bottle: Bottle
+    public let result: OperationResult
+
+    public init(bottle: Bottle, result: OperationResult) {
+        self.bottle = bottle
+        self.result = result
+    }
+}
+
 /// Delivered once, as soon as a Windows program's process has started; a game or
 /// launcher can then run for hours before its `OperationResult` arrives.
 public struct LaunchStart: Sendable {

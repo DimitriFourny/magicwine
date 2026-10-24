@@ -16,9 +16,11 @@ public actor WineRuntime {
     private var pendingLaunches: [UUID: [UUID: Task<GraphicsOperationLease, Error>]] = [:]
     private var installingGraphics: Set<GraphicsBackend> = []
 
-    public init(paths: ApplicationPaths) {
+    /// `store` is the library's single `BottleStore`; share it with every other owner
+    /// of the same `paths` so the store's actor serialization spans them all.
+    public init(paths: ApplicationPaths, store: BottleStore) {
         self.paths = paths
-        store = BottleStore(paths: paths)
+        self.store = store
     }
 
     /// Locates user-owned libraries without downloading or changing the bottle's Wine.
@@ -130,7 +132,9 @@ public actor WineRuntime {
         return try await inspect(executableURL: executable)
     }
 
-    public func initialize(_ bottle: Bottle) async throws -> OperationResult {
+    /// Creates the prefix and marks the bottle initialized. The returned bottle is the
+    /// persisted one: callers replace their copy with it instead of saving anything.
+    public func initialize(_ bottle: Bottle) async throws -> BottleInitialization {
         let deadline = Date().addingTimeInterval(180)
         let result = try await execute(arguments: ["wineboot", "-u"], bottle: bottle,
                                        directory: nil, timeout: 180)
@@ -146,7 +150,7 @@ public actor WineRuntime {
               FileManager.default.fileExists(atPath: prefix.appendingPathComponent("user.reg").path) else {
             throw MagicWineError.setup("Wine exited without creating the bottle registry. Setup log: \(result.logURL.path)")
         }
-        return result
+        return BottleInitialization(bottle: try await store.markInitialized(bottle), result: result)
     }
 
     public func install(_ installerURL: URL, in bottle: Bottle) async throws -> OperationResult {

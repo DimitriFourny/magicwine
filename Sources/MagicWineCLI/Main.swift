@@ -24,7 +24,7 @@ struct MagicWineCLI {
         if arguments.first == "--version" || arguments.first == "version" { print(versionDescription); return }
         let paths = ApplicationPaths(root: root)
         let store = BottleStore(paths: paths)
-        let runtime = WineRuntime(paths: paths)
+        let runtime = WineRuntime(paths: paths, store: store)
         guard let command = arguments.first else { print(usage); return }
         let values = Array(arguments.dropFirst())
         switch command {
@@ -54,23 +54,16 @@ struct MagicWineCLI {
         case "create":
             guard values.count == 2 else { throw argumentError("create <name> <wine-executable>") }
             let descriptor = try await runtime.inspect(executableURL: URL(fileURLWithPath: values[1]))
-            var bottle = try await store.create(name: values[0], runtime: descriptor)
+            let bottle = try await store.create(name: values[0], runtime: descriptor)
             print("Bottle: \(bottle.id)")
-            let result = try await runtime.initialize(bottle)
-            bottle.isInitialized = true
-            try await store.save(bottle)
-            print("Ready. Log: \(result.logURL.path)")
+            print("Ready. Log: \(try await runtime.initialize(bottle).result.logURL.path)")
         case "initialize", "install", "add", "refresh", "apps", "launch", "stop", "configure", "graphics", "retina", "synchronization", "exec":
             guard let identifier = values.first else { throw argumentError("\(command) <bottle-UUID> …") }
             let bottle = try await findBottle(identifier, store: store)
             let rest = Array(values.dropFirst())
             switch command {
             case "initialize":
-                let result = try await runtime.initialize(bottle)
-                var ready = bottle
-                ready.isInitialized = true
-                try await store.save(ready)
-                print("Ready. Log: \(result.logURL.path)")
+                print("Ready. Log: \(try await runtime.initialize(bottle).result.logURL.path)")
             case "install":
                 guard rest.count == 1 else { throw argumentError("install <bottle-UUID> <installer.exe|installer.msi>") }
                 let result = try await runtime.install(URL(fileURLWithPath: rest[0]), in: bottle)

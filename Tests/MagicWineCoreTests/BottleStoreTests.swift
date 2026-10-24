@@ -74,8 +74,7 @@ struct BottleStoreTests {
         #expect(bottle.name == "../Shared / Windows")
         #expect(store.prefixURL(for: bottle).deletingLastPathComponent().lastPathComponent == bottle.id.uuidString)
         #expect(store.prefixURL(for: bottle).deletingLastPathComponent().deletingLastPathComponent() == paths.bottlesDirectory)
-        bottle.isInitialized = true
-        try await store.save(bottle)
+        bottle = try await store.markInitialized(bottle)
         let reopened = BottleStore(paths: paths)
         let loaded = try await reopened.list()
         #expect(loaded == [bottle])

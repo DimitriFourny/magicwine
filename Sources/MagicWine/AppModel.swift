@@ -65,8 +65,9 @@ final class AppModel: ObservableObject {
 
     init(paths: ApplicationPaths = ApplicationPaths()) {
         self.paths = paths
-        store = BottleStore(paths: paths)
-        wine = WineRuntime(paths: paths)
+        let store = BottleStore(paths: paths)
+        self.store = store
+        wine = WineRuntime(paths: paths, store: store)
     }
 
     var selectedBottle: Bottle? {
@@ -303,12 +304,9 @@ final class AppModel: ObservableObject {
 
     func initialize(_ bottle: Bottle) {
         perform(in: bottle, title: "Setting up Windows environment…", canStop: true) {
-            let result = try await self.wine.initialize(bottle)
-            var updated = self.current(bottle)
-            updated.isInitialized = true
-            try await self.store.save(updated)
-            self.replace(updated)
-            return result
+            let initialization = try await self.wine.initialize(bottle)
+            self.replace(initialization.bottle)
+            return initialization.result
         }
     }
 

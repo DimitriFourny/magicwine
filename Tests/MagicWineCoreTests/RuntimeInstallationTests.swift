@@ -115,7 +115,7 @@ struct RuntimeInstallationTests {
     func obsoleteManagedPreferenceRequiresCurrentWine(currentInstalled: Bool) throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
-        let runtime = WineRuntime(paths: fixture.paths)
+        let runtime = WineRuntime(paths: fixture.paths, store: BottleStore(paths: fixture.paths))
         let current = descriptor(at: RuntimeInstallation.destination(paths: fixture.paths)
             .appendingPathComponent(RuntimeInstallation.relativeExecutable))
         let obsolete = descriptor(at: fixture.paths.runtimesDirectory
@@ -133,7 +133,7 @@ struct RuntimeInstallationTests {
     func explicitCustomPreferenceDoesNotSilentlySwitchWine(customAvailable: Bool) throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
-        let runtime = WineRuntime(paths: fixture.paths)
+        let runtime = WineRuntime(paths: fixture.paths, store: BottleStore(paths: fixture.paths))
         let current = descriptor(at: RuntimeInstallation.destination(paths: fixture.paths)
             .appendingPathComponent(RuntimeInstallation.relativeExecutable))
         // A sibling with the same prefix is not a managed installation.
@@ -303,7 +303,7 @@ struct RuntimeInstallationTests {
     @Test func refusingUnsignedInstallationDoesNotCreateApplicationRoot() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
-        let runtime = WineRuntime(paths: fixture.paths)
+        let runtime = WineRuntime(paths: fixture.paths, store: BottleStore(paths: fixture.paths))
 
         await #expect(throws: MagicWineError.self) {
             try await runtime.installRuntime(acceptUnsigned: false)
@@ -321,7 +321,7 @@ struct RuntimeInstallationTests {
         for entry in entries {
             try setAttribute(preservedName, value: preservedValue, on: entry)
         }
-        let runtime = WineRuntime(paths: fixture.paths)
+        let runtime = WineRuntime(paths: fixture.paths, store: BottleStore(paths: fixture.paths))
         let directoriesBefore = try FileManager.default.contentsOfDirectory(atPath: fixture.paths.runtimesDirectory.path)
 
         await #expect(throws: MagicWineError.self) {

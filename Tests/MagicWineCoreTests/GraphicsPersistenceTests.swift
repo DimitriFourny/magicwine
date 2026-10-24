@@ -31,8 +31,7 @@ struct GraphicsPersistenceTests {
             for directory in ["drive_c/windows/system32", "drive_c/windows/syswow64"] {
                 try FileManager.default.createDirectory(at: prefix.appendingPathComponent(directory), withIntermediateDirectories: true)
             }
-            bottle.isInitialized = true
-            try await store.save(bottle)
+            bottle = try await store.markInitialized(bottle)
         }
         let component = paths.componentsDirectory.appendingPathComponent("test-native-component")
         for architecture in ["x32", "x64"] {
