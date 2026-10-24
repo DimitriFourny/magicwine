@@ -15,6 +15,7 @@ struct BottleDashboardView: View {
     @AppStorage("programSort") private var programSort: ProgramSort = .name
     @Environment(\.openWindow) private var openWindow
     @Environment(\.fileImport) private var fileImport
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showsDependencies = false
     /// A drag is over the dashboard (EXE/MSI installers) or over its program list (EXE/LNK/URL).
     @State private var installTargeted = false
@@ -113,8 +114,7 @@ struct BottleDashboardView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(currentBottle.name)
-                        .font(.system(size: 26, weight: .medium, design: .serif))
+                    Text(currentBottle.name).font(WineTheme.Font.title)
                         .lineLimit(1)
                         .help(currentBottle.name)
                         .accessibilityAddTraits(.isHeader)
@@ -160,7 +160,7 @@ struct BottleDashboardView: View {
                                 startPoint: .leading, endPoint: .trailing
                             )
                         }
-                        .opacity(0.65)
+                        .opacity(WineTheme.artworkOpacity(colorScheme, dark: 0.65))
                         .accessibilityHidden(true)
                 }
             }
@@ -415,22 +415,19 @@ struct BottleDashboardView: View {
                         .lineLimit(1)
                         .help(program.name)
                     if activity.isRunning(program) {
-                        Text("Running")
-                            .font(.system(size: 11, weight: .medium))
+                        Text("Running").font(WineTheme.Font.small.weight(.medium))
                             .foregroundStyle(WineTheme.success)
                             .padding(.horizontal, 7).padding(.vertical, 2)
                             .background(WineTheme.success.opacity(0.12), in: Capsule())
                     }
                 }
-                Text(displayPath(program.executablePath))
-                    .font(.system(size: 12))
+                Text(displayPath(program.executablePath)).font(WineTheme.Font.callout)
                     .foregroundStyle(WineTheme.muted)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                     .help(program.executablePath)
-                Text(Self.history(of: program))
-                    .font(.system(size: 11))
+                Text(Self.history(of: program)).font(WineTheme.Font.small)
                     .foregroundStyle(WineTheme.muted)
                     .lineLimit(1)
             }
@@ -438,15 +435,14 @@ struct BottleDashboardView: View {
             .accessibilityElement(children: .combine)
             Button { model.bottleSettings.setFavorite(!program.isFavorite, for: program, in: currentBottle) } label: {
                 Image(systemName: program.isFavorite ? "star.fill" : "star")
-                    .foregroundStyle(program.isFavorite ? Color.yellow : WineTheme.muted)
+                    .foregroundStyle(program.isFavorite ? WineTheme.favorite : WineTheme.muted)
             }
             .buttonStyle(.borderless)
             .disabled(activity.blocksLibraryEdit)
             .accessibilityLabel(program.isFavorite ? "Remove \(program.name) from Favorites" : "Add \(program.name) to Favorites")
             .help(program.isFavorite ? "Remove from Favorites" : "Add to Favorites; favorites are listed first")
             Button { model.activity.launch(program, in: currentBottle) } label: {
-                Text("Launch")
-                    .font(.system(size: 14, weight: .semibold))
+                Text("Launch").font(WineTheme.Font.label)
                     .frame(minWidth: 64, minHeight: 28)
             }
             .buttonStyle(WineButtonStyle(prominent: true))
@@ -572,9 +568,8 @@ struct BottleDashboardView: View {
 
     private func toolButton(_ title: String, icon: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
         Button(role: destructive ? .destructive : nil, action: action) {
-            Label(title, systemImage: icon)
-                .font(.system(size: 12))
-                .foregroundStyle(destructive ? Color(red: 1, green: 0.42, blue: 0.56) : WineTheme.text)
+            Label(title, systemImage: icon).font(WineTheme.Font.callout)
+                .foregroundStyle(destructive ? WineTheme.danger : WineTheme.text)
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(WineButtonStyle())

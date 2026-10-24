@@ -79,7 +79,7 @@ struct GraphicsSettingsView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.visible)
-                .font(.system(size: 13, weight: .medium))
+                .font(WineTheme.Font.label)
                 .tint(WineTheme.text)
                 .frame(width: 156, height: 36)
                 .padding(.horizontal, 12)

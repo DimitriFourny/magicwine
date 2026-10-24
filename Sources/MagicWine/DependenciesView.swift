@@ -81,7 +81,7 @@ struct DependenciesView: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.red.opacity(0.12)))
+            .background(RoundedRectangle(cornerRadius: 8).fill(WineTheme.danger.opacity(0.12)))
         }
     }
 
@@ -98,14 +98,14 @@ struct DependenciesView: View {
                 Link(item.license.name, destination: item.license.url).font(.caption)
                 if status.isPartial {
                     Text("Incomplete: \(status.missing.prefix(3).joined(separator: ", "))\(status.missing.count > 3 ? ", …" : "")")
-                        .font(.caption).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(WineTheme.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if status.isInstalled {
                 Label("Installed", systemImage: "checkmark.circle.fill")
-                    .font(.callout).foregroundStyle(.green)
+                    .font(.callout).foregroundStyle(WineTheme.success)
                     .help(status.record.map { "Installed by MagicWine on \($0.installedAt.formatted(date: .abbreviated, time: .shortened))" }
                           ?? "Already present in this bottle")
             } else {

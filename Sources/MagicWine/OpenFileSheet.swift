@@ -80,7 +80,7 @@ struct OpenFileSheet: View {
             }
             if let blockedReason {
                 Label(blockedReason, systemImage: "exclamationmark.triangle")
-                    .font(.callout).foregroundStyle(.orange)
+                    .font(.callout).foregroundStyle(WineTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {

@@ -47,7 +47,7 @@ struct StorageCleanupView: View {
                 ProgressView(activity).controlSize(.small)
             }
             if let error = storage.error {
-                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                Text(error).foregroundStyle(WineTheme.danger).textSelection(.enabled)
             }
             HStack {
                 Button(storage.plan == nil ? "Check Storage" : "Check Again") { storage.refresh() }
@@ -78,7 +78,7 @@ struct StorageCleanupView: View {
             Text(item.reason).font(.caption).foregroundStyle(.secondary)
             if item.requiresReimport {
                 Label("Re-import required to use D3DMetal again", systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(WineTheme.warning)
             }
         }
         .textSelection(.enabled)
@@ -96,7 +96,7 @@ struct StorageCleanupView: View {
                             Text(item.url.path).font(.caption.monospaced()).textSelection(.enabled)
                             Spacer()
                             Text(Self.size([item])).font(.caption)
-                            if item.requiresReimport { Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange) }
+                            if item.requiresReimport { Image(systemName: "exclamationmark.triangle").foregroundStyle(WineTheme.warning) }
                         }
                     }
                 }
@@ -104,7 +104,7 @@ struct StorageCleanupView: View {
             .frame(maxHeight: 280)
             if items.contains(where: \.requiresReimport) {
                 Text("Imported D3DMetal libraries cannot be restored by MagicWine; import them again before selecting D3DMetal.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(WineTheme.warning)
             }
             HStack {
                 Button("Cancel") { confirmation = nil }

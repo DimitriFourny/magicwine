@@ -57,17 +57,17 @@ struct GamepadDiagram: View {
         var glow = context
         glow.addFilter(.shadow(color: WineTheme.accent.opacity(0.35), radius: 10))
         glow.fill(body, with: .linearGradient(
-            Gradient(colors: [WineTheme.elevated, Color(red: 0.075, green: 0.065, blue: 0.085)]),
+            Gradient(colors: [WineTheme.elevated, WineTheme.well]),
             startPoint: CGPoint(x: 270, y: 60), endPoint: CGPoint(x: 270, y: 266)))
         context.stroke(body, with: .color(WineTheme.accent.opacity(0.8)), lineWidth: 1.4)
 
         stick(in: context, center: CGPoint(x: 166, y: 120), x: input.leftX, y: input.leftY, control: .leftThumb)
         stick(in: context, center: CGPoint(x: 324, y: 181), x: input.rightX, y: input.rightY, control: .rightThumb)
         dpad(in: context)
-        button(in: context, center: CGPoint(x: 381, y: 101), radius: 13, control: .y, color: .yellow, label: "Y")
-        button(in: context, center: CGPoint(x: 407, y: 127), radius: 13, control: .b, color: .red, label: "B")
-        button(in: context, center: CGPoint(x: 381, y: 153), radius: 13, control: .a, color: .green, label: "A")
-        button(in: context, center: CGPoint(x: 355, y: 127), radius: 13, control: .x, color: .blue, label: "X")
+        button(in: context, center: CGPoint(x: 381, y: 101), radius: 13, control: .y, color: WineTheme.buttonY, label: "Y")
+        button(in: context, center: CGPoint(x: 407, y: 127), radius: 13, control: .b, color: WineTheme.buttonB, label: "B")
+        button(in: context, center: CGPoint(x: 381, y: 153), radius: 13, control: .a, color: WineTheme.buttonA, label: "A")
+        button(in: context, center: CGPoint(x: 355, y: 127), radius: 13, control: .x, color: WineTheme.buttonX, label: "X")
         button(in: context, center: CGPoint(x: 245, y: 121), radius: 10, control: .back, color: WineTheme.muted, label: "−")
         button(in: context, center: CGPoint(x: 295, y: 121), radius: 10, control: .start, color: WineTheme.muted, label: "+")
         button(in: context, center: CGPoint(x: 270, y: 90), radius: 14, control: .guide, color: WineTheme.accent, label: "⌂")
@@ -129,7 +129,7 @@ struct GamepadDiagram: View {
             let shape = Path(roundedRect: rect, cornerRadius: 3)
             context.fill(shape, with: .color(isActive(control) ? WineTheme.accent : WineTheme.elevated))
             context.stroke(shape, with: .color(WineTheme.muted.opacity(0.25)), lineWidth: 1)
-            context.draw(Text(symbol).font(.system(size: 10)).foregroundColor(WineTheme.muted),
+            context.draw(Text(symbol).font(WineTheme.Font.caption).foregroundColor(WineTheme.muted),
                          at: CGPoint(x: rect.midX, y: rect.midY))
         }
         context.fill(Path(CGRect(x: 196, y: 177, width: 18, height: 18)), with: .color(WineTheme.elevated))
@@ -141,7 +141,7 @@ struct GamepadDiagram: View {
         context.fill(shape, with: .color(isActive(control) ? color.opacity(0.8) : WineTheme.background))
         context.stroke(shape, with: .color(color.opacity(0.6)), lineWidth: isActive(control) ? 2 : 1)
         context.draw(Text(label).font(.system(size: radius, weight: .semibold))
-            .foregroundColor(isActive(control) ? .white : color), at: center)
+            .foregroundColor(isActive(control) ? WineTheme.onAccent : color), at: center)
     }
 
     private func callout(in context: GraphicsContext, text: String, from: CGPoint, to: CGPoint) {
@@ -156,7 +156,7 @@ struct GamepadDiagram: View {
             line.addLine(to: CGPoint(x: endX, y: to.y))
         }
         context.stroke(line, with: .color(WineTheme.accent.opacity(0.6)), lineWidth: 0.8)
-        context.draw(Text(text).font(.system(size: 11, weight: .medium)).foregroundColor(WineTheme.muted), at: to)
+        context.draw(Text(text).font(WineTheme.Font.small.weight(.medium)).foregroundColor(WineTheme.muted), at: to)
     }
 
     private func isActive(_ control: GamepadControl) -> Bool {
@@ -173,7 +173,7 @@ struct GamepadStickPlot: View {
 
     var body: some View {
         VStack(spacing: 7) {
-            Text(title).font(.system(size: 11)).foregroundStyle(WineTheme.muted)
+            Text(title).font(WineTheme.Font.small).foregroundStyle(WineTheme.muted)
             Canvas { context, size in
                 let diameter = min(size.width, size.height) - 4
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -200,12 +200,11 @@ struct GamepadStickPlot: View {
                     let dot = Path(ellipseIn: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
                     context.addFilter(.shadow(color: WineTheme.accent.opacity(0.6), radius: 5))
                     context.fill(dot, with: .color(WineTheme.accent))
-                    context.stroke(dot, with: .color(Color.pink.opacity(0.8)), lineWidth: 1)
+                    context.stroke(dot, with: .color(WineTheme.accentGlyph.opacity(0.8)), lineWidth: 1)
                 }
             }
             .aspectRatio(1, contentMode: .fit)
-            Text(connected ? String(format: "X %+.2f  Y %+.2f", x, y) : "No input")
-                .font(.system(size: 10, design: .monospaced)).foregroundStyle(WineTheme.muted)
+            Text(connected ? String(format: "X %+.2f  Y %+.2f", x, y) : "No input").font(WineTheme.Font.monoCaption).foregroundStyle(WineTheme.muted)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)

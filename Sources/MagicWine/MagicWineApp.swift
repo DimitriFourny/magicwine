@@ -14,7 +14,6 @@ struct MagicWineApp: App {
             LibraryView(model: model)
                 .fileImportHost(model)
                 .frame(minWidth: 1000, minHeight: 720)
-                .preferredColorScheme(.dark)
                 .task { await model.start() }
         }
         .defaultSize(width: 1440, height: 960)
@@ -33,14 +32,12 @@ struct MagicWineApp: App {
                 .frame(width: 620)
                 .padding(24)
                 .background(WineTheme.background)
-                .preferredColorScheme(.dark)
                 .fileImportHost(model)
         }
 
         WindowGroup("Log", id: LogViewerView.windowID, for: URL.self) { $url in
             if let url {
                 LogViewerView(url: url)
-                    .preferredColorScheme(.dark)
             }
         }
         .defaultSize(width: 1000, height: 680)
@@ -48,7 +45,6 @@ struct MagicWineApp: App {
         WindowGroup("Bottle Logs", id: BottleLogsView.windowID, for: UUID.self) { $bottleID in
             if let bottleID {
                 BottleLogsView(model: model, bottleID: bottleID)
-                    .preferredColorScheme(.dark)
             }
         }
         .defaultSize(width: 760, height: 480)
@@ -280,7 +276,7 @@ private struct LibraryView: View {
     private var downloads: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Downloads").font(.system(size: 32, weight: .semibold, design: .serif))
+                Text("Downloads").font(WineTheme.Font.display)
                 Text("Install Wine for new bottles. To update an existing bottle, use Update Wine in its dashboard.")
                     .foregroundStyle(WineTheme.muted)
                 WineCard(title: "Wine Runtime", icon: "arrow.down.to.line") {
@@ -311,8 +307,7 @@ private struct LibraryView: View {
     private var documentation: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("A little bottled knowledge.")
-                    .font(.system(size: 32, weight: .semibold, design: .serif))
+                Text("A little bottled knowledge.").font(WineTheme.Font.display)
                 Text("Everything you need to get started.")
                     .foregroundStyle(WineTheme.muted)
                 WineCard(title: "Your First Windows Program", icon: "book") {
@@ -361,8 +356,7 @@ private struct WelcomeView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 20))
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Welcome to MagicWine")
-                            .font(.system(size: 34, weight: .regular, design: .serif))
+                        Text("Welcome to MagicWine").font(WineTheme.Font.display)
                         Text("Your Windows world, bottled.")
                             .foregroundStyle(WineTheme.muted)
                     }
@@ -457,7 +451,7 @@ private struct NewBottleView: View {
                 if model.library.isCreating { ProgressView("Creating bottle…") }
             }
             if let error = model.library.creationError {
-                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                Text(error).foregroundStyle(WineTheme.danger).textSelection(.enabled)
                 Button("Reveal Logs") { Finder.revealLibraryLogs(paths: model.paths) }
             }
             HStack {

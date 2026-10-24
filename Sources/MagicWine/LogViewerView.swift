@@ -59,8 +59,7 @@ struct LogViewerView: View {
                     get: { levels.contains(level) },
                     set: { if $0 { levels.insert(level) } else { levels.remove(level) } }
                 )) {
-                    Text("\(level.title) \(log.counts[level, default: 0])")
-                        .font(.system(size: 12))
+                    Text("\(level.title) \(log.counts[level, default: 0])").font(WineTheme.Font.callout)
                 }
                 .toggleStyle(.button)
                 .help(level.help)
@@ -92,7 +91,7 @@ struct LogViewerView: View {
                 .truncationMode(.head)
                 .textSelection(.enabled)
         }
-        .font(.system(size: 11))
+        .font(WineTheme.Font.small)
         .foregroundStyle(WineTheme.muted)
     }
 
@@ -124,10 +123,10 @@ extension ProcessLogLine.Level {
 
     var color: NSColor {
         switch self {
-        case .error: NSColor(red: 1, green: 0.45, blue: 0.5, alpha: 1)
-        case .warning: NSColor(red: 0.98, green: 0.78, blue: 0.4, alpha: 1)
-        case .fixme: NSColor(white: 0.62, alpha: 1)
-        case .other: NSColor(red: 0.96, green: 0.94, blue: 0.96, alpha: 1)
+        case .error: WinePalette.danger
+        case .warning: WinePalette.warning
+        case .fixme: WinePalette.logFixme
+        case .other: WinePalette.text
         }
     }
 }
@@ -240,10 +239,10 @@ private struct LogTextView: NSViewRepresentable {
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         textView.drawsBackground = true
-        textView.backgroundColor = NSColor(WineTheme.background)
+        textView.backgroundColor = WinePalette.background
         textView.textContainerInset = NSSize(width: 8, height: 8)
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = NSColor(WineTheme.background)
+        scrollView.backgroundColor = WinePalette.background
         return scrollView
     }
 

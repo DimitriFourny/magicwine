@@ -79,10 +79,8 @@ struct LibrarySidebarView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("MagicWine \(Self.appVersion)")
-                    .font(.system(size: 12, weight: .medium))
-                Text("Run Windows your way.")
-                    .font(.system(size: 12))
+                Text("MagicWine \(Self.appVersion)").font(WineTheme.Font.callout.weight(.medium))
+                Text("Run Windows your way.").font(WineTheme.Font.callout)
             }
             .foregroundStyle(WineTheme.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -99,13 +97,11 @@ struct LibrarySidebarView: View {
                 .frame(width: 40, height: 48)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
-                Text("MagicWine")
-                    .font(.system(size: 24, weight: .regular, design: .serif))
+                Text("MagicWine").font(WineTheme.Font.title)
                     .foregroundStyle(WineTheme.text)
                     .lineLimit(1)
                     .minimumScaleFactor(0.9)
-                Text("Windows games. Pure magic.")
-                    .font(.system(size: 10))
+                Text("Windows games. Pure magic.").font(WineTheme.Font.caption)
                     .foregroundStyle(WineTheme.muted)
                     .lineLimit(1)
                     .minimumScaleFactor(0.9)
@@ -117,12 +113,10 @@ struct LibrarySidebarView: View {
     private func bottleRow(_ bottle: Bottle) -> some View {
         let activity = model.activity.activity(for: bottle)
         return HStack(spacing: 12) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 18, weight: .light))
+            Image(systemName: "shippingbox").font(WineTheme.Font.iconRow)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 3) {
-                Text(bottle.name)
-                    .font(.system(size: 14))
+                Text(bottle.name).font(WineTheme.Font.body)
                     .lineLimit(1)
                 if activity.isStopping {
                     rowSubtitle("Stopping Windows processes…")
@@ -147,8 +141,7 @@ struct LibrarySidebarView: View {
     }
 
     private func rowSubtitle(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12))
+        Text(text).font(WineTheme.Font.callout)
             .foregroundStyle(WineTheme.muted)
             .lineLimit(1)
     }
@@ -156,10 +149,9 @@ struct LibrarySidebarView: View {
     private func destinationRow(_ title: String, icon: String, target: LibraryDestination,
                                 active: Bool = false) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .light))
+            Image(systemName: icon).font(WineTheme.Font.iconRow)
                 .frame(width: 24)
-            Text(title).font(.system(size: 14))
+            Text(title).font(WineTheme.Font.body)
             Spacer(minLength: 0)
             if active {
                 Circle().fill(WineTheme.success).frame(width: 6, height: 6)
@@ -183,7 +175,7 @@ struct LibrarySidebarView: View {
                 Text("Create a bottle to start your Windows library.")
             }
         }
-        .font(.system(size: 12))
+        .font(WineTheme.Font.callout)
         .foregroundStyle(WineTheme.muted)
         .padding(.vertical, 6)
     }
@@ -193,7 +185,7 @@ struct LibrarySidebarView: View {
             Text("No matching bottles or programs").foregroundStyle(WineTheme.text)
             Text("Try another name or clear the search.")
         }
-        .font(.system(size: 12))
+        .font(WineTheme.Font.callout)
         .foregroundStyle(WineTheme.muted)
         .padding(.vertical, 6)
     }

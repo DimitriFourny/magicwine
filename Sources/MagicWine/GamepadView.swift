@@ -20,6 +20,7 @@ struct GamepadView: View {
     @State private var showingDelete = false
     @State private var showingDiscard = false
     @FocusState private var liveInputFocused: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     private var store: GamepadProfileStore { GamepadProfileStore(paths: paths) }
     private var profile: GamepadProfile { configuration.activeProfile }
@@ -105,9 +106,8 @@ struct GamepadView: View {
 
     private var hero: some View {
         HStack(spacing: 22) {
-            Image(systemName: "gamecontroller")
-                .font(.system(size: 48, weight: .light))
-                .foregroundStyle(Color(red: 0.94, green: 0.40, blue: 0.63))
+            Image(systemName: "gamecontroller").font(WineTheme.Font.iconHero)
+                .foregroundStyle(WineTheme.accentGlyph)
                 .frame(width: 100, height: 104)
                 .background(WineTheme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 18))
                 .overlay {
@@ -117,8 +117,7 @@ struct GamepadView: View {
                 .shadow(color: WineTheme.accent.opacity(0.22), radius: 12)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 9) {
-                Text("Gamepad Configuration")
-                    .font(.system(size: 34, weight: .regular, design: .serif))
+                Text("Gamepad Configuration").font(WineTheme.Font.display)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
                 Text("Map buttons, calibrate sticks, and manage profiles.")
@@ -128,8 +127,7 @@ struct GamepadView: View {
                     Circle()
                         .fill(service.devices.isEmpty ? WineTheme.muted : WineTheme.success)
                         .frame(width: 8, height: 8)
-                    Text("\(service.devices.count) controller\(service.devices.count == 1 ? "" : "s") connected")
-                        .font(.system(size: 12, weight: .medium))
+                    Text("\(service.devices.count) controller\(service.devices.count == 1 ? "" : "s") connected").font(WineTheme.Font.callout.weight(.medium))
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(service.devices.isEmpty ? WineTheme.elevated : WineTheme.success.opacity(0.13), in: Capsule())
@@ -151,7 +149,7 @@ struct GamepadView: View {
                             LinearGradient(colors: [.clear, .black.opacity(0.5), .black],
                                            startPoint: .leading, endPoint: .trailing)
                         }
-                        .opacity(0.6)
+                        .opacity(WineTheme.artworkOpacity(colorScheme, dark: 0.6))
                         .accessibilityHidden(true)
                 }
             }
@@ -177,7 +175,7 @@ struct GamepadView: View {
         }
         if let error = service.error {
             Label(error, systemImage: "exclamationmark.triangle")
-                .font(.callout).foregroundStyle(.orange)
+                .font(.callout).foregroundStyle(WineTheme.warning)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
@@ -216,8 +214,7 @@ struct GamepadView: View {
                     .frame(maxWidth: .infinity)
             } else {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("Connect a controller to get started")
-                        .font(.system(size: 15, weight: .semibold))
+                    Text("Connect a controller to get started").font(WineTheme.Font.subheading)
                     Text("Pair a supported game controller in macOS Bluetooth settings or connect it with USB. Connected controllers appear automatically. You can edit and save profiles without a controller.")
                         .font(.callout).foregroundStyle(WineTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -263,8 +260,7 @@ struct GamepadView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 215), spacing: 16)], spacing: 8) {
                 ForEach(GamepadControl.inputs) { control in
                     HStack(spacing: 8) {
-                        Text(control.displayName)
-                            .font(.system(size: 11, weight: .medium))
+                        Text(control.displayName).font(WineTheme.Font.small.weight(.medium))
                             .frame(width: 65, alignment: .leading)
                         Picker(control.displayName, selection: mappingBinding(control)) {
                             ForEach(GamepadControl.allCases) { destination in
@@ -305,7 +301,7 @@ struct GamepadView: View {
             } ?? "—")
             informationRow("Battery", value: batteryDescription) {
                 Image(systemName: batterySymbol)
-                    .foregroundStyle(device?.batteryLevel.map { $0 <= 0.2 ? Color.red : WineTheme.success } ?? WineTheme.muted)
+                    .foregroundStyle(device?.batteryLevel.map { $0 <= 0.2 ? WineTheme.danger : WineTheme.success } ?? WineTheme.muted)
             }
             informationRow("Haptics", value: device.map { $0.supportsHaptics ? "Supported" : "Unavailable" } ?? "—")
             informationRow("Output", value: "XInput")
@@ -315,7 +311,7 @@ struct GamepadView: View {
                 .fixedSize(horizontal: false, vertical: true)
             if device != nil, device?.playerIndex == nil {
                 Label("All four XInput slots are in use. This controller can be inspected here but is not currently bridged.", systemImage: "exclamationmark.circle")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(WineTheme.warning)
             }
         }
     }
@@ -348,7 +344,7 @@ struct GamepadView: View {
                 Text(value).multilineTextAlignment(.trailing).textSelection(.enabled)
             }
         }
-        .font(.system(size: 12))
+        .font(WineTheme.Font.callout)
         .accessibilityElement(children: .combine)
     }
 
@@ -374,7 +370,7 @@ struct GamepadView: View {
                 }
             }
             .pickerStyle(.menu)
-            .font(.system(size: 12))
+            .font(WineTheme.Font.callout)
             calibrationSlider("Vibration Strength", value: profileBinding(\.vibrationStrength), range: 0...1)
             Text("Calibration measures released sticks. Sliders and the live preview update your draft; games use the saved profile. Vibration requires controller haptics.")
                 .font(.caption).foregroundStyle(WineTheme.muted)
@@ -391,7 +387,7 @@ struct GamepadView: View {
                 Text("\(Int((value.wrappedValue * 100).rounded()))%")
                     .monospacedDigit().foregroundStyle(WineTheme.muted)
             }
-            .font(.system(size: 12))
+            .font(WineTheme.Font.callout)
             Slider(value: value, in: range)
                 .accessibilityLabel(title)
                 .accessibilityValue("\(Int((value.wrappedValue * 100).rounded())) percent")
@@ -472,7 +468,7 @@ struct GamepadView: View {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle")
                     .foregroundStyle(selected ? WineTheme.accent : WineTheme.muted)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(item.name).font(.system(size: 13, weight: .semibold))
+                    Text(item.name).font(WineTheme.Font.subheading)
                         .lineLimit(2)
                     Text("\(item.responseCurve.displayName) · \(item.mappings.filter { $0.key != $0.value }.count) remaps")
                         .font(.caption).foregroundStyle(WineTheme.muted)
@@ -663,7 +659,7 @@ private struct GamepadLiveInputCard: View {
                         Circle().fill(active ? WineTheme.accent : WineTheme.elevated)
                             .frame(width: 8, height: 8)
                             .overlay { Circle().strokeBorder(WineTheme.muted.opacity(0.4)) }
-                        Text(control.displayName).font(.system(size: 10, weight: .medium))
+                        Text(control.displayName).font(WineTheme.Font.caption.weight(.medium))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityElement(children: .ignore)
@@ -679,15 +675,14 @@ private struct GamepadLiveInputCard: View {
 
     private func triggerMeter(_ title: String, value: Double) -> some View {
         HStack(spacing: 10) {
-            Text(title).font(.system(size: 11, weight: .medium)).frame(width: 22)
+            Text(title).font(WineTheme.Font.small.weight(.medium)).frame(width: 22)
             GeometryReader { geometry in
                 Capsule().fill(WineTheme.elevated)
                 Capsule().fill(WineTheme.accent)
                     .frame(width: geometry.size.width * min(1, max(0, value)))
             }
             .frame(height: 9)
-            Text(device == nil ? "—" : "\(Int((value * 100).rounded()))%")
-                .font(.system(size: 11)).monospacedDigit()
+            Text(device == nil ? "—" : "\(Int((value * 100).rounded()))%").font(WineTheme.Font.small).monospacedDigit()
                 .frame(width: 36, alignment: .trailing)
         }
         .accessibilityElement(children: .ignore)
