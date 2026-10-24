@@ -139,6 +139,7 @@ A saved `WindowsProgram` can carry launch options, all optional and omitted from
 | `workingDirectory` | EXE | An absolute Mac folder used instead of the EXE's folder. It must exist and be a folder when saved (if changed) and again at every launch; a missing folder fails the launch instead of silently using another one. |
 | `environment` | EXE, LNK, URL | Variables in the program layer, above bottle and graphics values. Refused: `WINEDLLOVERRIDES` (use DLL overrides), any other `WINE…` key except `WINEDEBUG` and `WINE_…` (prefix, loader, server, DLL path, architecture, MSync/ESync/FSync), `PATH`, `DYLD_*`, `MAGICWINE_*`, and `CX_APPLEGPTK_LIBD3DSHARED_PATH`. Allowed examples: `WINEDEBUG`, `WINE_D3D_CONFIG`, `DXVK_*`, `MTL_HUD_*`, game-specific variables. |
 | `dllOverrides` | EXE, LNK, URL | A `DLLOverrides` value in the program layer: for the same DLL it replaces the integration or backend mode, for example `d3d11=b` on a DXVK bottle. |
+| `advertiseAVX` | EXE, LNK, URL | Rosetta AVX advertising for this program: absent follows the bottle switch, `true`/`false` overrides it (see [bottle compatibility switches](#bottle-compatibility-switches)). |
 
 Arguments and the working directory are refused for LNK/URL programs: `start /unix` lets Wine start the shortcut's own target with the shortcut's own arguments and folder. Environment and DLL overrides reach the `start` process and are inherited by the process Wine starts for the shortcut; a URL handed to an already running launcher (for example a `steam://` URL while Steam runs) is handled by that launcher with its own environment.
 
@@ -152,7 +153,7 @@ In the dashboard, **Edit…** in a program's ⋯ menu or context menu opens a sh
     --workdir "/absolute/folder" --env WINEDEBUG=-all --dll d3d11=b --unset-dll xinput1_3
 ```
 
-`--args ""` clears arguments, `--clear-workdir` restores the EXE folder, `--unset-env KEY` removes a variable, and `--env`/`--dll`/`--unset-*` may repeat. A DLL mode is `n`, `b`, `n,b`, `b,n`, or `disabled` (empty after `=` also disables).
+`--args ""` clears arguments, `--clear-workdir` restores the EXE folder, `--unset-env KEY` removes a variable, `--avx inherit|on|off` sets the AVX override, and `--env`/`--dll`/`--unset-*` may repeat. A DLL mode is `n`, `b`, `n,b`, `b,n`, or `disabled` (empty after `=` also disables).
 
 ## Environment, synchronization, and display
 
@@ -161,10 +162,23 @@ Side effects (Desktop, display adoption, prefix DLL repairs, component validatio
 1. **Managed base defaults:** start with the parent's environment minus inherited Wine/loader (`WINE*`), `DYLD_*`, DXVK/DXMT/D3DMetal (`DXVK_*`, `DXMT_*`, `D3DM_*`, `CX_APPLEGPTK_LIBD3DSHARED_PATH`), Metal (`MTL_*`), and controller (`MAGICWINE_GAMEPAD_*`) settings; external Wine keeps inherited `WINEMSYNC`/`WINEESYNC`/`WINEFSYNC`. Prepend the pinned runtime's `bin` to `PATH`, supply `WINEPREFIX`, `shdocvw=n,b`, managed synchronization, and the Mono TLS correction.
 2. **Compatibility integrations:** `wow64cpu=n`, the XInput bridge (`=n,b`) or forced builtin XInput (`=b`), and the controller session variable.
 3. **Graphics backend:** the backend's DLL overrides and variables, and for Metal backends the private loader as executable plus `WINELOADER`/`WINESERVER`.
-4. **Bottle settings** (reserved for per-bottle launch options; currently empty).
-5. **Program settings**, the highest layer: the launched program's `environment` and `dllOverrides`, plus its arguments and working directory for an EXE.
+4. **Bottle settings** (`Bottle.compatibility`, see below): `WINEDEBUG=fixme-all` when Wine debug output is Quiet, `ROSETTA_ADVERTISE_AVX=1` when AVX advertising is on and available, and the DXVK HUD preset as `DXVK_HUD` when the DXVK HUD is on.
+5. **Program settings**: the program's AVX choice (on sets, off removes `ROSETTA_ADVERTISE_AVX`), then its `environment` and `dllOverrides`, plus its arguments and working directory for an EXE. A program's own variables therefore win over every bottle switch.
+6. **Diagnostics**, the highest layer and only for a one-off diagnostic launch: `WINEDEBUG=+loaddll,+seh,+process` (see [debugging](debugging.md#diagnostic-launch)).
 
-Server operations (`wineserver -k/-w`) and version inspection use only the base layer.
+Server operations (`wineserver -k/-w`) and version inspection use only the base layer; installers, `winecfg`, `exec`, and launches also get the bottle layer. Inherited `ROSETTA_ADVERTISE_AVX` is scrubbed like the other owned variables, so only the bottle and program settings decide it.
+
+### Bottle compatibility switches
+
+`Bottle.compatibility` (`CompatibilityOptions`) holds launch switches that never touch the prefix. Records without it decode with the defaults: AVX advertising off, Wine debug output Quiet, DXVK HUD Detailed.
+
+| Switch | Values | Effect |
+| --- | --- | --- |
+| Advertise AVX to Rosetta | off (default), on | `ROSETTA_ADVERTISE_AVX=1`, which Apple's Game Porting Toolkit documents for Rosetta 2 on macOS 15 and later so x86_64 code sees AVX/AVX2. `WineRuntime.rosettaAVXAvailability` reports it available only on Apple silicon, macOS 15 or later, with an x86_64-only (Rosetta-translated) Wine executable; otherwise the variable is not set and the launch carries a warning. Programs may override it (inherit, on, off). |
+| Wine debug output | Quiet (default), Wine default | Quiet sets `WINEDEBUG=fixme-all`: Wine's `fixme:` notes are dropped while `err:` lines, used by `ProcessLogSummary`, stay. Wine default sets no `WINEDEBUG`. A program's `WINEDEBUG` wins. |
+| DXVK HUD | Detailed (default), Frame rate only | `DXVK_HUD=version,api,devinfo,fps,frametimes` or `DXVK_HUD=fps`, only while the bottle uses DXVK with Show Graphics HUD on. |
+
+`BottleStore.setCompatibility(_:in:)` saves them under the bottle lock as metadata only: allowed while programs run, used by later launches. The caller's `bottle.compatibility` must still match the saved value, so a stale window cannot overwrite a change made elsewhere. The switches live in the Runtime card's **Advanced compatibility** disclosure; CLI: `compat <bottle-UUID> [--avx on|off] [--winedebug quiet|default] [--dxvk-hud fps|detailed]` (no options prints the current values and AVX availability).
 
 `WINEDLLOVERRIDES` is never concatenated. Every layer contributes a typed [`DLLOverrides`](../Sources/MagicWineCore/DLLOverrides.swift) value (ordered DLL names with mode `n`, `b`, `n,b`, `b,n`, or disabled); setting a DLL a lower layer already named replaces its mode in place, so duplicate keys, which Wine itself resolves in no documented order, cannot occur. The result is serialized once, with adjacent DLLs of the same mode sharing a segment, for example `shdocvw=n,b;wow64cpu=n;xinput1_1,…,xinput9_1_0=n,b;d3d9,d3d10core,d3d11=n;dxgi=b` for DXVK. This is not a minimal environment or a security boundary.
 
@@ -180,8 +194,9 @@ Mutation semantics intentionally differ:
 | Graphics configuration | Stops the bottle before changing graphics files under exclusive ownership; see [graphics](graphics.md) for transactions and component rules. |
 | Graphics HUD only | Metadata-only `setGraphicsHUD`: allowed while programs run, never stops processes or touches prefix DLLs, applies to later launches. During its brief metadata write it excludes other setting changes of the same bottle, and a launch starting in that instant is refused with the usual "wait for setup" error. |
 | Program name or launch options | Metadata-only `BottleStore.updateProgram`: allowed while programs run, never stops processes or touches the prefix, applies to that program's next launch; refused when the saved record changed since the edit began. |
+| Compatibility switches | Metadata-only `BottleStore.setCompatibility`: allowed while programs run, never stops processes or touches the prefix, applies to later launches; refused when the saved switches changed since the caller read them. |
 
-Retina on means 192 DPI / 200%; off means 96 DPI / 100%, bottle-wide, including games. `BottleStore.prepareDisplay` retains the previous registry bytes and restores them if saving metadata fails. General `BottleStore.save` rejects attempts to bypass the dedicated runtime/display/graphics/synchronization/program-option APIs.
+Retina on means 192 DPI / 200%; off means 96 DPI / 100%, bottle-wide, including games. `BottleStore.prepareDisplay` retains the previous registry bytes and restores them if saving metadata fails. General `BottleStore.save` rejects attempts to bypass the dedicated runtime/display/graphics/synchronization/program-option/compatibility APIs.
 
 ## Stop, cancellation, failures, and deletion
 

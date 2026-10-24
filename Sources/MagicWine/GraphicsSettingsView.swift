@@ -189,12 +189,15 @@ struct GraphicsSettingsView: View {
             }
 
             DisclosureGroup("Advanced compatibility") {
-                Text("DXVK supports Direct3D 9/10/11, DXMT supports 10/11, and imported D3DMetal supports 64-bit 11/12. Metal backends require Apple Silicon and compatible Wine; DXMT needs macOS 15+, D3DMetal needs macOS 14+ or its library’s higher minimum.")
-                    .font(.callout)
-                    .foregroundStyle(WineTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("DXVK supports Direct3D 9/10/11, DXMT supports 10/11, and imported D3DMetal supports 64-bit 11/12. Metal backends require Apple Silicon and compatible Wine; DXMT needs macOS 15+, D3DMetal needs macOS 14+ or its library’s higher minimum.")
+                        .font(.callout)
+                        .foregroundStyle(WineTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    compatibilitySwitches
+                }
+                .padding(.top, 4)
             }
         }
         .font(.callout)
@@ -217,6 +220,76 @@ struct GraphicsSettingsView: View {
             Button("Cancel", role: .cancel) { }
         } message: { selection in
             Text(backendNotice(selection.backend) + "\n\nChanging graphics stops this bottle’s Windows processes. Choose Standard to restore its original graphics files. In-place component updates are not supported.")
+        }
+    }
+
+    /// Launch switches only: available while programs run, applied to later launches.
+    @ViewBuilder
+    private var compatibilitySwitches: some View {
+        let options = currentBottle.compatibility
+        let switchesUnavailable = model.isLoading || state.blocksLibraryEdit ||
+            model.changingCompatibility.contains(currentBottle.id)
+        let avx = model.rosettaAVXAvailability(currentBottle)
+        HStack(spacing: 6) {
+            Text("Advertise AVX to Rosetta")
+            SettingsInfoButton(title: "Advertise AVX to Rosetta",
+                               message: "Sets ROSETTA_ADVERTISE_AVX=1, which Apple’s Game Porting Toolkit documents for Rosetta 2 on macOS 15 and later, so x86_64 games that require AVX/AVX2 can start. It only affects x86_64 Wine running under Rosetta. Individual programs can override it in Edit…. Applies to programs launched afterwards.")
+            Spacer(minLength: 12)
+            Toggle("Advertise AVX to Rosetta", isOn: Binding(
+                get: { options.advertiseAVX },
+                set: { enabled in
+                    var updated = options
+                    updated.advertiseAVX = enabled
+                    model.setCompatibility(updated, in: currentBottle)
+                }
+            ))
+            .labelsHidden()
+            // Turning an unusable setting off stays possible.
+            .disabled(switchesUnavailable || (avx != .available && !options.advertiseAVX))
+        }
+        if case .unavailable(let reason) = avx {
+            Text(reason)
+                .font(.callout)
+                .foregroundStyle(WineTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        HStack(spacing: 6) {
+            Text("Wine debug output")
+            SettingsInfoButton(title: "Wine debug output",
+                               message: "Quiet sets WINEDEBUG=fixme-all: Wine’s many “fixme” notes about unimplemented functions are left out of logs, while errors stay. Wine default restores them. For a one-off detailed log, use Launch with Diagnostics… on a program.")
+            Spacer(minLength: 12)
+            Picker("Wine debug output", selection: Binding(
+                get: { options.wineDebug },
+                set: { level in
+                    var updated = options
+                    updated.wineDebug = level
+                    model.setCompatibility(updated, in: currentBottle)
+                }
+            )) {
+                ForEach(CompatibilityOptions.WineDebug.allCases, id: \.self) { Text($0.displayName).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            .disabled(switchesUnavailable)
+        }
+        HStack(spacing: 6) {
+            Text("DXVK HUD")
+            SettingsInfoButton(title: "DXVK HUD",
+                               message: "What DXVK’s overlay shows when Show Graphics HUD is on with DXVK: the frame rate only, or the detailed overlay with version, API, device, frame rate, and frame times.")
+            Spacer(minLength: 12)
+            Picker("DXVK HUD", selection: Binding(
+                get: { options.dxvkHUD },
+                set: { preset in
+                    var updated = options
+                    updated.dxvkHUD = preset
+                    model.setCompatibility(updated, in: currentBottle)
+                }
+            )) {
+                ForEach(CompatibilityOptions.DXVKHUD.allCases, id: \.self) { Text($0.displayName).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            .disabled(switchesUnavailable)
         }
     }
 }

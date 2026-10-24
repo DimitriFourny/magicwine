@@ -7,6 +7,7 @@ struct BottleDashboardView: View {
     let bottle: Bottle
     let trash: () -> Void
     @State private var editingProgram: WindowsProgram?
+    @State private var diagnosticProgram: WindowsProgram?
 
     private var currentBottle: Bottle {
         model.bottles.first { $0.id == bottle.id } ?? bottle
@@ -56,6 +57,16 @@ struct BottleDashboardView: View {
         .navigationTitle(currentBottle.name)
         .sheet(item: $editingProgram) { program in
             ProgramEditorView(model: model, bottle: currentBottle, program: program)
+        }
+        .alert("Launch \(diagnosticProgram?.name ?? "") with Diagnostics?", isPresented: Binding(
+            get: { diagnosticProgram != nil },
+            set: { if !$0 { diagnosticProgram = nil } }
+        ), presenting: diagnosticProgram) { program in
+            Button("Launch with Diagnostics") { model.launch(program, in: currentBottle, diagnostics: true) }
+                .disabled(launchUnavailable)
+            Button("Cancel", role: .cancel) { }
+        } message: { _ in
+            Text("This launch only adds Wine diagnostics (WINEDEBUG=\(WineRuntime.diagnosticWineDebug)): DLL load decisions, exceptions, and process starts. The program may start more slowly and its log can grow large. Nothing is saved; when the program ends, its log is offered here.")
         }
     }
 
@@ -380,6 +391,8 @@ struct BottleDashboardView: View {
             .accessibilityLabel("Launch \(program.name)")
             Menu {
                 Button("Edit…") { editingProgram = program }
+                Button("Launch with Diagnostics…") { diagnosticProgram = program }
+                    .disabled(launchUnavailable)
                 Button("Remove from MagicWine", role: .destructive) {
                     model.removeProgram(program, in: currentBottle)
                 }
@@ -396,6 +409,8 @@ struct BottleDashboardView: View {
         .padding(.vertical, 10)
         .contextMenu {
             Button("Launch") { model.launch(program, in: currentBottle) }
+                .disabled(launchUnavailable)
+            Button("Launch with Diagnostics…") { diagnosticProgram = program }
                 .disabled(launchUnavailable)
             Button("Edit…") { editingProgram = program }
                 .disabled(activity.blocksLibraryEdit)

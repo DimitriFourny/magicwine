@@ -5,6 +5,9 @@ public actor WineRuntime {
     public static let dxvkNotice = DXVKInstallation.notice
     public static let dxmtNotice = DXMTInstallation.notice
     public static let d3dMetalNotice = D3DMetalInstallation.notice
+    /// `WINEDEBUG` of the quiet bottle setting and of a one-off diagnostic launch.
+    public static let quietWineDebug = LaunchPlanner.quietWineDebug
+    public static let diagnosticWineDebug = LaunchPlanner.diagnosticWineDebug
     private let paths: ApplicationPaths
     private let store: BottleStore
     private var active: [UUID: [UUID: ProcessOperation]] = [:]
@@ -166,14 +169,18 @@ public actor WineRuntime {
     /// The program's saved launch options (re-read from the bottle, so an edit made while
     /// other programs run applies here) form the highest launch layer. Arguments and the
     /// working directory apply to EXE files only.
-    public func launch(_ program: WindowsProgram, in bottle: Bottle,
+    ///
+    /// `diagnostics` is a one-off: the process gets `LaunchPlanner.diagnosticWineDebug`
+    /// above every saved setting, and nothing is persisted.
+    public func launch(_ program: WindowsProgram, in bottle: Bottle, diagnostics: Bool = false,
                        onStart: (@Sendable (LaunchStart) -> Void)? = nil) async throws -> OperationResult {
         let executable = try windowsFile(URL(fileURLWithPath: program.executablePath), extensions: ["exe", "lnk", "url"])
         let isShortcut = ["lnk", "url"].contains(executable.pathExtension.lowercased())
         let arguments = isShortcut ? ["start", "/unix", executable.path] : [executable.path]
         let result = try await execute(arguments: arguments, bottle: bottle,
                                        directory: executable.deletingLastPathComponent(), timeout: nil,
-                                       onStart: onStart, exitStatusIsResult: !isShortcut, program: program)
+                                       onStart: onStart, exitStatusIsResult: !isShortcut, program: program,
+                                       diagnostics: diagnostics)
         if isShortcut {
             // ShellExecute launches shortcuts asynchronously. Observe the prefix's
             // server lifetime instead of start /wait's unreliable shortcut handle.
@@ -419,7 +426,8 @@ public actor WineRuntime {
     private func execute(arguments: [String], bottle: Bottle, directory: URL?, timeout: TimeInterval?,
                          server: Bool = false, tracked: Bool = true, idleProbe: Bool = false,
                          onStart: (@Sendable (LaunchStart) -> Void)? = nil,
-                         exitStatusIsResult: Bool = false, program: WindowsProgram? = nil) async throws -> OperationResult {
+                         exitStatusIsResult: Bool = false, program: WindowsProgram? = nil,
+                         diagnostics: Bool = false) async throws -> OperationResult {
         guard server || !settingsChanging.contains(bottle.id) else {
             throw MagicWineError.setup("Wait for this bottle's graphics or display setup to finish before running Windows programs.")
         }
@@ -521,7 +529,7 @@ public actor WineRuntime {
             inherited: ProcessInfo.processInfo.environment, runtime: runtimeFacts(for: wine),
             executable: executable, arguments: arguments, directory: directory ?? prefix, prefix: prefix,
             msyncEnabled: current.msyncEnabled, integrations: integrations, graphics: graphics,
-            program: savedProgram))
+            compatibility: server ? nil : current.compatibility, program: savedProgram, diagnostics: diagnostics))
         let id = UUID()
         let log = logURL(name: "\(bottle.id.uuidString)-\(server ? "wineserver" : "wine")")
         let operation = ProcessOperation(executable: plan.executable, arguments: plan.arguments,
@@ -615,7 +623,25 @@ public actor WineRuntime {
         return LaunchRuntimeFacts(
             managedMSync: supportsMSync(RuntimeDescriptor(executableURL: executable, version: "")),
             managedMetal: selectedPath.hasPrefix(managedMetalRoot) &&
-                selectedPath.hasSuffix("/" + RuntimeInstallation.relativeExecutable))
+                selectedPath.hasSuffix("/" + RuntimeInstallation.relativeExecutable),
+            rosettaAVX: rosettaAVXAvailability(RuntimeDescriptor(executableURL: executable, version: "")) == .available)
+    }
+
+    /// Apple's Game Porting Toolkit documents `ROSETTA_ADVERTISE_AVX=1` for Rosetta 2 on
+    /// macOS 15 and later. It only affects x86_64 code translated by Rosetta, so native
+    /// arm64 Wine (or an Intel Mac) cannot use it.
+    public nonisolated func rosettaAVXAvailability(_ runtime: RuntimeDescriptor) -> RosettaAVXAvailability {
+        #if arch(arm64)
+        guard ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0)) else {
+            return .unavailable(reason: "Rosetta AVX advertising requires macOS 15 or later.")
+        }
+        guard (try? requiresRosetta(runtime.executableURL.resolvingSymlinksInPath())) == true else {
+            return .unavailable(reason: "This bottle's Wine does not run under Rosetta 2, so Rosetta cannot advertise AVX to it.")
+        }
+        return .available
+        #else
+        return .unavailable(reason: "Rosetta AVX advertising applies only on Apple silicon Macs.")
+        #endif
     }
 
     private func validateVulkanRuntime(_ executable: URL) throws {
@@ -720,7 +746,7 @@ public actor WineRuntime {
         #endif
     }
 
-    private func requiresRosetta(_ executable: URL) throws -> Bool {
+    private nonisolated func requiresRosetta(_ executable: URL) throws -> Bool {
         let handle = try FileHandle(forReadingFrom: executable)
         defer { try? handle.close() }
         let data = try handle.read(upToCount: 4096) ?? Data()

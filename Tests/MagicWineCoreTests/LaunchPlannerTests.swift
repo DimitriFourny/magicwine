@@ -28,15 +28,17 @@ struct LaunchPlannerTests {
                                 managed: Bool = true) throws -> LaunchRequest {
         LaunchRequest(inherited: inherited, runtime: LaunchRuntimeFacts(managedMSync: managed, managedMetal: managed),
                       executable: wine, arguments: [program.path], directory: program.deletingLastPathComponent(),
-                      prefix: prefix, msyncEnabled: msync, integrations: try integrations(), graphics: graphics)
+                      prefix: prefix, msyncEnabled: msync, integrations: try integrations(), graphics: graphics,
+                      compatibility: CompatibilityOptions())
     }
 
-    /// The managed base, integrations, and nothing inherited that MagicWine owns.
+    /// The managed base, integrations, default bottle switches, and nothing inherited
+    /// that MagicWine owns.
     private static let standard = [
         "PATH": wine.deletingLastPathComponent().path + ":/usr/bin:/bin", "HOME": "/Users/player", "LANG": "en_US.UTF-8",
         "WINEPREFIX": prefix.path, "WINEMSYNC": "1", "WINEESYNC": "0", "WINEFSYNC": "0",
         "MONO_DEBUG": "existing,use-fallback-tls", "MAGICWINE_GAMEPAD_STATE": "Z:\\state",
-        "WINEDLLOVERRIDES": "shdocvw=n,b;wow64cpu=n;\(xinput)=n,b",
+        "WINEDLLOVERRIDES": "shdocvw=n,b;wow64cpu=n;\(xinput)=n,b", "WINEDEBUG": "fixme-all",
     ]
 
     @Test func dllOverridesParseLayerAndSerializeDeterministically() throws {
@@ -146,7 +148,7 @@ struct LaunchPlannerTests {
             "PATH": Self.wine.deletingLastPathComponent().path + ":/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": "/Users/player", "LANG": "en_US.UTF-8", "WINEPREFIX": Self.prefix.path,
             "WINEMSYNC": "1", "WINEESYNC": "1", "WINEFSYNC": "1", "MONO_DEBUG": "existing",
-            "WINEDLLOVERRIDES": "shdocvw=n,b",
+            "WINEDLLOVERRIDES": "shdocvw=n,b", "WINEDEBUG": "fixme-all",
         ])
     }
 
@@ -197,5 +199,67 @@ struct LaunchPlannerTests {
         #expect(shortcut.directory == Self.program.deletingLastPathComponent())
         #expect(shortcut.environment["DXVK_HUD"] == "fps")
         #expect(try DLLOverrides(parsing: shortcut.environment["WINEDLLOVERRIDES"] ?? "")["dxgi"] == .native)
+    }
+
+    @Test func wineDebugAndHUDPresetComeFromBottleSwitches() throws {
+        var request = try Self.request()
+        request.compatibility = CompatibilityOptions(wineDebug: .wineDefault)
+        #expect(LaunchPlanner.plan(request).environment["WINEDEBUG"] == nil)
+        // Server operations and inspection get no bottle layer at all.
+        request.compatibility = nil
+        #expect(LaunchPlanner.plan(request).environment["WINEDEBUG"] == nil)
+
+        let folders = GraphicsFolders(cache: URL(fileURLWithPath: "/cache"), logs: URL(fileURLWithPath: "/logs"))
+        for (preset, value) in [(CompatibilityOptions.DXVKHUD.fps, "fps"), (.detailed, "version,api,devinfo,fps,frametimes")] {
+            request.compatibility = CompatibilityOptions(dxvkHUD: preset)
+            request.graphics = .dxvk(component: URL(fileURLWithPath: "/c"), folders: folders, showHUD: true)
+            #expect(LaunchPlanner.plan(request).environment["DXVK_HUD"] == value)
+            request.graphics = .dxvk(component: URL(fileURLWithPath: "/c"), folders: folders, showHUD: false)
+            #expect(LaunchPlanner.plan(request).environment["DXVK_HUD"] == nil)
+        }
+        // The preset is DXVK's; Metal backends keep their own HUD switch.
+        request.graphics = try .metal(componentSettings: ["MTL_HUD_ENABLED": "1"], loader: Self.wine, server: Self.wine, folders: nil)
+        #expect(LaunchPlanner.plan(request).environment["DXVK_HUD"] == nil)
+    }
+
+    @Test func rosettaAVXFollowsBottleThenProgramAndOnlyWhereSupported() throws {
+        var request = try Self.request()
+        request.inherited["ROSETTA_ADVERTISE_AVX"] = "1"
+        request.runtime.rosettaAVX = true
+        #expect(LaunchPlanner.plan(request).environment["ROSETTA_ADVERTISE_AVX"] == nil)
+        request.compatibility = CompatibilityOptions(advertiseAVX: true)
+        var plan = LaunchPlanner.plan(request)
+        #expect(plan.environment["ROSETTA_ADVERTISE_AVX"] == "1")
+        #expect(plan.warnings == ["skipped"])
+
+        var program = WindowsProgram(name: "Game", executablePath: Self.program.path, advertiseAVX: false)
+        request.program = program
+        #expect(LaunchPlanner.plan(request).environment["ROSETTA_ADVERTISE_AVX"] == nil)
+        // The program's explicit environment still wins over its own AVX switch.
+        program.environment["ROSETTA_ADVERTISE_AVX"] = "1"
+        request.program = program
+        #expect(LaunchPlanner.plan(request).environment["ROSETTA_ADVERTISE_AVX"] == "1")
+
+        request.compatibility = CompatibilityOptions(advertiseAVX: false)
+        request.program = WindowsProgram(name: "Game", executablePath: Self.program.path, advertiseAVX: true)
+        #expect(LaunchPlanner.plan(request).environment["ROSETTA_ADVERTISE_AVX"] == "1")
+
+        // Native or pre-macOS 15 Wine: never set, and the user is told why.
+        request.runtime.rosettaAVX = false
+        plan = LaunchPlanner.plan(request)
+        #expect(plan.environment["ROSETTA_ADVERTISE_AVX"] == nil)
+        #expect(plan.warnings.count == 2)
+        request.program = nil
+        #expect(LaunchPlanner.plan(request).warnings == ["skipped"])
+    }
+
+    @Test func programDebugWinsOverBottleAndDiagnosticsWinOverBoth() throws {
+        var request = try Self.request()
+        request.program = WindowsProgram(name: "Game", executablePath: Self.program.path, environment: ["WINEDEBUG": "-all"])
+        #expect(LaunchPlanner.plan(request).environment["WINEDEBUG"] == "-all")
+        request.diagnostics = true
+        let plan = LaunchPlanner.plan(request)
+        #expect(plan.environment["WINEDEBUG"] == "+loaddll,+seh,+process")
+        #expect(plan.environment["WINEDLLOVERRIDES"] == Self.standard["WINEDLLOVERRIDES"])
     }
 }

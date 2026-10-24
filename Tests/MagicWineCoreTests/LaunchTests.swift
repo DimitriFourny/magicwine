@@ -359,4 +359,59 @@ struct LaunchTests {
         _ = try await fixture.wine.stop(fixture.bottle)
         _ = await task.value
     }
+
+    @Test func compatibilitySwitchesSaveWhileRunningAndDiagnosticsAreOneOff() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.remove() }
+        let finished = Box<Bool>()
+        let task = Task {
+            _ = try? await fixture.wine.run(arguments: ["hold"], in: fixture.bottle)
+            finished.set(true)
+        }
+        defer { task.cancel() }
+        let marker = fixture.prefix.appendingPathComponent("holding")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+
+        // Records saved before the switches existed decode with today's behavior.
+        let metadata = fixture.directory.appendingPathComponent("bottle.json")
+        var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: metadata)) as? [String: Any])
+        #expect(json["compatibility"] != nil)
+        json.removeValue(forKey: "compatibility")
+        try JSONSerialization.data(withJSONObject: json).write(to: metadata, options: .atomic)
+        let legacy = try await fixture.store.current(fixture.bottle)
+        #expect(legacy.compatibility == CompatibilityOptions(advertiseAVX: false, wineDebug: .quiet, dxvkHUD: .detailed))
+        json["compatibility"] = ["wineDebug": "default"]
+        #expect(try JSONDecoder().decode(Bottle.self, from: JSONSerialization.data(withJSONObject: json)).compatibility ==
+                CompatibilityOptions(wineDebug: .wineDefault))
+
+        let options = CompatibilityOptions(wineDebug: .wineDefault, dxvkHUD: .fps)
+        let updated = try await fixture.store.setCompatibility(options, in: legacy)
+        #expect(updated.compatibility == options)
+        await #expect(throws: MagicWineError.self) { try await fixture.store.setCompatibility(CompatibilityOptions(), in: legacy) }
+        var bypass = updated
+        bypass.compatibility = CompatibilityOptions()
+        await #expect(throws: MagicWineError.self) { try await fixture.store.save(bypass) }
+        #expect(try await BottleStore(paths: fixture.paths).current(fixture.bottle).compatibility == options)
+
+        let registered = try await fixture.store.registerProgram(
+            in: fixture.bottle, executableURL: URL(fileURLWithPath: try fixture.program("tool.exe").executablePath))
+        let program = try #require(registered.programs.first)
+        _ = try await fixture.wine.launch(program, in: fixture.bottle)
+        #expect(try fixture.launchEnvironment()["WINEDEBUG"] == nil)
+        _ = try await fixture.wine.launch(program, in: fixture.bottle, diagnostics: true)
+        #expect(try fixture.launchEnvironment()["WINEDEBUG"] == LaunchPlanner.diagnosticWineDebug)
+        #expect(try await fixture.store.current(fixture.bottle).compatibility == options)
+        _ = try await fixture.store.setCompatibility(CompatibilityOptions(), in: updated)
+        _ = try await fixture.wine.launch(program, in: fixture.bottle)
+        #expect(try fixture.launchEnvironment()["WINEDEBUG"] == "fixme-all")
+
+        #expect(finished.value == nil)
+        #expect(!FileManager.default.fileExists(atPath: fixture.prefix.appendingPathComponent("killed").path))
+        _ = try await fixture.wine.stop(fixture.bottle)
+        _ = await task.value
+    }
 }

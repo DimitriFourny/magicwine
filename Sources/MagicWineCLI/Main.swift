@@ -82,11 +82,13 @@ struct MagicWineCLI {
             case "refresh": printPrograms(try await store.discoverPrograms(in: bottle))
             case "apps": printPrograms(bottle)
             case "launch":
-                guard rest.count == 1, let id = UUID(uuidString: rest[0]), let program = bottle.programs.first(where: { $0.id == id }) else {
-                    throw argumentError("launch <bottle-UUID> <program-UUID> (see apps)")
+                let diagnostics = rest.count == 2 && rest[1] == "--diagnostics"
+                guard rest.count == 1 || diagnostics, let id = UUID(uuidString: rest[0]),
+                      let program = bottle.programs.first(where: { $0.id == id }) else {
+                    throw argumentError("launch <bottle-UUID> <program-UUID> [--diagnostics] (see apps)")
                 }
-                let result = try await runtime.launch(program, in: bottle, onStart: printWarnings)
-                print("Log: \(result.logURL.path)")
+                let result = try await runtime.launch(program, in: bottle, diagnostics: diagnostics, onStart: printWarnings)
+                print("\(diagnostics ? "Diagnostic log (WINEDEBUG=\(WineRuntime.diagnosticWineDebug))" : "Log"): \(result.logURL.path)")
                 print("Exit code: \(result.exitCode)")
                 if result.exitCode != 0 {
                     if let summary = ProcessLogSummary.summary(at: result.logURL) {
@@ -202,6 +204,13 @@ struct MagicWineCLI {
                     let (name, mode) = try pair(next())
                     try edited.dllOverrides.set(DLLOverrides.Mode(parsing: mode), for: name)
                 case "--unset-dll": edited.dllOverrides.remove(try next())
+                case "--avx":
+                    switch try next() {
+                    case "inherit": edited.advertiseAVX = nil
+                    case "on": edited.advertiseAVX = true
+                    case "off": edited.advertiseAVX = false
+                    default: throw argumentError(programUsage)
+                    }
                 default: throw argumentError(programUsage)
                 }
                 index += 1
@@ -213,6 +222,35 @@ struct MagicWineCLI {
                 program = updated.programs.first { $0.id == id } ?? edited
             }
             printProgramOptions(program)
+        case "compat":
+            guard let identifier = values.first else { throw argumentError(compatUsage) }
+            let bottle = try await findBottle(identifier, store: store)
+            var options = bottle.compatibility
+            var index = 1
+            while index < values.count {
+                guard index + 1 < values.count else { throw argumentError(compatUsage) }
+                let value = values[index + 1]
+                switch (values[index], value) {
+                case ("--avx", "on"), ("--avx", "off"): options.advertiseAVX = value == "on"
+                case ("--winedebug", "quiet"): options.wineDebug = .quiet
+                case ("--winedebug", "default"): options.wineDebug = .wineDefault
+                case ("--dxvk-hud", _):
+                    guard let preset = CompatibilityOptions.DXVKHUD(rawValue: value) else { throw argumentError(compatUsage) }
+                    options.dxvkHUD = preset
+                default: throw argumentError(compatUsage)
+                }
+                index += 2
+            }
+            // Launch switches only: running programs keep going; later launches use them.
+            let updated = options == bottle.compatibility ? bottle : try await store.setCompatibility(options, in: bottle)
+            let avx: String
+            switch runtime.rosettaAVXAvailability(updated.runtime) {
+            case .available: avx = "available"
+            case .unavailable(let reason): avx = "not applied: \(reason)"
+            }
+            print("avx\t\(updated.compatibility.advertiseAVX ? "on" : "off")\t\(avx)")
+            print("winedebug\t\(updated.compatibility.wineDebug.rawValue)\t\(updated.compatibility.wineDebug == .quiet ? "WINEDEBUG=\(WineRuntime.quietWineDebug)" : "Wine's default")")
+            print("dxvk-hud\t\(updated.compatibility.dxvkHUD.rawValue)\tDXVK_HUD=\(updated.compatibility.dxvkHUD.value) when the HUD is on")
         default: throw argumentError("Unknown command: \(command)")
         }
     }
@@ -238,6 +276,7 @@ struct MagicWineCLI {
         }
         for key in program.environment.keys.sorted() { print("env\t\(key)=\(program.environment[key] ?? "")") }
         if !program.dllOverrides.isEmpty { print("dll\t\(program.dllOverrides.serialized)") }
+        if let avx = program.advertiseAVX { print("avx\t\(avx ? "on" : "off")") }
     }
 
     /// Called as soon as Wine starts; a long-running program can exit much later.
@@ -258,7 +297,9 @@ struct MagicWineCLI {
 
     private static let graphicsUsage = "graphics <bottle-UUID> standard|dxvk|dxmt|d3dmetal [--accept-experimental] [--hud|--no-hud] [--import <D3DMetal-library-folder>]"
 
-    private static let programUsage = "program <bottle-UUID> <program-UUID> [--name <name>] [--args \"<arguments>\"] [--workdir <folder>|--clear-workdir] [--env KEY=VALUE]… [--unset-env KEY]… [--dll <name>=n|b|n,b|b,n|disabled]… [--unset-dll <name>]…"
+    private static let programUsage = "program <bottle-UUID> <program-UUID> [--name <name>] [--args \"<arguments>\"] [--workdir <folder>|--clear-workdir] [--env KEY=VALUE]… [--unset-env KEY]… [--dll <name>=n|b|n,b|b,n|disabled]… [--unset-dll <name>]… [--avx inherit|on|off]"
+
+    private static let compatUsage = "compat <bottle-UUID> [--avx on|off] [--winedebug quiet|default] [--dxvk-hud fps|detailed]"
 
     private static let usage = """
     MagicWine — isolated Windows apps on macOS
@@ -277,6 +318,7 @@ struct MagicWineCLI {
       apps <bottle-UUID>                        List saved program UUIDs
       launch <bottle-UUID> <program-UUID>       Run a saved program
         Prints its exit code and exits with it (low 8 bits of the Windows code)
+        --diagnostics: one-off launch with WINEDEBUG=+loaddll,+seh,+process (not saved); prints its log
       stop <bottle-UUID>                        Stop this bottle only
       configure <bottle-UUID>                   Open Wine configuration
       graphics <bottle-UUID> [standard|dxvk|dxmt|d3dmetal]
@@ -298,5 +340,10 @@ struct MagicWineCLI {
         --name N, --args "…" (quoted like a shell; "" clears), --workdir PATH | --clear-workdir,
         --env K=V / --unset-env K, --dll name=n|b|n,b|b,n|disabled / --unset-dll name (repeatable)
         Arguments and working directory apply to EXE programs only; running programs are not stopped
+        --avx inherit|on|off overrides the bottle's Rosetta AVX setting for this program
+      compat <bottle-UUID> [--avx on|off] [--winedebug quiet|default] [--dxvk-hud fps|detailed]
+        Show or change launch switches: Rosetta AVX advertising (x86_64 Wine, macOS 15+),
+        Wine debug output (quiet = WINEDEBUG=fixme-all), and the DXVK HUD preset
+        Saved for later launches; running programs are not stopped
     """
 }

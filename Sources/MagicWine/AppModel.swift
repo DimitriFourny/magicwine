@@ -380,7 +380,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func launch(_ program: WindowsProgram, in bottle: Bottle) {
+    /// `diagnostics` is a one-off launch with a diagnostic `WINEDEBUG`; nothing is saved,
+    /// and its log is offered when the program ends.
+    func launch(_ program: WindowsProgram, in bottle: Bottle, diagnostics: Bool = false) {
         let bottle = current(bottle)
         var state = activity(for: bottle)
         guard bottle.isInitialized, !state.blocksLaunch else { return }
@@ -392,7 +394,7 @@ final class AppModel: ObservableObject {
         activities[bottle.id] = state
         Task {
             do {
-                let result = try await wine.launch(program, in: bottle) { start in
+                let result = try await wine.launch(program, in: bottle, diagnostics: diagnostics) { start in
                     // Steam or a game can run for hours; warn as soon as it starts.
                     guard !start.warnings.isEmpty else { return }
                     Task { @MainActor in
@@ -402,8 +404,14 @@ final class AppModel: ObservableObject {
                     }
                 }
                 recordLog(result.logURL, for: bottle.id)
-                // A normal quit with a nonzero code is status, not an operation failure.
-                if result.exitCode != 0 {
+                if diagnostics {
+                    let summary = result.exitCode == 0 ? "" : "\n\n" + (ProcessLogSummary.summary(at: result.logURL) ?? "")
+                    recordNotice(BottleNotice(
+                        title: "Diagnostic launch of \(program.name) ended (exit code \(result.exitCode))",
+                        message: "The log lists DLL load decisions (+loaddll), exceptions (+seh), and process starts (+process) in addition to Wine errors. Review it for personal paths before sharing." + summary,
+                        logURL: result.logURL), for: bottle.id)
+                } else if result.exitCode != 0 {
+                    // A normal quit with a nonzero code is status, not an operation failure.
                     let summary = ProcessLogSummary.summary(at: result.logURL)
                         ?? "Wine reported no errors at the end of the log. Many games and launchers use nonzero codes for normal exits."
                     recordNotice(BottleNotice(title: "\(program.name) exited with code \(result.exitCode)",
@@ -711,6 +719,30 @@ final class AppModel: ObservableObject {
             throw MagicWineError.setup("Wait for this bottle’s operation to finish, then save again.")
         }
         replace(try await store.updateProgram(program, from: original, in: current(bottle)))
+    }
+
+    // MARK: - Compatibility switches
+
+    @Published private(set) var changingCompatibility: Set<UUID> = []
+
+    func rosettaAVXAvailability(_ bottle: Bottle) -> RosettaAVXAvailability {
+        wine.rosettaAVXAvailability(bottle.runtime)
+    }
+
+    /// Launch switches only, like the HUD: running programs keep going and those launched
+    /// afterwards use the new setting. No exclusive operation title is shown.
+    func setCompatibility(_ options: CompatibilityOptions, in bottle: Bottle) {
+        guard !isLoading, let bottle = bottles.first(where: { $0.id == bottle.id }),
+              bottle.compatibility != options, !activity(for: bottle).blocksLibraryEdit,
+              changingCompatibility.insert(bottle.id).inserted else { return }
+        Task {
+            do {
+                replace(try await store.setCompatibility(options, in: bottle))
+            } catch {
+                recordError(error, for: bottle.id)
+            }
+            changingCompatibility.remove(bottle.id)
+        }
     }
 }
 

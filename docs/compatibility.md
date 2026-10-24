@@ -125,8 +125,10 @@ These policies take effect through the rebuilt app/CLI and do not themselves reb
 | `shdocvw=n,b` | Prefer application-local browser interop assemblies before Wine's namesake DLL | Not a complete repair of old embedded browser launchers |
 | Bottle-local Desktop | Replace host Desktop symlinks with real bottle directories before Wine work/discovery | Removes only the link, not host files; other Wine host mappings remain |
 | Retina/display preparation | Coordinate registry DPI and Wine Mac Driver RetinaMode with saved display metadata | Automatic adoption never kills a live game; explicit core/CLI changes can stop Wine |
+| `ROSETTA_ADVERTISE_AVX=1` (opt-in) | Bottle switch **Advertise AVX to Rosetta**, per-program override; Apple's Game Porting Toolkit documents it for Rosetta 2 on macOS 15+ so x86_64 games requiring AVX/AVX2 can start | Set only for x86_64-only Wine under Rosetta on macOS 15+ (otherwise a launch warning); it changes what Rosetta advertises, not Wine, and is not CPUID spoofing by MagicWine |
+| `WINEDEBUG=fixme-all` (default) | Bottle switch **Wine debug output** Quiet; smaller logs without unimplemented-function notes | `err:` lines stay for `ProcessLogSummary`; Wine default and one-off diagnostic launches are available ([debugging](debugging.md#diagnostic-launch)) |
 
-Sources: [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift), [BottleDesktop.swift](../Sources/MagicWineCore/BottleDesktop.swift), [BottleDisplay.swift](../Sources/MagicWineCore/BottleDisplay.swift).
+Sources: [WineRuntime.swift](../Sources/MagicWineCore/WineRuntime.swift), [LaunchPlanner.swift](../Sources/MagicWineCore/LaunchPlanner.swift), [CompatibilityOptions.swift](../Sources/MagicWineCore/CompatibilityOptions.swift), [BottleDesktop.swift](../Sources/MagicWineCore/BottleDesktop.swift), [BottleDisplay.swift](../Sources/MagicWineCore/BottleDisplay.swift).
 
 ## Mouse-pointer and proxy limits
 

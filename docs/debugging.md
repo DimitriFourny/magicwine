@@ -111,6 +111,19 @@ The presence of a backend log or cache directory does not prove the game reached
 
 MagicWine strips inherited Wine/loader and graphics variables and reconstructs its launch environment. In particular, `WINEDEBUG=... magicwine exec ...` is not a supported way to retain a diagnostic override, and inherited `DXVK_*`, `DXMT_*`, `D3DM_*`, `MTL_*`, and `DYLD_*` values are not authoritative. To change them for one saved program, use its launch options (dashboard **Edit…**, or `"$CLI" --root "$ROOT" program "$BOTTLE" "$PROGRAM" --env WINEDEBUG=+loaddll --dll d3d11=b`); they are the highest launch layer and are recorded in `bottle.json`, so remove them (`--unset-env`, `--unset-dll`) after the experiment. Prefix, loader, server, `PATH`, and `DYLD_*` variables cannot be set this way.
 
+By default each bottle's **Wine debug output** is Quiet (`WINEDEBUG=fixme-all`): logs keep Wine's `err:` lines but not its many `fixme:` notes about unimplemented functions. Choose **Wine default** in the Runtime card's **Advanced compatibility** (or `compat "$BOTTLE" --winedebug default`) when the fixme notes matter.
+
+### Diagnostic launch
+
+**Launch with Diagnostics…** in a program's menu, or `"$CLI" --root "$ROOT" launch "$BOTTLE" "$PROGRAM" --diagnostics`, runs that program once with `WINEDEBUG=+loaddll,+seh,+process`. Nothing is saved; this layer sits above the bottle's Quiet setting and the program's own `WINEDEBUG`, while all other launch options still apply. The channels are chosen for the failures this guide most often has to separate, at a size a game can still run with:
+
+- `+loaddll` prints every DLL load with its path and whether the native (Windows) or builtin (Wine) file was used: missing runtimes, an unexpected game-local `d3d11.dll` or `xinput1_3.dll`, and the effect of DLL overrides become visible.
+- `+seh` prints raised exceptions (access violations, C++ and .NET exceptions) with codes and addresses, which locates a crash that otherwise shows only as an exit code.
+- `+process` prints process creation with command lines, so a launcher that starts the real game as a child, or dies before doing so, can be followed.
+- Wine's default classes are kept, so `err:` and `fixme:` lines for every channel stay in the log (and `ProcessLogSummary` still finds errors).
+
+Broader channels such as `+relay`, `+snoop`, or `+all` are deliberately not offered: they produce gigabytes within minutes and slow a game enough to change its behavior; use a disposable raw-Wine comparison for those. Even the diagnostic channels can make logs large and slow startup slightly, so use the normal launch otherwise. For LNK/URL programs the variables reach the `start` process and the program it starts; a URL handed to an already running launcher is not traced. When the program ends, the dashboard shows a notice with **Reveal Log** for that run's log, and the CLI prints `Diagnostic log (…): <path>` and the exit code. Review the log for personal paths before sharing.
+
 If deeper logging requires a source change, make that explicit in the research checkout and record it. A direct raw-Wine invocation bypasses MagicWine's preparation and can be a useful comparison only in a disposable prefix; it is not an equivalent reproduction of managed graphics/controller/runtime behavior. Do not manually modify a production bottle's overrides to force a diagnostic result.
 
 Sources: [ProcessOperation.swift](../Sources/MagicWineCore/ProcessOperation.swift), [LaunchPlanner.swift](../Sources/MagicWineCore/LaunchPlanner.swift).
@@ -187,7 +200,7 @@ Include:
 - MagicWine commit/build, macOS version, CPU/GPU, Rosetta availability, and Windows executable architecture.
 - Exact Wine executable identity and component revisions, with personal path portions redacted.
 - Installation source/game version and the actual launch path: EXE, LNK, URL, launcher, or integration probe.
-- Backend, HUD, Retina/DPI, MSync, and relevant controller profile state.
+- Backend, HUD, Retina/DPI, MSync, compatibility switches (`compat`), the program's launch options (`program`), and relevant controller profile state.
 - Small reproduction steps, expected versus observed behavior, and whether a fresh isolated bottle changes the result.
 - Relevant log excerpts and the earliest meaningful failure, not only the final crash or timeout.
 - What was actually observed: process exit, API result, GPU readback, visible window, controller input, or physical vibration.

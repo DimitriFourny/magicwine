@@ -27,6 +27,7 @@ struct ProgramEditorView: View {
     @State private var workingDirectory: String?
     @State private var variables: [Variable]
     @State private var overrides: [Override]
+    @State private var advertiseAVX: Bool?
     @State private var isSaving = false
     @State private var error: String?
 
@@ -41,6 +42,7 @@ struct ProgramEditorView: View {
             Variable(key: $0, value: program.environment[$0] ?? "")
         })
         _overrides = State(initialValue: program.dllOverrides.entries.map { Override(name: $0.dll, mode: $0.mode) })
+        _advertiseAVX = State(initialValue: program.advertiseAVX)
     }
 
     private var parsedArguments: Result<[String], Error> {
@@ -89,6 +91,7 @@ struct ProgramEditorView: View {
                 if let problem = overrideProblem(override) { throw MagicWineError.setup(problem) }
                 try program.dllOverrides.set(override.mode, for: override.name)
             }
+            program.advertiseAVX = advertiseAVX
             try program.validateLaunchOptions()
             return program
         }
@@ -112,6 +115,7 @@ struct ProgramEditorView: View {
                     }
                     environmentSection
                     overridesSection
+                    avxSection
                 }
                 .padding(.trailing, 8)
             }
@@ -215,6 +219,26 @@ struct ProgramEditorView: View {
             }
             Button("Add DLL Override") { overrides.append(Override(name: "", mode: .nativeThenBuiltin)) }
             hint("These replace MagicWine’s load order for the same DLL in this program only. Native means the Windows DLL in the program or prefix; builtin means Wine’s own.")
+        }
+    }
+
+    private var avxSection: some View {
+        section("Rosetta AVX") {
+            Picker("Advertise AVX to Rosetta", selection: Binding(
+                get: { advertiseAVX.map { $0 ? "on" : "off" } ?? "inherit" },
+                set: { advertiseAVX = $0 == "inherit" ? nil : $0 == "on" }
+            )) {
+                Text("Bottle setting (\(bottle.compatibility.advertiseAVX ? "on" : "off"))").tag("inherit")
+                Text("On").tag("on")
+                Text("Off").tag("off")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            if case .unavailable(let reason) = model.rosettaAVXAvailability(bottle) {
+                hint(reason)
+            } else {
+                hint("Sets ROSETTA_ADVERTISE_AVX=1 for this program so x86_64 games that require AVX can start under Rosetta 2.")
+            }
         }
     }
 

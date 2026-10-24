@@ -43,10 +43,12 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
     public var environment: [String: String]
     /// Highest launch layer: wins over bottle, backend, and integration load orders.
     public var dllOverrides: DLLOverrides
+    /// Rosetta AVX advertising for this program; `nil` follows the bottle's setting.
+    public var advertiseAVX: Bool?
 
     public init(id: UUID = UUID(), name: String, executablePath: String, arguments: [String] = [],
                 workingDirectory: String? = nil, environment: [String: String] = [:],
-                dllOverrides: DLLOverrides = .init()) {
+                dllOverrides: DLLOverrides = .init(), advertiseAVX: Bool? = nil) {
         self.id = id
         self.name = name
         self.executablePath = executablePath
@@ -54,10 +56,11 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
         self.workingDirectory = workingDirectory
         self.environment = environment
         self.dllOverrides = dllOverrides
+        self.advertiseAVX = advertiseAVX
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, executablePath, arguments, workingDirectory, environment, dllOverrides
+        case id, name, executablePath, arguments, workingDirectory, environment, dllOverrides, advertiseAVX
     }
 
     /// Records saved before launch options existed decode with empty options.
@@ -70,6 +73,7 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
         workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
         environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
         dllOverrides = try container.decodeIfPresent(DLLOverrides.self, forKey: .dllOverrides) ?? .init()
+        advertiseAVX = try container.decodeIfPresent(Bool.self, forKey: .advertiseAVX)
     }
 
     /// Empty options are omitted, so unedited programs keep their original shape.
@@ -82,6 +86,7 @@ public struct WindowsProgram: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
         if !environment.isEmpty { try container.encode(environment, forKey: .environment) }
         if !dllOverrides.isEmpty { try container.encode(dllOverrides, forKey: .dllOverrides) }
+        try container.encodeIfPresent(advertiseAVX, forKey: .advertiseAVX)
     }
 }
 
@@ -104,6 +109,8 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
     public var programs: [WindowsProgram]
     public var graphics: GraphicsConfiguration
     public var msyncEnabled: Bool
+    /// Launch switches that never touch the prefix; see `BottleStore.setCompatibility`.
+    public internal(set) var compatibility: CompatibilityOptions
     private var displayPreference: DisplayConfiguration?
     public var display: DisplayConfiguration {
         get { displayPreference ?? .init() }
@@ -113,7 +120,8 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
 
     public init(id: UUID = UUID(), name: String, createdAt: Date = Date(), runtime: RuntimeDescriptor,
                 isInitialized: Bool = false, programs: [WindowsProgram] = [], graphics: GraphicsConfiguration = .init(),
-                display: DisplayConfiguration = .init(), msyncEnabled: Bool = true) {
+                display: DisplayConfiguration = .init(), msyncEnabled: Bool = true,
+                compatibility: CompatibilityOptions = .init()) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
@@ -123,10 +131,11 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
         self.graphics = graphics
         self.displayPreference = display
         self.msyncEnabled = msyncEnabled
+        self.compatibility = compatibility
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, createdAt, runtime, isInitialized, programs, graphics, msyncEnabled
+        case id, name, createdAt, runtime, isInitialized, programs, graphics, msyncEnabled, compatibility
         case displayPreference = "display"
     }
 
@@ -147,6 +156,7 @@ public struct Bottle: Identifiable, Codable, Hashable, Sendable {
             ? try container.decode(DisplayConfiguration.self, forKey: .displayPreference) : nil
         msyncEnabled = container.contains(.msyncEnabled)
             ? try container.decode(Bool.self, forKey: .msyncEnabled) : true
+        compatibility = try container.decodeIfPresent(CompatibilityOptions.self, forKey: .compatibility) ?? .init()
     }
 }
 

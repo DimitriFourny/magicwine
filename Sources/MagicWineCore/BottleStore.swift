@@ -71,6 +71,9 @@ public actor BottleStore {
             guard bottle.runtime == current.runtime else {
                 throw MagicWineError.setup("The pinned runtime must be changed through WineRuntime.upgradeRuntime.")
             }
+            guard bottle.compatibility == current.compatibility else {
+                throw MagicWineError.setup("Compatibility settings must be changed through BottleStore.setCompatibility.")
+            }
             for program in bottle.programs {
                 if let saved = current.programs.first(where: { $0.id == program.id }), saved != program {
                     throw MagicWineError.setup("Program names and launch options must be changed through BottleStore.updateProgram.")
@@ -154,6 +157,23 @@ public actor BottleStore {
             }
             guard current.graphics.showHUD != showHUD else { return current }
             current.graphics.showHUD = showHUD
+            try saveUnlocked(current)
+            return current
+        }
+    }
+
+    /// Launch switches only: no prefix file, component, or running process is touched,
+    /// so this is allowed while programs run and applies to later launches. The caller's
+    /// `bottle.compatibility` is what it showed; if another editor saved different
+    /// switches since, nothing is written.
+    public func setCompatibility(_ options: CompatibilityOptions, in bottle: Bottle) throws -> Bottle {
+        try GraphicsPrefix.withLock(bottleDirectory: directoryURL(for: bottle)) {
+            var current = try loadUnlocked(bottle)
+            guard current.compatibility == bottle.compatibility else {
+                throw MagicWineError.setup("This bottle's compatibility settings were changed elsewhere. Reload it and try again.")
+            }
+            guard current.compatibility != options else { return current }
+            current.compatibility = options
             try saveUnlocked(current)
             return current
         }
